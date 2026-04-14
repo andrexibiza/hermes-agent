@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shlex
+import plistlib
 import shutil
 import signal
 import subprocess
@@ -3010,24 +3011,6 @@ def _strip_optional_systemd_directives(text: str) -> str:
     return "\n".join(filtered)
 
 
-def _normalize_launchd_plist_for_comparison(text: str) -> str:
-    """Normalize launchd plist text for staleness checks.
-
-    The generated plist intentionally captures a broad PATH assembled from the
-    invoking shell so user-installed tools remain reachable under launchd.
-    That makes raw text comparison unstable across shells, so ignore the PATH
-    payload when deciding whether the installed plist is stale.
-    """
-    import re
-
-    normalized = _normalize_service_definition(text)
-    return re.sub(
-        r"(<key>PATH</key>\s*<string>)(.*?)(</string>)",
-        r"\1__HERMES_PATH__\3",
-        normalized,
-        flags=re.S,
-    )
-
 
 def systemd_unit_is_current(system: bool = False) -> bool:
     # ── HERMES_HOME sync chokepoint ──────────────────────────────────────
@@ -3718,6 +3701,102 @@ def get_launchd_label() -> str:
 _resolved_launchd_domain: str | None = None
 
 
+
+def _load_launchd_plist_document(text: str) -> dict:
+    document = plistlib.loads(text.encode("utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("launchd plist must decode to a dictionary")
+    return document
+
+
+def _launchd_semantic_fields(plist_doc: dict) -> dict:
+    env = plist_doc.get("EnvironmentVariables")
+    if not isinstance(env, dict):
+        env = {}
+    return {
+        "Label": plist_doc.get("Label"),
+        "ProgramArguments": plist_doc.get("ProgramArguments"),
+        "WorkingDirectory": plist_doc.get("WorkingDirectory"),
+        "HERMES_HOME": env.get("HERMES_HOME"),
+        "VIRTUAL_ENV": env.get("VIRTUAL_ENV"),
+        "StandardOutPath": plist_doc.get("StandardOutPath"),
+        "StandardErrorPath": plist_doc.get("StandardErrorPath"),
+        "RunAtLoad": plist_doc.get("RunAtLoad"),
+        "KeepAlive": plist_doc.get("KeepAlive"),
+    }
+
+
+def _split_path_entries(path_value: str | None) -> list[str]:
+    if not path_value:
+        return []
+    return [entry for entry in path_value.split(":") if entry]
+
+
+def _path_contains_sequence(entries: list[str], required: list[str]) -> bool:
+    position = -1
+    for required_entry in required:
+        try:
+            position = entries.index(required_entry, position + 1)
+        except ValueError:
+            return False
+    return True
+
+
+def _launchd_path_is_semantically_current(
+    installed_path: str | None,
+    expected_path: str | None,
+    working_dir: str | None,
+) -> bool:
+    if installed_path == expected_path:
+        return True
+
+    if not working_dir:
+        return False
+
+    working_path = Path(working_dir)
+    installed_entries = _split_path_entries(installed_path)
+    runtime_critical = [
+        str(working_path / "venv" / "bin"),
+        str(working_path / "node_modules" / ".bin"),
+    ]
+    if not _path_contains_sequence(installed_entries, runtime_critical):
+        return False
+
+    minimum_system_fallback = ["/usr/bin", "/bin"]
+    if not _path_contains_sequence(installed_entries, minimum_system_fallback):
+        return False
+
+    stable_candidates = [
+        str(Path.home() / ".local" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
+    present_stable = [entry for entry in stable_candidates if entry in installed_entries]
+    return _path_contains_sequence(installed_entries, present_stable)
+
+
+def _launchd_target(label: str | None = None) -> str:
+    return f"{_launchd_domain()}/{label or get_launchd_label()}"
+
+
+def launchd_job_is_loaded(label: str | None = None, timeout: int = 10) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", _launchd_target(label)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False, ""
+
+    output = result.stdout if result.returncode == 0 else (result.stdout or result.stderr or "")
+    return result.returncode == 0, output
+
 def _launchd_domain() -> str:
     """Return the launchd domain that actually manages the gateway service.
 
@@ -4214,11 +4293,23 @@ def launchd_plist_is_current() -> bool:
     if not plist_path.exists():
         return False
 
-    installed = plist_path.read_text(encoding="utf-8")
-    expected = generate_launchd_plist()
-    return _normalize_launchd_plist_for_comparison(
-        installed
-    ) == _normalize_launchd_plist_for_comparison(expected)
+    try:
+        installed_doc = _load_launchd_plist_document(plist_path.read_text(encoding="utf-8"))
+        expected_doc = _load_launchd_plist_document(generate_launchd_plist())
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return False
+
+    if _launchd_semantic_fields(installed_doc) != _launchd_semantic_fields(expected_doc):
+        return False
+
+    installed_env = installed_doc.get("EnvironmentVariables")
+    expected_env = expected_doc.get("EnvironmentVariables")
+    if not isinstance(installed_env, dict) or not isinstance(expected_env, dict):
+        return False
+
+    installed_path = _split_path_entries(installed_env.get("PATH"))
+    expected_path = _split_path_entries(expected_env.get("PATH"))
+    return _launchd_path_is_semantically_current(installed_path, expected_path)
 
 
 def refresh_launchd_plist_if_needed() -> bool:

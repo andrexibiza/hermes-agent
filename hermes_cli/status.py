@@ -570,7 +570,12 @@ def show_status(args):
             print(f"  Status:       {color('unknown', Colors.DIM)}")
             print("  Manager:      systemd/manual")
         elif sys.platform == 'darwin':
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
+            try:
+                from hermes_cli.gateway import launchd_job_is_loaded
+                is_loaded, _ = launchd_job_is_loaded(timeout=5)
+            except Exception:
+                is_loaded = False
+            print(f"  Status:       {check_mark(is_loaded)} {'loaded' if is_loaded else 'not loaded'}")
             print("  Manager:      launchd")
         else:
             print(f"  Status:       {color('N/A', Colors.DIM)}")

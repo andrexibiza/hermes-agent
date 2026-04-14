@@ -671,6 +671,33 @@ class TestLaunchdDomainDetection:
         domain = gateway_cli._launchd_domain()
         assert domain == "user/501"
 
+    def test_launchd_status_uses_launchctl_print_for_loaded_detection(self, tmp_path, monkeypatch, capsys):
+        plist_path = tmp_path / "ai.hermes.gateway.plist"
+        plist_path.write_text(gateway_cli.generate_launchd_plist(), encoding="utf-8")
+        expected_cmd = [
+            "launchctl",
+            "print",
+            f"{gateway_cli._launchd_domain()}/{gateway_cli.get_launchd_label()}",
+        ]
+        calls = []
+
+        monkeypatch.setattr(gateway_cli, "get_launchd_plist_path", lambda: plist_path)
+        monkeypatch.setattr(gateway_cli, "launchd_plist_is_current", lambda: True)
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            assert cmd == expected_cmd
+            return SimpleNamespace(returncode=0, stdout="state = running\npid = 123\n", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        gateway_cli.launchd_status()
+
+        output = capsys.readouterr().out
+        assert "matches the current hermes install" in output.lower()
+        assert "gateway service is loaded" in output.lower()
+        assert calls == [expected_cmd]
+
 
 class TestGatewayServiceDetection:
     def test_supports_systemd_services_requires_systemctl_binary(self, monkeypatch):
@@ -711,6 +738,46 @@ class TestGatewayServiceDetection:
         monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
 
         assert gateway_cli._is_service_running() is True
+
+    def test_is_service_running_returns_false_when_systemctl_missing(self, monkeypatch):
+        unit = SimpleNamespace(exists=lambda: True)
+
+        monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
+        monkeypatch.setattr(
+            gateway_cli,
+            "get_systemd_unit_path",
+            lambda system=False: unit,
+        )
+
+        def fake_run(*args, **kwargs):
+            raise FileNotFoundError("systemctl")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._is_service_running() is False
+
+    def test_is_service_running_uses_launchctl_print_on_macos(self, monkeypatch):
+        plist_path = SimpleNamespace(exists=lambda: True)
+        expected_cmd = [
+            "launchctl",
+            "print",
+            f"{gateway_cli._launchd_domain()}/{gateway_cli.get_launchd_label()}",
+        ]
+        calls = []
+
+        monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
+        monkeypatch.setattr(gateway_cli, "is_macos", lambda: True)
+        monkeypatch.setattr(gateway_cli, "get_launchd_plist_path", lambda: plist_path)
+
+        def fake_run(cmd, capture_output=True, text=True, **kwargs):
+            calls.append(cmd)
+            assert cmd == expected_cmd
+            return SimpleNamespace(returncode=0, stdout="state = running\npid = 123\n", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._is_service_running() is True
+        assert calls == [expected_cmd]
 
 
 class TestGatewaySystemServiceRouting:
