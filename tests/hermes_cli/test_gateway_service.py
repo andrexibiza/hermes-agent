@@ -2035,3 +2035,13 @@ class TestRetryLaunchctlBootstrapUntilRegistered:
         assert ok is False
         assert list_calls["n"] >= 1
 
+
+def test_system_unit_avoids_recursive_execstop_and_uses_extended_stop_timeout(self):
+        unit = gateway_cli.generate_systemd_unit(system=True)
+
+        assert "ExecStart=" in unit
+        assert "ExecStop=" not in unit
+        assert "ExecReload=/bin/kill -USR1 $MAINPID" in unit
+        assert f"RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}" in unit
+        assert "TimeoutStopSec=60" in unit
+        assert "WantedBy=multi-user.target" in unit

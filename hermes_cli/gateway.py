@@ -2920,7 +2920,7 @@ StartLimitIntervalSec=0
 Type={systemd_type}
 {systemd_watchdog_directives}User={username}
 Group={group_name}
-ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else ""} gateway run
+ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else ""} gateway run --replace
 WorkingDirectory={working_dir}
 Environment="HOME={home_dir}"
 Environment="USER={username}"
@@ -2961,7 +2961,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type={systemd_type}
-{systemd_watchdog_directives}ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else ""} gateway run
+{systemd_watchdog_directives}ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else ""} gateway run --replace
 WorkingDirectory={working_dir}
 Environment="PATH={sane_path}"
 Environment="VIRTUAL_ENV={venv_dir}"
@@ -2995,6 +2995,19 @@ _SYSTEMD_OPTIONAL_DIRECTIVES = (
     "RestartSteps",
 )
 
+
+
+def _normalize_systemd_unit_for_comparison(text: str) -> str:
+    """Normalize dynamic systemd fields so staleness checks stay stable."""
+    import re
+
+    normalized = _normalize_service_definition(text)
+    return re.sub(
+        r'^(Environment="PATH=).*(\")$',
+        r"\1__HERMES_PATH__\2",
+        normalized,
+        flags=re.M,
+    )
 
 def _strip_optional_systemd_directives(text: str) -> str:
     """Remove systemd directives that older hosts silently drop."""
@@ -3058,10 +3071,10 @@ def systemd_unit_is_current(system: bool = False) -> bool:
     # Normalize out directives that older systemd versions silently drop
     # (RestartMaxDelaySec, RestartSteps) so a unit that differs only by
     # those directives is not perpetually flagged as outdated.
-    norm_installed = _normalize_service_definition(
+    norm_installed = _normalize_systemd_unit_for_comparison(
         _strip_optional_systemd_directives(installed)
     )
-    norm_expected = _normalize_service_definition(
+    norm_expected = _normalize_systemd_unit_for_comparison(
         _strip_optional_systemd_directives(expected)
     )
     return norm_installed == norm_expected
