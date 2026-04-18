@@ -225,6 +225,7 @@ class TestContainerSystemdSupport:
 
 
 
+
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="systemd user-linger is Linux-only (drives os.getuid())",
@@ -264,6 +265,7 @@ def test_systemd_install_checks_linger_status(monkeypatch, tmp_path, capsys):
     ]
     assert helper_calls == [True]
     assert "User service installed and enabled" in out
+
 
 
 
@@ -431,3 +433,145 @@ def test_module_has_logger():
     """Verify module has a logger instance (regression guard for #27154)."""
     assert hasattr(gateway, "logger")
     assert gateway.logger.name == "hermes_cli.gateway"
+
+
+def test_conflicting_systemd_units_warning(monkeypatch, capsys):
+    monkeypatch.setattr(gateway, "get_installed_systemd_scopes", lambda: ["user", "system"])
+
+    gateway.print_systemd_scope_conflict_warning()
+
+    out = capsys.readouterr().out
+    assert "Both user and system gateway services are installed" in out
+    assert "hermes gateway uninstall" in out
+    assert "--system" in out
+
+
+def test_install_linux_gateway_from_setup_system_choice_without_root_prints_followup(monkeypatch, capsys):
+    monkeypatch.setattr(gateway, "prompt_linux_gateway_install_scope", lambda: "system")
+    monkeypatch.setattr(gateway.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(gateway, "_default_system_service_user", lambda: "alice")
+    monkeypatch.setattr(gateway, "systemd_install", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not install")))
+
+    scope, did_install = gateway.install_linux_gateway_from_setup(force=False)
+
+    out = capsys.readouterr().out
+    assert (scope, did_install) == ("system", False)
+    assert "sudo hermes gateway install --system --run-as-user alice" in out
+    assert "sudo hermes gateway start --system" in out
+
+
+def test_install_linux_gateway_from_setup_system_choice_as_root_installs(monkeypatch):
+    monkeypatch.setattr(gateway, "prompt_linux_gateway_install_scope", lambda: "system")
+    monkeypatch.setattr(gateway.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(gateway, "_default_system_service_user", lambda: "alice")
+
+    calls = []
+    monkeypatch.setattr(
+        gateway,
+        "systemd_install",
+        lambda force=False, system=False, run_as_user=None: calls.append((force, system, run_as_user)),
+    )
+
+    scope, did_install = gateway.install_linux_gateway_from_setup(force=True)
+
+    assert (scope, did_install) == ("system", True)
+    assert calls == [(True, True, "alice")]
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_gateway_exit
+# ---------------------------------------------------------------------------
+
+
+def test_handles_process_already_gone_on_kill(self, monkeypatch):
+        """ProcessLookupError during SIGKILL is not fatal."""
+        import time as _time
+
+        call_num = 0
+        def fake_monotonic():
+            nonlocal call_num
+            call_num += 1
+            return call_num * 3.0  # Jump past force_after quickly
+
+        def mock_kill(pid, sig):
+            raise ProcessLookupError
+
+        monkeypatch.setattr("time.monotonic", fake_monotonic)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr("gateway.status.get_running_pid", lambda: 99)
+        monkeypatch.setattr("os.kill", mock_kill)
+
+        # Should not raise — ProcessLookupError means it's already gone.
+        gateway._wait_for_gateway_exit(timeout=10.0, force_after=2.0)
+
+
+def test_reports_disabled(self, monkeypatch):
+        monkeypatch.setattr(gateway, "is_linux", lambda: True)
+        monkeypatch.setenv("USER", "alice")
+        monkeypatch.setattr(
+            gateway.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="no\n", stderr=""),
+        )
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/loginctl")
+
+        assert gateway.get_systemd_linger_status() == (False, "")
+
+
+def test_systemd_status_warns_when_linger_disabled(monkeypatch, tmp_path, capsys):
+    unit_path = tmp_path / "hermes-gateway.service"
+    unit_path.write_text("[Unit]\n", encoding="utf-8")
+
+    monkeypatch.setattr(gateway, "get_systemd_linger_status", lambda: (False, ""))
+    monkeypatch.setattr(
+        gateway,
+        "get_gateway_systemd_report",
+        lambda requested_scope=None: {
+            "installed": True,
+            "scope": "user",
+            "system": False,
+            "unit_name": gateway.get_service_name(),
+            "unit_path": str(unit_path),
+            "active": True,
+            "reachable": True,
+        },
+    )
+
+
+def test_returns_immediately_when_no_pid(self, monkeypatch):
+        """If get_running_pid returns None, exit instantly."""
+        monkeypatch.setattr("gateway.status.get_running_pid", lambda: None)
+        # Should return without sleeping at all.
+        gateway._wait_for_gateway_exit(timeout=1.0, force_after=0.5)
+
+
+def test_returns_when_process_exits_gracefully(self, monkeypatch):
+        """Process exits after a couple of polls — no SIGKILL needed."""
+        poll_count = 0
+
+        def mock_get_running_pid():
+            nonlocal poll_count
+            poll_count += 1
+            return 12345 if poll_count <= 2 else None
+
+        monkeypatch.setattr("gateway.status.get_running_pid", mock_get_running_pid)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        gateway._wait_for_gateway_exit(timeout=10.0, force_after=999.0)
+        # Should have polled until None was returned.
+        assert poll_count == 3
+
+
+def test_systemd_install_system_scope_skips_linger_and_uses_systemctl(monkeypatch, tmp_path, capsys):
+    unit_path = tmp_path / "etc" / "systemd" / "system" / "hermes-gateway.service"
+
+    monkeypatch.setattr(gateway, "get_systemd_unit_path", lambda system=False: unit_path)
+    monkeypatch.setattr(
+        gateway,
+        "generate_systemd_unit",
+        lambda system=False, run_as_user=None: f"scope={system} user={run_as_user}\n",
+    )
+    monkeypatch.setattr(gateway, "_require_root_for_system_service", lambda action: None)
+
+    calls = []
+    helper_calls = []

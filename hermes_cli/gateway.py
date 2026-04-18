@@ -16,6 +16,7 @@ import sys
 import textwrap
 import time
 from dataclasses import dataclass
+
 from pathlib import Path
 
 # Ensure /bin and /usr/bin are on PATH so launchctl/systemctl are discoverable
@@ -628,6 +629,7 @@ def find_gateway_pids(
         try:
             from gateway.status import get_running_pid
 
+
             _append_unique_pid(pids, get_running_pid(), _exclude)
         except Exception:
             pass
@@ -635,6 +637,7 @@ def find_gateway_pids(
         _append_unique_pid(pids, pid, _exclude)
     try:
         include_restart_managers = not supports_systemd_services()
+
     except Exception:
         include_restart_managers = False
     for pid in _scan_gateway_pids(
@@ -2088,16 +2091,167 @@ def _service_scope_label(system: bool = False) -> str:
     return "system" if system else "user"
 
 
+def _read_systemd_env_from_unit(unit_path: Path, key: str) -> str | None:
+    if not unit_path.exists():
+        return None
+
+    quoted_prefix = f'Environment="{key}='
+    plain_prefix = f"Environment={key}="
+    for line in unit_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(quoted_prefix):
+            value = stripped[len(quoted_prefix):]
+            return value[:-1] if value.endswith('"') else value
+        if stripped.startswith(plain_prefix):
+            return stripped[len(plain_prefix):]
+    return None
+
+
+def _matching_systemd_units(hermes_home: Path | None = None) -> list[dict]:
+    current_home = (hermes_home or get_hermes_home()).resolve()
+    current_home_text = str(current_home)
+    requested_name = get_service_name()
+    rows = []
+
+    for system, scope, root in (
+        (False, "user", Path.home() / ".config" / "systemd" / "user"),
+        (True, "system", Path("/etc/systemd/system")),
+    ):
+        if not root.exists():
+            continue
+        canonical_path = get_systemd_unit_path(system=system)
+        for unit_path in sorted(root.glob("hermes-gateway*.service")):
+            configured_home = _read_systemd_env_from_unit(unit_path, "HERMES_HOME")
+            matches_current_home = unit_path == canonical_path
+            if configured_home:
+                try:
+                    matches_current_home = str(Path(configured_home).resolve()) == current_home_text
+                except Exception:
+                    matches_current_home = configured_home == current_home_text
+            if not matches_current_home:
+                continue
+            rows.append({
+                "name": unit_path.stem,
+                "path": unit_path,
+                "system": system,
+                "scope": scope,
+                "canonical": unit_path.stem == requested_name,
+                "configured_home": configured_home,
+            })
+    return rows
+
+
+def _systemd_unit_runtime(unit_name: str, system: bool = False) -> dict:
+    command = _systemctl_cmd(system) + ["is-active", unit_name]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "active": None,
+            "reachable": False,
+            "state": "timeout",
+            "error": str(exc),
+            "command": " ".join(command),
+        }
+    except FileNotFoundError as exc:
+        return {
+            "active": None,
+            "reachable": False,
+            "state": "systemctl-missing",
+            "error": str(exc),
+            "command": " ".join(command),
+        }
+
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    state = stdout or ("unreachable" if "Failed to connect to bus" in stderr else "unknown")
+    reachable = "Failed to connect to bus" not in stderr
+    active = stdout == "active" if reachable else None
+    if reachable and active is False and not state:
+        state = "inactive"
+
+    return {
+        "active": active,
+        "reachable": reachable,
+        "state": state,
+        "stdout": stdout,
+        "stderr": stderr,
+        "exit_code": result.returncode,
+        "command": " ".join(command),
+    }
+
+
+def get_gateway_systemd_report(requested_scope: str | None = None) -> dict:
+    requested_name = get_service_name()
+    units = []
+    for row in _matching_systemd_units():
+        if requested_scope in {"user", "system"} and row["scope"] != requested_scope:
+            continue
+        runtime = _systemd_unit_runtime(row["name"], system=bool(row["system"]))
+        units.append({**row, "runtime": runtime})
+
+    if not units:
+        return {
+            "installed": False,
+            "requested_name": requested_name,
+            "requested_scope": requested_scope,
+            "units": [],
+        }
+
+    def _sort_key(item: dict) -> tuple:
+        runtime = item.get("runtime", {})
+        scope_match = requested_scope is not None and item.get("scope") == requested_scope
+        return (
+            runtime.get("active") is True,
+            scope_match,
+            item.get("canonical") is True,
+            runtime.get("reachable") is True,
+            item.get("scope") == "system",
+        )
+
+    chosen = max(units, key=_sort_key)
+    return {
+        "installed": True,
+        "requested_name": requested_name,
+        "requested_scope": requested_scope,
+        "unit_name": chosen["name"],
+        "unit_path": str(chosen["path"]),
+        "scope": chosen["scope"],
+        "system": bool(chosen["system"]),
+        "canonical": bool(chosen["canonical"]),
+        "configured_home": chosen.get("configured_home"),
+        "active": chosen["runtime"].get("active"),
+        "reachable": chosen["runtime"].get("reachable"),
+        "state": chosen["runtime"].get("state"),
+        "runtime": chosen["runtime"],
+        "units": [
+            {
+                "name": item["name"],
+                "path": str(item["path"]),
+                "scope": item["scope"],
+                "canonical": bool(item["canonical"]),
+                "configured_home": item.get("configured_home"),
+                "active": item["runtime"].get("active"),
+                "reachable": item["runtime"].get("reachable"),
+                "state": item["runtime"].get("state"),
+            }
+            for item in units
+        ],
+        "drifted": chosen["name"] != requested_name,
+    }
+
+
 def get_installed_systemd_scopes() -> list[str]:
     scopes = []
-    seen_paths: set[Path] = set()
-    for system, label in ((False, "user"), (True, "system")):
-        unit_path = get_systemd_unit_path(system=system)
-        if unit_path in seen_paths:
-            continue
-        if unit_path.exists():
-            scopes.append(label)
-            seen_paths.add(unit_path)
+    for row in _matching_systemd_units():
+        scope = row.get("scope")
+        if scope and scope not in scopes:
+            scopes.append(scope)
     return scopes
 
 
@@ -2313,7 +2467,39 @@ def print_systemd_scope_conflict_warning() -> None:
     )
     print_info("  Keep one of these:")
     print_info("    hermes gateway uninstall")
+
     print_info("    sudo hermes gateway uninstall --system")
+
+
+def _requested_systemd_scope(system: bool = False, user: bool = False) -> str | None:
+    if system and user:
+        raise ValueError("Choose only one of --system or --user.")
+    if system:
+        return "system"
+    if user:
+        return "user"
+    return None
+
+
+
+def _resolve_systemd_service_target(system: bool = False, user: bool = False) -> dict:
+    requested_scope = _requested_systemd_scope(system=system, user=user)
+    report = get_gateway_systemd_report(requested_scope=requested_scope)
+    if report.get("installed"):
+        return report
+
+    selected_system = _select_systemd_scope(system=system, user=user)
+    return {
+        "installed": False,
+        "requested_name": get_service_name(),
+        "requested_scope": requested_scope,
+        "unit_name": get_service_name(),
+        "unit_path": str(get_systemd_unit_path(system=selected_system)),
+        "scope": _service_scope_label(selected_system),
+        "system": selected_system,
+        "canonical": True,
+        "drifted": False,
+    }
 
 
 def _require_root_for_system_service(action: str) -> None:
@@ -2370,11 +2556,141 @@ def _read_systemd_user_from_unit(unit_path: Path) -> str | None:
     return None
 
 
+_wsl_detected: bool | None = None
+
+
 def _default_system_service_user() -> str | None:
     for candidate in (os.getenv("SUDO_USER"), os.getenv("USER"), os.getenv("LOGNAME")):
         if candidate and candidate.strip() and candidate.strip() != "root":
             return candidate.strip()
     return None
+
+
+def _is_wsl() -> bool:
+    global _wsl_detected
+    if _wsl_detected is not None:
+        return _wsl_detected
+    try:
+        _wsl_detected = "microsoft" in Path("/proc/version").read_text(encoding="utf-8").lower()
+    except Exception:
+        _wsl_detected = False
+    return _wsl_detected
+
+
+def _find_wsl_executable() -> str | None:
+    candidates = [
+        "/mnt/c/Windows/System32/wsl.exe",
+        shutil.which("wsl.exe"),
+        shutil.which("wsl"),
+    ]
+    for candidate in candidates:
+        if candidate and (not os.path.isabs(candidate) or Path(candidate).exists()):
+            return candidate
+    return None
+
+
+def _running_from_gateway_surface() -> bool:
+    return bool(os.getenv("HERMES_GATEWAY_SESSION") or os.getenv("HERMES_SESSION_PLATFORM"))
+
+
+def _should_detach_system_service_action(report: dict | None = None) -> bool:
+    report = report or {}
+    return (
+        is_linux()
+        and bool(report.get("installed"))
+        and bool(report.get("system"))
+        and _running_from_gateway_surface()
+    )
+
+
+def _detached_gateway_log_path(action_name: str, hermes_home: str) -> Path:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    log_dir = Path(hermes_home) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"gateway-{action_name}-{timestamp}.log"
+
+
+def _schedule_detached_system_gateway_cli(action_name: str, hermes_args: list[str]) -> tuple[str, Path]:
+    target = _resolve_systemd_service_target(system=True, user=False)
+    if not bool(target.get("system")):
+        raise ValueError("Detached gateway control only supports system-scope services")
+
+    unit_name = target.get("unit_name") or get_service_name()
+    unit_path_text = target.get("unit_path")
+    unit_path = Path(unit_path_text) if unit_path_text else get_systemd_unit_path(system=True)
+    configured_user = _read_systemd_user_from_unit(unit_path) or _default_system_service_user()
+    username, _, home_dir = _system_service_identity(run_as_user=configured_user)
+    hermes_home = _read_systemd_env_from_unit(unit_path, "HERMES_HOME") or _hermes_home_for_target_user(home_dir)
+    log_path = _detached_gateway_log_path(action_name, hermes_home)
+    transient_unit = f"{unit_name}-{action_name}-{int(time.time())}"
+
+    hermes_cmd = shlex.join(shlex.split(get_hermes_cli_path()) + hermes_args)
+    env_assignments = " ".join(
+        [
+            f"HOME={shlex.quote(home_dir)}",
+            f"USER={shlex.quote(username)}",
+            f"LOGNAME={shlex.quote(username)}",
+            f"HERMES_HOME={shlex.quote(hermes_home)}",
+        ]
+    )
+    log_path_quoted = shlex.quote(str(log_path))
+    log_dir_quoted = shlex.quote(str(log_path.parent))
+    shell_script = (
+        "set -euo pipefail; "
+        f"mkdir -p {log_dir_quoted}; "
+        f"printf '%s\\n' \"=== $(date '+%Y-%m-%d %H:%M:%S %Z') detached gateway {action_name} start ===\" >> {log_path_quoted}; "
+        "sleep 2; "
+        f"env {env_assignments} {hermes_cmd} >> {log_path_quoted} 2>&1; "
+        "status=$?; "
+        f"printf '%s\\n' \"=== detached gateway {action_name} exit ${'{'}status{'}'} ===\" >> {log_path_quoted}; "
+        "exit \"$status\""
+    )
+    systemd_run_cmd = [
+        "systemd-run",
+        "--unit",
+        transient_unit,
+        "--collect",
+        "--service-type=oneshot",
+        "--no-block",
+        "/bin/bash",
+        "-lc",
+        shell_script,
+    ]
+
+    launch_cmd = systemd_run_cmd
+    if os.geteuid() != 0:
+        if not _is_wsl():
+            raise PermissionError(
+                f"System gateway {action_name} requires root. Re-run with sudo."
+            )
+        wsl_exe = _find_wsl_executable()
+        distro = os.getenv("WSL_DISTRO_NAME")
+        if not wsl_exe or not distro:
+            raise PermissionError(
+                f"System gateway {action_name} requires root, and no WSL root bridge is available. Re-run with sudo."
+            )
+        launch_cmd = [wsl_exe, "-d", distro, "-u", "root", "--", *systemd_run_cmd]
+
+    subprocess.run(launch_cmd, check=True, timeout=30)
+    return transient_unit, log_path
+
+
+def _print_detached_system_gateway_notice(action_name: str, transient_unit: str, log_path: Path) -> None:
+    print(f"✓ Scheduled detached system gateway {action_name}")
+    print(f"  Unit: {transient_unit}")
+    print(f"  Log:  {log_path}")
+
+
+def _exit_missing_systemd_scope(action_name: str, requested_scope: str, *, suggest_install: bool = True) -> None:
+    scope_flag = " --system" if requested_scope == "system" else " --user"
+    prefix = "sudo " if requested_scope == "system" else ""
+    print(f"✗ Gateway {requested_scope} service is not installed")
+    print(f"  {action_name.capitalize()} only targets the requested {requested_scope} scope.")
+    if suggest_install:
+        print(f"  Run: {prefix}hermes gateway install{scope_flag}")
+    else:
+        print(f"  Check: hermes gateway status{scope_flag}")
+    sys.exit(1)
 
 
 def prompt_linux_gateway_install_scope() -> str | None:
@@ -3049,6 +3365,7 @@ def systemd_unit_is_current(system: bool = False) -> bool:
     _sync_hermes_home_from_systemd_unit(system=system)
 
     unit_path = get_systemd_unit_path(system=system)
+
     if not unit_path.exists():
         return False
 
@@ -3142,6 +3459,7 @@ def refresh_systemd_unit_if_needed(system: bool = False) -> bool:
     expected_user = _read_systemd_user_from_unit(unit_path) if system else None
     new_unit = generate_systemd_unit(system=system, run_as_user=expected_user)
 
+
     # ── Test-environment safety belt ─────────────────────────────────────
     # The user-scope unit path resolves under ``Path.home()``, which is NOT
     # sandboxed by the test conftest (only HERMES_HOME is). If a test
@@ -3234,8 +3552,9 @@ def _ensure_linger_enabled() -> None:
     _print_linger_enable_warning(username, detail or linger_detail)
 
 
-def _select_systemd_scope(system: bool = False) -> bool:
-    if system:
+def _select_systemd_scope(system: bool = False, user: bool = False) -> bool:
+    requested_scope = _requested_systemd_scope(system=system, user=user)
+    if requested_scope == "system":
         return True
     return (
         get_systemd_unit_path(system=True).exists()
@@ -3324,6 +3643,7 @@ def systemd_install(
     enable_on_startup: bool = True,
     non_interactive: bool = False,
 ):
+
     if system:
         _require_root_for_system_service("install")
 
@@ -3360,6 +3680,7 @@ def systemd_install(
             refresh_systemd_unit_if_needed(system=system)
             if enable_on_startup:
                 _run_systemctl(["enable", get_service_name()], system=system, check=True, timeout=30)
+
             print(f"✓ {_service_scope_label(system).capitalize()} service definition updated")
             return
         print(f"Service already installed at: {unit_path}")
@@ -3404,8 +3725,13 @@ def systemd_install(
     print_legacy_unit_warning()
 
 
-def systemd_uninstall(system: bool = False):
-    system = _select_systemd_scope(system)
+def systemd_uninstall(system: bool = False, user: bool = False):
+    target = _resolve_systemd_service_target(system=system, user=user)
+    system = bool(target.get("system"))
+    unit_name = target.get("unit_name") or get_service_name()
+    unit_path_text = target.get("unit_path")
+    unit_path = Path(unit_path_text) if unit_path_text else get_systemd_unit_path(system=system)
+
     if system:
         _require_root_for_system_service("uninstall")
 
@@ -3414,7 +3740,7 @@ def systemd_uninstall(system: bool = False):
         ["disable", get_service_name()], system=system, check=False, timeout=30
     )
 
-    unit_path = get_systemd_unit_path(system=system)
+
     if unit_path.exists():
         unit_path.unlink()
         print(f"✓ Removed {unit_path}")
@@ -3459,6 +3785,7 @@ def systemd_stop(system: bool = False):
     try:
         from gateway.status import get_running_pid, write_planned_stop_marker
 
+
         pid = get_running_pid(cleanup_stale=False)
         if pid is not None:
             write_planned_stop_marker(pid)
@@ -3478,8 +3805,13 @@ def systemd_stop(system: bool = False):
     print(f"✓ {_service_scope_label(system).capitalize()} service stopped")
 
 
-def systemd_restart(system: bool = False):
-    system = _select_systemd_scope(system)
+def systemd_restart(system: bool = False, user: bool = False):
+    target = _resolve_systemd_service_target(system=system, user=user)
+    system = bool(target.get("system"))
+    unit_name = target.get("unit_name") or get_service_name()
+    unit_path_text = target.get("unit_path")
+    unit_path = Path(unit_path_text) if unit_path_text else get_systemd_unit_path(system=system)
+
     if system:
         _require_root_for_system_service("restart")
     else:
@@ -3588,10 +3920,44 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
     unit_path = get_systemd_unit_path(system=system)
     scope_flag = " --system" if system else ""
 
-    if not unit_path.exists():
+
+
+
+def _gateway_repair_preview_command(system: bool = False, user: bool = False, cleanup_legacy: bool = False) -> str:
+    scope_flag = ' --system' if system else ' --user' if user else ''
+    command = f"hermes gateway repair{scope_flag}"
+    if cleanup_legacy:
+        command += " --cleanup-legacy"
+    return command
+
+
+
+def _gateway_repair_apply_command(system: bool = False, user: bool = False, cleanup_legacy: bool = False) -> str:
+    scope_flag = ' --system' if system else ' --user' if user else ''
+    command = f"{'sudo ' if system else ''}hermes gateway repair{scope_flag} --apply"
+    if cleanup_legacy:
+        command += " --cleanup-legacy"
+    return command
+
+
+
+def systemd_status(deep: bool = False, system: bool = False, user: bool = False, auto_select: bool = False):
+    requested_scope = None if auto_select else _requested_systemd_scope(system=system, user=user)
+    if requested_scope is None and not auto_select:
+        requested_scope = _service_scope_label(_select_systemd_scope())
+    report = get_gateway_systemd_report(requested_scope=requested_scope)
+    scope_flag = " --system" if requested_scope == "system" else " --user" if requested_scope == "user" else ""
+
+    if not report.get("installed"):
+        install_system = requested_scope == "system"
         print("✗ Gateway service is not installed")
-        print(f"  Run: {'sudo ' if system else ''}hermes gateway install{scope_flag}")
+        print(f"  Run: {'sudo ' if install_system else ''}hermes gateway install{scope_flag}")
         return
+
+    active_scope = report.get("scope")
+    active_system = bool(report.get("system"))
+    unit_name = report.get("unit_name") or get_service_name()
+    unit_path = Path(report.get("unit_path")) if report.get("unit_path") else get_systemd_unit_path(system=active_system)
 
     if has_conflicting_systemd_units():
         print_systemd_scope_conflict_warning()
@@ -3615,6 +3981,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
     _run_systemctl(
         status_cmd,
         system=system,
+
         capture_output=False,
         timeout=10,
     )
@@ -3639,16 +4006,15 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
         )
         print(f"  Run: {'sudo ' if system else ''}hermes gateway start{scope_flag}")
 
-    configured_user = _read_systemd_user_from_unit(unit_path) if system else None
+
+    configured_user = _read_systemd_user_from_unit(unit_path) if active_system else None
     if configured_user:
         print(f"Configured to run as: {configured_user}")
 
-    runtime_lines = _runtime_health_lines()
-    if runtime_lines:
+    if deep:
         print()
-        print("Recent gateway health:")
-        for line in runtime_lines:
-            print(f"  {line}")
+        print("Recent journal:")
+        subprocess.run(_journalctl_cmd(active_system) + ["-u", unit_name, "-n", "20", "--no-pager"], timeout=10)
 
     unit_props = _read_systemd_unit_properties(system=system)
     active_state = unit_props.get("ActiveState", "")
@@ -3676,6 +4042,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
         print(f"  ⚠ Systemd unit result: {result_code}")
 
     if system:
+
         print("✓ System service starts at boot without requiring systemd linger")
     elif deep:
         print_systemd_linger_guidance()
@@ -3700,6 +4067,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
         if full:
             log_cmd.append("-l")
         subprocess.run(log_cmd, timeout=10)
+
 
 
 # =============================================================================
@@ -5882,6 +6250,7 @@ def _is_service_installed() -> bool:
             get_systemd_unit_path(system=False).exists()
             or get_systemd_unit_path(system=True).exists()
         )
+
     elif is_macos():
         return get_launchd_plist_path().exists()
     elif is_windows():
@@ -5924,6 +6293,7 @@ def _is_service_running() -> bool:
                     return True
             except (RuntimeError, subprocess.TimeoutExpired):
                 pass
+
 
         return False
     elif is_macos() and get_launchd_plist_path().exists():
@@ -6824,6 +7194,7 @@ def _dispatch_all_via_service_manager_if_s6(action: str) -> bool:
 
 
 
+
 def gateway_command(args):
     """Handle gateway subcommands."""
     try:
@@ -6960,6 +7331,66 @@ def _block_until_terminated() -> None:
         threading.Event().wait()
 
 
+
+
+def _expected_systemd_unit_text(unit_path: Path, system: bool = False) -> str:
+    expected_user = _read_systemd_user_from_unit(unit_path) if system else None
+    return generate_systemd_unit(system=system, run_as_user=expected_user)
+
+
+def _gateway_restart_command(system: bool = False, user: bool = False) -> str:
+    return f"{'sudo ' if system else ''}hermes gateway restart{' --system' if system else ' --user' if user else ''}"
+
+
+def _requested_systemd_scope_from_args(args) -> str | None:
+    return _requested_systemd_scope(
+        system=getattr(args, 'system', False),
+        user=getattr(args, 'user', False),
+    )
+
+
+def _setup_whatsapp():
+    """Delegate to the existing WhatsApp setup flow."""
+    from hermes_cli.main import cmd_whatsapp
+    import argparse
+    cmd_whatsapp(argparse.Namespace())
+
+
+def get_hermes_cli_path() -> str:
+    """Get the path to the hermes CLI."""
+    # Check if installed via pip
+    import shutil
+    hermes_bin = shutil.which("hermes")
+    if hermes_bin:
+        return hermes_bin
+    
+    # Fallback to direct module execution
+    return f"{get_python_path()} -m hermes_cli.main"
+
+
+# =============================================================================
+# Systemd (Linux)
+# =============================================================================
+
+
+def refresh_systemd_unit_path_if_needed(unit_path: Path, system: bool = False) -> bool:
+    """Rewrite an installed systemd unit when the generated definition has changed."""
+    if not unit_path.exists() or systemd_unit_path_is_current(unit_path, system=system):
+        return False
+
+    unit_path.write_text(_expected_systemd_unit_text(unit_path, system=system), encoding="utf-8")
+    subprocess.run(_systemctl_cmd(system) + ["daemon-reload"], check=True, timeout=30)
+    print(f"↻ Updated gateway {_service_scope_label(system)} service definition at: {unit_path}")
+    return True
+
+
+def systemd_unit_path_is_current(unit_path: Path, system: bool = False) -> bool:
+    if not unit_path.exists():
+        return False
+
+    installed = unit_path.read_text(encoding="utf-8")
+    expected = _expected_systemd_unit_text(unit_path, system=system)
+    return _normalize_service_definition(installed) == _normalize_service_definition(expected)
 def _gateway_command_inner(args):
     subcmd = getattr(args, "gateway_command", None)
 
@@ -7032,6 +7463,7 @@ def _gateway_command_inner(args):
             )
             if start_now:
                 systemd_start(system=system)
+
         elif is_macos():
             launchd_install(force)
         elif is_windows():
@@ -7106,6 +7538,7 @@ def _gateway_command_inner(args):
             sys.exit(1)
         if supports_systemd_services():
             systemd_uninstall(system=system)
+
         elif is_macos():
             launchd_uninstall()
         elif is_windows():
@@ -7159,6 +7592,7 @@ def _gateway_command_inner(args):
             sys.exit(1)
         if supports_systemd_services():
             systemd_start(system=system)
+
         elif is_macos():
             launchd_start()
         elif is_windows():
@@ -7222,6 +7656,7 @@ def _gateway_command_inner(args):
         if stop_all and _dispatch_all_via_service_manager_if_s6("stop"):
             return
         if not stop_all and _dispatch_via_service_manager_if_s6("stop"):
+
             return
 
         if stop_all:
@@ -7231,8 +7666,9 @@ def _gateway_command_inner(args):
                 get_systemd_unit_path(system=False).exists()
                 or get_systemd_unit_path(system=True).exists()
             ):
+
                 try:
-                    systemd_stop(system=system)
+                    systemd_stop(system=system, user=user)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
@@ -7264,8 +7700,9 @@ def _gateway_command_inner(args):
                 get_systemd_unit_path(system=False).exists()
                 or get_systemd_unit_path(system=True).exists()
             ):
+
                 try:
-                    systemd_stop(system=system)
+                    systemd_stop(system=system, user=user)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
@@ -7381,9 +7818,10 @@ def _gateway_command_inner(args):
             get_systemd_unit_path(system=False).exists()
             or get_systemd_unit_path(system=True).exists()
         ):
+
             service_configured = True
             try:
-                systemd_restart(system=system)
+                systemd_restart(system=system, user=user)
                 service_available = True
             except subprocess.CalledProcessError:
                 pass
@@ -7470,6 +7908,7 @@ def _gateway_command_inner(args):
         ):
             systemd_status(deep, system=system, full=full)
             _print_gateway_process_mismatch(snapshot)
+
         elif is_macos() and get_launchd_plist_path().exists():
             launchd_status(deep)
             _print_gateway_process_mismatch(snapshot)

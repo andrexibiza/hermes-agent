@@ -129,6 +129,21 @@ def _estop_status_line():
     return f"⏸️  PAUSED (global emergency stop{suffix}; `hermes resume` to lift)"
 
 
+def _gateway_restart_command(system: bool = False, user: bool = False) -> str:
+    return f"{'sudo ' if system else ''}hermes gateway restart{' --system' if system else ' --user' if user else ''}"
+
+
+def _gateway_repair_preview_command(system: bool = False) -> str:
+    return f"hermes gateway repair{' --system' if system else ''}"
+
+
+def _gateway_repair_apply_command(system: bool = False, cleanup_legacy: bool = False) -> str:
+    command = f"{'sudo ' if system else ''}hermes gateway repair{' --system' if system else ''} --apply"
+    if cleanup_legacy:
+        command += " --cleanup-legacy"
+    return command
+
+
 def show_status(args):
     """Show status of all Hermes Agent components."""
     deep = getattr(args, 'deep', False)
@@ -546,35 +561,70 @@ def show_status(args):
     print()
     print(color("◆ Gateway Service", Colors.CYAN, Colors.BOLD))
 
-    try:
-        from hermes_cli.gateway import get_gateway_runtime_snapshot, _format_gateway_pids
+    if sys.platform.startswith('linux'):
+        try:
+            from hermes_cli.gateway import get_gateway_systemd_report, systemd_unit_path_is_current
+            gateway_report = get_gateway_systemd_report()
+        except Exception:
+            gateway_report = {"installed": False}
+            systemd_unit_path_is_current = None
 
-        snapshot = get_gateway_runtime_snapshot()
-        is_running = snapshot.running
-        print(f"  Status:       {check_mark(is_running)} {'running' if is_running else 'stopped'}")
-        print(f"  Manager:      {snapshot.manager}")
-        if snapshot.gateway_pids:
-            print(f"  PID(s):       {_format_gateway_pids(snapshot.gateway_pids)}")
-        if snapshot.has_process_service_mismatch:
-            print("  Service:      installed but not managing the current running gateway")
-        elif _is_termux() and not snapshot.gateway_pids:
-            print("  Start with:   hermes gateway")
-            print("  Note:         Android may stop background jobs when Termux is suspended")
-        elif snapshot.service_installed and not snapshot.service_running:
-            print("  Service:      installed but stopped")
-    except Exception:
-        if _is_termux():
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
-            print("  Manager:      Termux / manual process")
-        elif sys.platform.startswith('linux'):
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
-            print("  Manager:      systemd/manual")
-        elif sys.platform == 'darwin':
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
-            print("  Manager:      launchd")
-        else:
-            print(f"  Status:       {color('N/A', Colors.DIM)}")
-            print("  Manager:      (not supported on this platform)")
+        is_active = gateway_report.get("active") is True
+        state_label = "running" if is_active else (gateway_report.get("state") or "stopped")
+        manager_label = f"systemd ({gateway_report.get('scope')})" if gateway_report.get("installed") else "systemd (user)"
+        print(f"  Status:       {check_mark(is_active)} {state_label}")
+        print(f"  Manager:      {manager_label}")
+        if gateway_report.get("installed"):
+            unit_name = gateway_report.get("unit_name")
+            active_system = bool(gateway_report.get("system"))
+            unit_path = Path(gateway_report.get("unit_path")) if gateway_report.get("unit_path") else None
+            outdated = bool(
+                unit_path
+                and unit_path.exists()
+                and systemd_unit_path_is_current is not None
+                and not systemd_unit_path_is_current(unit_path, system=active_system)
+            )
+            if gateway_report.get("drifted"):
+                print(f"  Unit:         {unit_name} (legacy/non-canonical)")
+                print("  Drift:        yes")
+                print(f"  Preview:      {_gateway_repair_preview_command(system=active_system)}")
+                print(f"  Apply:        {_gateway_repair_apply_command(system=active_system, cleanup_legacy=True)}")
+            else:
+                print(f"  Unit:         {unit_name}")
+            if outdated:
+                print("  Definition:   outdated")
+                print(f"  Refresh:      {_gateway_restart_command(system=active_system)}")
+        
+    else:
+        try:
+            from hermes_cli.gateway import get_gateway_runtime_snapshot, _format_gateway_pids
+
+            snapshot = get_gateway_runtime_snapshot()
+            is_running = snapshot.running
+            print(f"  Status:       {check_mark(is_running)} {'running' if is_running else 'stopped'}")
+            print(f"  Manager:      {snapshot.manager}")
+            if snapshot.gateway_pids:
+                print(f"  PID(s):       {_format_gateway_pids(snapshot.gateway_pids)}")
+            if snapshot.has_process_service_mismatch:
+                print("  Service:      installed but not managing the current running gateway")
+            elif _is_termux() and not snapshot.gateway_pids:
+                print("  Start with:   hermes gateway")
+                print("  Note:         Android may stop background jobs when Termux is suspended")
+            elif snapshot.service_installed and not snapshot.service_running:
+                print("  Service:      installed but stopped")
+        except Exception:
+            if _is_termux():
+                print(f"  Status:       {color('unknown', Colors.DIM)}")
+                print("  Manager:      Termux / manual process")
+            elif sys.platform.startswith('linux'):
+                print(f"  Status:       {color('unknown', Colors.DIM)}")
+                print("  Manager:      systemd/manual")
+            elif sys.platform == 'darwin':
+                print(f"  Status:       {color('unknown', Colors.DIM)}")
+                print("  Manager:      launchd")
+            else:
+                print(f"  Status:       {color('N/A', Colors.DIM)}")
+                print("  Manager:      (not supported on this platform)")
 
     # =========================================================================
     # Cron Jobs
