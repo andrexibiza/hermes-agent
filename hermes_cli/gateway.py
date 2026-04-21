@@ -4083,6 +4083,85 @@ def _launchd_fallback_to_detached(reason: str, *, exit_on_failure: bool = True) 
     return False
 
 
+def _launchd_target(label: str) -> str:
+    return f"{_launchd_domain()}/{label}"
+
+
+def _list_hermes_launchd_services() -> list[tuple[str, Path]]:
+    """Return installed Hermes launchd service labels and plist paths.
+
+    The default profile is returned first so status/restart flows remain
+    deterministic and easier to read.
+    """
+    launch_agents = _launchd_user_home() / "Library" / "LaunchAgents"
+    if not launch_agents.exists():
+        return []
+
+    services: list[tuple[str, Path]] = []
+    for plist_path in sorted(
+        launch_agents.glob("ai.hermes.gateway*.plist"),
+        key=lambda path: (0 if path.stem == "ai.hermes.gateway" else 1, path.stem),
+    ):
+        label = plist_path.stem
+        if label == "ai.hermes.gateway" or label.startswith("ai.hermes.gateway-"):
+            services.append((label, plist_path))
+    return services
+
+
+def _launchd_service_loaded(label: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", _launchd_target(label)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _launchd_restart_service(label: str, plist_path: Path) -> None:
+    """Restart a specific Hermes launchd service label safely."""
+    target = _launchd_target(label)
+    try:
+        subprocess.run(
+            ["launchctl", "kickstart", "-k", target],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        return
+    except subprocess.CalledProcessError as e:
+        if e.returncode not in (3, 113):
+            raise
+
+    subprocess.run(
+        ["launchctl", "bootstrap", _launchd_domain(), str(plist_path)],
+        check=True,
+        timeout=30,
+    )
+    subprocess.run(
+        ["launchctl", "kickstart", target],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def restart_all_launchd_services() -> list[str]:
+    """Restart loaded Hermes launchd services across all profiles."""
+    restarted: list[str] = []
+    for label, plist_path in _list_hermes_launchd_services():
+        if not _launchd_service_loaded(label):
+            continue
+        _launchd_restart_service(label, plist_path)
+        restarted.append(label)
+    return restarted
+
+
 def generate_launchd_plist() -> str:
     python_path = get_python_path()
     # Stable cwd anchor — never the volatile source checkout. See
@@ -7354,7 +7433,6 @@ def _gateway_command_inner(args):
                 print(f"✓ Stopped {total} gateway process(es) across all profiles")
             _wait_for_gateway_exit(timeout=10.0, force_after=5.0)
 
-            # Start the current profile's service fresh
             print("Starting gateway...")
             if supports_systemd_services() and (
                 get_systemd_unit_path(system=False).exists()
