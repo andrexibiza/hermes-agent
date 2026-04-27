@@ -65,6 +65,13 @@ from hermes_cli.setup import (
     prompt_yes_no,
 )
 from hermes_cli.colors import Colors, color
+from hermes_cli.gateway_service_identity import (
+    gateway_launchd_plist_path,
+    gateway_profile_arg,
+    gateway_service_suffix,
+    get_gateway_service_identity,
+    service_definition_matches_hermes_home,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +102,72 @@ class ProfileGatewayProcess:
     profile: str
     path: Path
     pid: int
+
+
+def _parse_launchd_pid(stdout: str, label: str) -> int | None:
+    import re
+
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # `launchctl list <label>` may render either a table-style row or a
+        # plist-style block depending on macOS version.
+        parts = stripped.split()
+        if len(parts) >= 3 and parts[2] == label:
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                continue
+            return pid if pid > 0 else None
+
+        match = re.search(r'"?PID"?\s*=\s*(\d+)', stripped)
+        if match:
+            pid = int(match.group(1))
+            return pid if pid > 0 else None
+
+    return None
+
+
+def _launchd_label_pid(label: str, *, timeout: float = 5.0) -> int | None:
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", label],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_launchd_pid(result.stdout, label)
+
+
+def _wait_for_pid_exit(
+    pid: int | None,
+    *,
+    timeout: float = 10.0,
+    description: str = "process",
+) -> bool:
+    if pid is None or pid <= 0:
+        return True
+
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        time.sleep(0.3)
+
+    print(f"⚠ {description} PID {pid} still running after {timeout:g}s")
+    return False
 
 
 def _get_service_pids() -> set:
@@ -147,30 +220,14 @@ def _get_service_pids() -> set:
     # --- launchd (macOS) ---
     if is_macos():
         try:
-            label = get_launchd_label()
-            result = subprocess.run(
-                ["launchctl", "list", label],
-                capture_output=True,
-                text=True, encoding='utf-8', errors='replace',
-                timeout=5,
-            )
-            if result.returncode == 0:
-                # Try plist format first (macOS 26+): "PID" = <N>;
-                pid = _parse_launchd_pid_from_list_output(result.stdout)
-                if pid is not None and pid > 0:
+            if not _has_launchd_service_definition():
+                return pids
+            for label, plist_path in _launchd_service_targets():
+                if not plist_path.exists():
+                    continue
+                pid = _launchd_label_pid(label)
+                if pid is not None:
                     pids.add(pid)
-                else:
-                    # Fall back to legacy tab-separated format:
-                    # "PID\tStatus\tLabel"
-                    for line in result.stdout.strip().splitlines():
-                        parts = line.split()
-                        if len(parts) >= 3 and parts[2] == label:
-                            try:
-                                pid = int(parts[0])
-                                if pid > 0:
-                                    pids.add(pid)
-                            except ValueError:
-                                pass
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
@@ -924,20 +981,25 @@ def _spawn_gateway_restart_watcher(old_pid: int, run_argv: list[str]) -> bool:
 
 def _probe_systemd_service_running(system: bool = False) -> tuple[bool, bool]:
     selected_system = _select_systemd_scope(system)
-    unit_exists = get_systemd_unit_path(system=selected_system).exists()
+    unit_exists = _has_systemd_service_definition(system=selected_system)
     if not unit_exists:
         return selected_system, False
-    try:
-        result = _run_systemctl(
-            ["is-active", get_service_name()],
-            system=selected_system,
-            capture_output=True,
-            text=True, encoding='utf-8', errors='replace',
-            timeout=10,
-        )
-    except (RuntimeError, subprocess.TimeoutExpired):
-        return selected_system, False
-    return selected_system, result.stdout.strip() == "active"
+    for service_name, unit_path in _systemd_service_targets(system=selected_system):
+        if not unit_path.exists():
+            continue
+        try:
+            result = _run_systemctl(
+                ["is-active", service_name],
+                system=selected_system,
+                capture_output=True,
+                text=True, encoding='utf-8', errors='replace',
+                timeout=10,
+            )
+        except (RuntimeError, subprocess.TimeoutExpired):
+            continue
+        if result.stdout.strip() == "active":
+            return selected_system, True
+    return selected_system, False
 
 
 def _read_systemd_unit_environment(system: bool = False) -> dict[str, str]:
@@ -1303,20 +1365,23 @@ def _probe_launchd_service_running() -> bool:
     We additionally require a PID in the output to confirm launchd is actually
     managing a live process, not just holding a static definition.
     """
-    if not get_launchd_plist_path().exists():
+    if not _has_launchd_service_definition():
         return False
-    try:
-        result = subprocess.run(
-            ["launchctl", "list", get_launchd_label()],
-            capture_output=True,
-            text=True, encoding='utf-8', errors='replace',
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    if result.returncode != 0:
-        return False
-    return _parse_launchd_pid_from_list_output(result.stdout) is not None
+    for label, plist_path in _launchd_service_targets():
+        if not plist_path.exists():
+            continue
+        try:
+            result = subprocess.run(
+                ["launchctl", "list", label],
+                capture_output=True,
+                text=True, encoding='utf-8', errors='replace',
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        if result.returncode == 0 and _launchd_label_pid(label) is not None:
+            return True
+    return False
 
 
 def get_gateway_runtime_snapshot(system: bool = False) -> GatewayRuntimeSnapshot:
@@ -1372,7 +1437,7 @@ def get_gateway_runtime_snapshot(system: bool = False) -> GatewayRuntimeSnapshot
         scope_label = _service_scope_label(selected_system)
         return GatewayRuntimeSnapshot(
             manager=f"systemd ({scope_label})",
-            service_installed=get_systemd_unit_path(system=selected_system).exists(),
+            service_installed=_has_systemd_service_definition(system=selected_system),
             service_running=service_running,
             gateway_pids=gateway_pids,
             service_scope=scope_label,
@@ -1381,7 +1446,7 @@ def get_gateway_runtime_snapshot(system: bool = False) -> GatewayRuntimeSnapshot
     if is_macos():
         return GatewayRuntimeSnapshot(
             manager="launchd",
-            service_installed=get_launchd_plist_path().exists(),
+            service_installed=_has_launchd_service_definition(),
             service_running=_probe_launchd_service_running(),
             gateway_pids=gateway_pids,
             service_scope="launchd",
@@ -1763,8 +1828,9 @@ def _windows_gateway_should_absorb_console_controls() -> bool:
 # Service Configuration
 # =============================================================================
 
-_SERVICE_BASE = "hermes-gateway"
 SERVICE_DESCRIPTION = "Hermes Agent Gateway - Messaging Platform Integration"
+_LEGACY_DEFAULT_SERVICE_NAME = "hermes-gateway"
+_LEGACY_DEFAULT_LAUNCHD_LABEL = "ai.hermes.gateway"
 
 
 def _profile_suffix() -> str:
@@ -1774,25 +1840,7 @@ def _profile_suffix() -> str:
     ``<root>/profiles/<name>``, or a short hash for any other path.
     Works correctly in Docker (HERMES_HOME=/opt/data) and standard deployments.
     """
-    import hashlib
-    import re
-    from hermes_constants import get_default_hermes_root
-
-    home = get_hermes_home().resolve()
-    default = get_default_hermes_root().resolve()
-    if home == default:
-        return ""
-    # Detect <root>/profiles/<name> pattern → use the profile name
-    profiles_root = (default / "profiles").resolve()
-    try:
-        rel = home.relative_to(profiles_root)
-        parts = rel.parts
-        if len(parts) == 1 and re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", parts[0]):
-            return parts[0]
-    except ValueError:
-        pass
-    # Fallback: short hash for arbitrary HERMES_HOME paths
-    return hashlib.sha256(str(home).encode()).hexdigest()[:8]
+    return gateway_service_suffix()
 
 
 def _profile_arg(hermes_home: str | None = None, default_root: str | Path | None = None) -> str:
@@ -1845,10 +1893,7 @@ def get_service_name() -> str:
     Profile ``~/.hermes/profiles/coder`` returns ``hermes-gateway-coder``.
     Any other HERMES_HOME appends a short hash for uniqueness.
     """
-    suffix = _profile_suffix()
-    if not suffix:
-        return _SERVICE_BASE
-    return f"{_SERVICE_BASE}-{suffix}"
+    return get_gateway_service_identity().systemd_service_name
 
 
 def get_systemd_unit_path(system: bool = False) -> Path:
@@ -1856,6 +1901,211 @@ def get_systemd_unit_path(system: bool = False) -> Path:
     if system:
         return Path("/etc/systemd/system") / f"{name}.service"
     return Path.home() / ".config" / "systemd" / "user" / f"{name}.service"
+
+
+def _uses_scoped_service_identity() -> bool:
+    return (
+        get_service_name() != _LEGACY_DEFAULT_SERVICE_NAME
+        and get_launchd_label() != _LEGACY_DEFAULT_LAUNCHD_LABEL
+    )
+
+
+def _legacy_custom_root_systemd_unit_path(system: bool = False) -> Path:
+    if system:
+        return Path("/etc/systemd/system") / f"{_LEGACY_DEFAULT_SERVICE_NAME}.service"
+    return (
+        Path.home()
+        / ".config"
+        / "systemd"
+        / "user"
+        / f"{_LEGACY_DEFAULT_SERVICE_NAME}.service"
+    )
+
+
+def _has_migratable_custom_root_systemd_service(system: bool = False) -> bool:
+    legacy_path = _legacy_custom_root_systemd_unit_path(system=system)
+    return (
+        _uses_scoped_service_identity()
+        and legacy_path.exists()
+        and legacy_path != get_systemd_unit_path(system=system)
+        and _service_definition_matches_current_hermes_home(legacy_path)
+    )
+
+
+def _has_systemd_service_definition(system: bool = False) -> bool:
+    return get_systemd_unit_path(system=system).exists() or _has_migratable_custom_root_systemd_service(system=system)
+
+
+def _has_any_systemd_service_definition() -> bool:
+    return _has_systemd_service_definition(system=False) or _has_systemd_service_definition(system=True)
+
+
+def _systemd_service_name_for_definition(system: bool = False) -> str:
+    if _has_migratable_custom_root_systemd_service(system=system):
+        return _LEGACY_DEFAULT_SERVICE_NAME
+    if get_systemd_unit_path(system=system).exists():
+        return get_service_name()
+    return get_service_name()
+
+
+def _systemd_service_targets(system: bool = False) -> list[tuple[str, Path]]:
+    targets = [(get_service_name(), get_systemd_unit_path(system=system))]
+    if _has_migratable_custom_root_systemd_service(system=system):
+        targets.append(
+            (
+                _LEGACY_DEFAULT_SERVICE_NAME,
+                _legacy_custom_root_systemd_unit_path(system=system),
+            )
+        )
+    return targets
+
+
+def _service_definition_matches_current_hermes_home(path: Path) -> bool:
+    return service_definition_matches_hermes_home(path)
+
+
+def _systemd_service_is_enabled(service_name: str, system: bool = False) -> bool:
+    try:
+        result = _run_systemctl(
+            ["is-enabled", service_name],
+            system=system,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return False
+    return result.stdout.strip() in {"enabled", "enabled-runtime"}
+
+
+def _systemd_service_is_active(service_name: str, system: bool = False) -> bool:
+    try:
+        result = _run_systemctl(
+            ["is-active", service_name],
+            system=system,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return False
+    return result.stdout.strip() == "active"
+
+
+def _migrate_custom_root_systemd_service(
+    system: bool = False,
+    enable_new: bool = False,
+    preserve_enabled: bool = True,
+    start_new_if_active: bool = False,
+) -> bool:
+    """Move a matching legacy unit to the scoped service name."""
+    if not _uses_scoped_service_identity():
+        return False
+
+    legacy_path = _legacy_custom_root_systemd_unit_path(system=system)
+    current_path = get_systemd_unit_path(system=system)
+    if not legacy_path.exists() or legacy_path == current_path:
+        return False
+    if not _service_definition_matches_current_hermes_home(legacy_path):
+        return False
+
+    legacy_was_enabled = (
+        preserve_enabled
+        and _systemd_service_is_enabled(
+            _LEGACY_DEFAULT_SERVICE_NAME,
+            system=system,
+        )
+    )
+    legacy_was_active = start_new_if_active and _systemd_service_is_active(
+        _LEGACY_DEFAULT_SERVICE_NAME,
+        system=system,
+    )
+
+    current_existed = current_path.exists()
+    previous_current_text = (
+        current_path.read_text(encoding="utf-8") if current_existed else None
+    )
+
+    current_was_enabled = False
+    enabled_current_during_migration = False
+
+    try:
+        expected_user = _read_systemd_user_from_unit(legacy_path) if system else None
+        expected_unit = generate_systemd_unit(system=system, run_as_user=expected_user)
+        if previous_current_text is None or _normalize_service_definition(
+            previous_current_text
+        ) != _normalize_service_definition(expected_unit):
+            current_path.parent.mkdir(parents=True, exist_ok=True)
+            current_path.write_text(expected_unit, encoding="utf-8")
+
+        _run_systemctl(["daemon-reload"], system=system, check=True, timeout=30)
+        if enable_new or legacy_was_enabled:
+            current_was_enabled = _systemd_service_is_enabled(
+                get_service_name(),
+                system=system,
+            )
+            _run_systemctl(
+                ["enable", get_service_name()],
+                system=system,
+                check=True,
+                timeout=30,
+            )
+            enabled_current_during_migration = not current_was_enabled
+        if legacy_was_active:
+            _run_systemctl(
+                ["stop", _LEGACY_DEFAULT_SERVICE_NAME],
+                system=system,
+                check=True,
+                timeout=90,
+            )
+            try:
+                _run_systemctl(
+                    ["start", get_service_name()],
+                    system=system,
+                    check=True,
+                    timeout=90,
+                )
+            except Exception:
+                _run_systemctl(
+                    ["start", _LEGACY_DEFAULT_SERVICE_NAME],
+                    system=system,
+                    check=False,
+                    timeout=90,
+                )
+                raise
+    except Exception:
+        if enabled_current_during_migration:
+            _run_systemctl(
+                ["disable", get_service_name()],
+                system=system,
+                check=False,
+                timeout=30,
+            )
+        try:
+            if previous_current_text is None:
+                current_path.unlink(missing_ok=True)
+            else:
+                current_path.write_text(previous_current_text, encoding="utf-8")
+        except OSError:
+            pass
+        _run_systemctl(["daemon-reload"], system=system, check=False, timeout=30)
+        raise
+
+    _run_systemctl(
+        ["disable", _LEGACY_DEFAULT_SERVICE_NAME],
+        system=system,
+        check=False,
+        timeout=30,
+    )
+    legacy_path.unlink(missing_ok=True)
+    _run_systemctl(["daemon-reload"], system=system, check=False, timeout=30)
+    print(
+        "↻ Migrated legacy gateway service "
+        f"from {_LEGACY_DEFAULT_SERVICE_NAME} to {get_service_name()}"
+    )
+    return True
 
 
 class UserSystemdUnavailableError(RuntimeError):
@@ -2527,9 +2777,170 @@ def get_launchd_plist_path() -> Path:
     Default ``~/.hermes`` → ``ai.hermes.gateway.plist`` (backward compatible).
     Profile ``~/.hermes/profiles/coder`` → ``ai.hermes.gateway-coder.plist``.
     """
-    suffix = _profile_suffix()
-    name = f"ai.hermes.gateway-{suffix}" if suffix else "ai.hermes.gateway"
-    return _launchd_user_home() / "Library" / "LaunchAgents" / f"{name}.plist"
+    return gateway_launchd_plist_path(_launchd_user_home())
+
+
+def _legacy_custom_root_launchd_plist_path() -> Path:
+    return (
+        _launchd_user_home()
+        / "Library"
+        / "LaunchAgents"
+        / f"{_LEGACY_DEFAULT_LAUNCHD_LABEL}.plist"
+    )
+
+
+def _migrate_custom_root_launchd_service() -> bool:
+    """Remove old unsuffixed plists before using scoped launchd labels."""
+    if not _uses_scoped_service_identity():
+        return False
+
+    legacy_path = _legacy_custom_root_launchd_plist_path()
+    current_path = get_launchd_plist_path()
+    if not legacy_path.exists() or legacy_path == current_path:
+        return False
+    if not _service_definition_matches_current_hermes_home(legacy_path):
+        return False
+
+    current_existed = current_path.exists()
+    previous_current_text = (
+        current_path.read_text(encoding="utf-8") if current_existed else None
+    )
+    current_was_loaded = current_existed and _launchd_label_is_loaded(
+        get_launchd_label()
+    )
+    legacy_pid = _launchd_label_pid(_LEGACY_DEFAULT_LAUNCHD_LABEL)
+    bootout = subprocess.run(
+        ["launchctl", "bootout", f"{_launchd_domain()}/{_LEGACY_DEFAULT_LAUNCHD_LABEL}"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    if bootout.returncode not in (0, 3, 113):
+        raise subprocess.CalledProcessError(
+            bootout.returncode,
+            bootout.args,
+            output=bootout.stdout,
+            stderr=bootout.stderr,
+        )
+    legacy_was_stopped = bootout.returncode == 0
+
+    try:
+        if legacy_was_stopped and not _wait_for_pid_exit(
+            legacy_pid,
+            timeout=10.0,
+            description=f"legacy launchd service {_LEGACY_DEFAULT_LAUNCHD_LABEL}",
+        ):
+            raise RuntimeError(
+                "Legacy launchd gateway did not stop cleanly; refusing to start "
+                f"{get_launchd_label()} while {_LEGACY_DEFAULT_LAUNCHD_LABEL} may still be running"
+            )
+
+        expected_plist = generate_launchd_plist()
+        rewrote_current = False
+        if not current_path.exists() or _normalize_launchd_plist_for_comparison(
+            current_path.read_text(encoding="utf-8")
+        ) != _normalize_launchd_plist_for_comparison(expected_plist):
+            current_path.parent.mkdir(parents=True, exist_ok=True)
+            current_path.write_text(expected_plist, encoding="utf-8")
+            rewrote_current = True
+
+        label = get_launchd_label()
+        if rewrote_current and current_was_loaded:
+            subprocess.run(
+                ["launchctl", "bootout", f"{_launchd_domain()}/{label}"],
+                check=False,
+                timeout=90,
+            )
+            subprocess.run(
+                ["launchctl", "bootstrap", _launchd_domain(), str(current_path)],
+                check=True,
+                timeout=30,
+            )
+        elif legacy_was_stopped and not current_was_loaded:
+            subprocess.run(
+                ["launchctl", "bootstrap", _launchd_domain(), str(current_path)],
+                check=True,
+                timeout=30,
+            )
+    except Exception:
+        try:
+            if previous_current_text is None:
+                current_path.unlink(missing_ok=True)
+            else:
+                current_path.write_text(previous_current_text, encoding="utf-8")
+        except OSError:
+            pass
+        if current_was_loaded and current_path.exists():
+            label = get_launchd_label()
+            subprocess.run(
+                ["launchctl", "bootstrap", _launchd_domain(), str(current_path)],
+                check=False,
+                timeout=30,
+            )
+            subprocess.run(
+                ["launchctl", "kickstart", f"{_launchd_domain()}/{label}"],
+                check=False,
+                timeout=30,
+            )
+        if legacy_was_stopped and legacy_path.exists():
+            subprocess.run(
+                ["launchctl", "bootstrap", _launchd_domain(), str(legacy_path)],
+                check=False,
+                timeout=30,
+            )
+            subprocess.run(
+                [
+                    "launchctl",
+                    "kickstart",
+                    f"{_launchd_domain()}/{_LEGACY_DEFAULT_LAUNCHD_LABEL}",
+                ],
+                check=False,
+                timeout=30,
+            )
+        raise
+
+    legacy_path.unlink(missing_ok=True)
+    print(
+        "↻ Migrated legacy gateway launchd service "
+        f"from {_LEGACY_DEFAULT_LAUNCHD_LABEL} to {get_launchd_label()}"
+    )
+    return True
+
+
+def _has_migratable_custom_root_launchd_service() -> bool:
+    legacy_path = _legacy_custom_root_launchd_plist_path()
+    return (
+        _uses_scoped_service_identity()
+        and legacy_path.exists()
+        and legacy_path != get_launchd_plist_path()
+        and _service_definition_matches_current_hermes_home(legacy_path)
+    )
+
+
+def _has_launchd_service_definition() -> bool:
+    return get_launchd_plist_path().exists() or _has_migratable_custom_root_launchd_service()
+
+
+def _launchd_label_for_definition() -> str:
+    if _has_migratable_custom_root_launchd_service():
+        return _LEGACY_DEFAULT_LAUNCHD_LABEL
+    if get_launchd_plist_path().exists():
+        return get_launchd_label()
+    return get_launchd_label()
+
+
+def _launchd_service_targets() -> list[tuple[str, Path]]:
+    targets = [(get_launchd_label(), get_launchd_plist_path())]
+    if _has_migratable_custom_root_launchd_service():
+        targets.append(
+            (
+                _LEGACY_DEFAULT_LAUNCHD_LABEL,
+                _legacy_custom_root_launchd_plist_path(),
+            )
+        )
+    return targets
+
 
 
 def _detect_venv_dir() -> Path | None:
@@ -3237,10 +3648,7 @@ def _ensure_linger_enabled() -> None:
 def _select_systemd_scope(system: bool = False) -> bool:
     if system:
         return True
-    return (
-        get_systemd_unit_path(system=True).exists()
-        and not get_systemd_unit_path(system=False).exists()
-    )
+    return _has_systemd_service_definition(system=True) and not _has_systemd_service_definition(system=False)
 
 
 def _system_scope_wizard_would_need_root(system: bool = False) -> bool:
@@ -3326,6 +3734,11 @@ def systemd_install(
 ):
     if system:
         _require_root_for_system_service("install")
+    _migrate_custom_root_systemd_service(
+        system=system,
+        enable_new=True,
+        start_new_if_active=True,
+    )
 
     # Offer to remove legacy units (hermes.service from pre-rename installs)
     # before installing the new hermes-gateway.service. If both remain, they
@@ -3409,15 +3822,12 @@ def systemd_uninstall(system: bool = False):
     if system:
         _require_root_for_system_service("uninstall")
 
-    _run_systemctl(["stop", get_service_name()], system=system, check=False, timeout=90)
-    _run_systemctl(
-        ["disable", get_service_name()], system=system, check=False, timeout=30
-    )
-
-    unit_path = get_systemd_unit_path(system=system)
-    if unit_path.exists():
-        unit_path.unlink()
-        print(f"✓ Removed {unit_path}")
+    for service_name, unit_path in _systemd_service_targets(system=system):
+        _run_systemctl(["stop", service_name], system=system, check=False, timeout=90)
+        _run_systemctl(["disable", service_name], system=system, check=False, timeout=30)
+        if unit_path.exists():
+            unit_path.unlink()
+            print(f"✓ Removed {unit_path}")
 
     _run_systemctl(["daemon-reload"], system=system, check=True, timeout=30)
     print(f"✓ {_service_scope_label(system).capitalize()} service uninstalled")
@@ -3441,10 +3851,9 @@ def systemd_start(system: bool = False):
         # reachable (common on fresh RHEL/Debian SSH sessions without linger).
         # Raises UserSystemdUnavailableError with a remediation message.
         _preflight_user_systemd()
-    _require_service_installed("start", system=system)
-    # HERMES_HOME sync happens inside refresh_systemd_unit_if_needed's
-    # systemd_unit_is_current gate (the single chokepoint), and the unit is
-    # guaranteed to exist here by _require_service_installed, so the gate runs.
+    _migrate_custom_root_systemd_service(system=system, start_new_if_active=True)
+    if not _has_systemd_service_definition(system=system):
+        _require_service_installed("start", system=system)
     refresh_systemd_unit_if_needed(system=system)
     _run_systemctl(["start", get_service_name()], system=system, check=True, timeout=30)
     print(f"✓ {_service_scope_label(system).capitalize()} service started")
@@ -3454,8 +3863,6 @@ def systemd_stop(system: bool = False):
     system = _select_systemd_scope(system)
     if system:
         _require_root_for_system_service("stop")
-    _require_service_installed("stop", system=system)
-    _sync_hermes_home_from_systemd_unit(system=system)
     try:
         from gateway.status import get_running_pid, write_planned_stop_marker
 
@@ -3464,17 +3871,15 @@ def systemd_stop(system: bool = False):
             write_planned_stop_marker(pid)
     except Exception:
         pass
-    try:
-        _run_systemctl(
-            ["stop", get_service_name()], system=system, check=True, timeout=90
-        )
-    except subprocess.TimeoutExpired:
-        label = _service_scope_label(system)
-        print(
-            f"Gateway {label} service is still stopping after 90s; "
-            "check `hermes gateway status` or logs for final shutdown state."
-        )
-        return
+    stopped = False
+    for service_name, unit_path in _systemd_service_targets(system=system):
+        if not unit_path.exists():
+            continue
+        _run_systemctl(["stop", service_name], system=system, check=True, timeout=90)
+        stopped = True
+    if not stopped:
+        _require_service_installed("stop", system=system)
+        _run_systemctl(["stop", get_service_name()], system=system, check=True, timeout=90)
     print(f"✓ {_service_scope_label(system).capitalize()} service stopped")
 
 
@@ -3484,12 +3889,9 @@ def systemd_restart(system: bool = False):
         _require_root_for_system_service("restart")
     else:
         _preflight_user_systemd()
-    _require_service_installed("restart", system=system)
-    # HERMES_HOME sync happens inside refresh_systemd_unit_if_needed's
-    # systemd_unit_is_current gate (the single chokepoint). The unit exists
-    # here (_require_service_installed), so the gate runs and its os.environ
-    # mutation persists for the get_running_pid / drain-timeout reads below —
-    # no separate pre-sync needed.
+    _migrate_custom_root_systemd_service(system=system, start_new_if_active=True)
+    if not _has_systemd_service_definition(system=system):
+        _require_service_installed("restart", system=system)
     refresh_systemd_unit_if_needed(system=system)
     from gateway.status import get_running_pid
 
@@ -3589,6 +3991,20 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
     scope_flag = " --system" if system else ""
 
     if not unit_path.exists():
+        if _has_migratable_custom_root_systemd_service(system=system):
+            print("⚠ Legacy gateway service is installed under the old service name")
+            print(f"  Run: {'sudo ' if system else ''}hermes gateway start{scope_flag}  # migrates it to {get_service_name()}")
+            print()
+            status_cmd = ["status", _LEGACY_DEFAULT_SERVICE_NAME, "--no-pager"]
+            if full:
+                status_cmd.append("-l")
+            _run_systemctl(
+                status_cmd,
+                system=system,
+                capture_output=False,
+                timeout=10,
+            )
+            return
         print("✗ Gateway service is not installed")
         print(f"  Run: {'sudo ' if system else ''}hermes gateway install{scope_flag}")
         return
@@ -3709,8 +4125,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
 
 def get_launchd_label() -> str:
     """Return the launchd service label, scoped per profile."""
-    suffix = _profile_suffix()
-    return f"ai.hermes.gateway-{suffix}" if suffix else "ai.hermes.gateway"
+    return get_gateway_service_identity().launchd_label
 
 
 # Cached launchd domain result — probing is cheap but should only run once per
@@ -4083,6 +4498,19 @@ def _launchd_fallback_to_detached(reason: str, *, exit_on_failure: bool = True) 
     return False
 
 
+def _launchd_label_is_loaded(label: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", label],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
 def generate_launchd_plist() -> str:
     python_path = get_python_path()
     # Stable cwd anchor — never the volatile source checkout. See
@@ -4432,7 +4860,39 @@ def refresh_launchd_plist_if_needed() -> bool:
     return True
 
 
+def _refresh_launchd_plist_file_if_stale(plist_path: Path | None = None) -> bool:
+    plist_path = plist_path or get_launchd_plist_path()
+    if not plist_path.exists() or launchd_plist_is_current():
+        return False
+    plist_path.write_text(generate_launchd_plist(), encoding="utf-8")
+    print("↻ Updated gateway launchd plist before loading service")
+    return True
+
+
+def _ensure_launchd_plist_exists() -> Path:
+    plist_path = get_launchd_plist_path()
+    if not plist_path.exists():
+        print("↻ launchd plist missing; regenerating service definition")
+        plist_path.parent.mkdir(parents=True, exist_ok=True)
+        plist_path.write_text(generate_launchd_plist(), encoding="utf-8")
+    return plist_path
+
+
+def _bootstrap_launchd_service_if_needed(label: str, plist_path: Path | None = None) -> bool:
+    if _launchd_label_is_loaded(label):
+        return False
+    plist_path = plist_path or _ensure_launchd_plist_exists()
+    _refresh_launchd_plist_file_if_stale(plist_path)
+    subprocess.run(
+        ["launchctl", "bootstrap", _launchd_domain(), str(plist_path)],
+        check=True,
+        timeout=30,
+    )
+    return True
+
+
 def launchd_install(force: bool = False):
+    migrated = _migrate_custom_root_launchd_service()
     plist_path = get_launchd_plist_path()
 
     if plist_path.exists() and not force:
@@ -4440,6 +4900,13 @@ def launchd_install(force: bool = False):
             print(f"↻ Repairing outdated launchd service at: {plist_path}")
             refresh_launchd_plist_if_needed()
             print("✓ Service definition updated")
+            if not migrated:
+                return
+        if migrated:
+            label = get_launchd_label()
+            _bootstrap_launchd_service_if_needed(label, plist_path)
+            print()
+            print("✓ Service installed and loaded!")
             return
         print(f"Service already installed at: {plist_path}")
         print("Use --force to reinstall")
@@ -4474,56 +4941,37 @@ def launchd_install(force: bool = False):
 
 
 def launchd_uninstall():
-    plist_path = get_launchd_plist_path()
-    label = get_launchd_label()
-    subprocess.run(
-        ["launchctl", "bootout", f"{_launchd_domain()}/{label}"],
-        check=False,
-        timeout=90,
-    )
+    for label, plist_path in _launchd_service_targets():
+        subprocess.run(
+            ["launchctl", "bootout", f"{_launchd_domain()}/{label}"],
+            check=False,
+            timeout=90,
+        )
 
-    if plist_path.exists():
-        plist_path.unlink()
-        print(f"✓ Removed {plist_path}")
-
+        if plist_path.exists():
+            plist_path.unlink()
+            print(f"✓ Removed {plist_path}")
     print("✓ Service uninstalled")
 
 
 def launchd_start():
-    plist_path = get_launchd_plist_path()
+    _migrate_custom_root_launchd_service()
+    regenerated = not get_launchd_plist_path().exists()
+    plist_path = _ensure_launchd_plist_exists()
     label = get_launchd_label()
+    target = f"{_launchd_domain()}/{label}"
 
-    # Self-heal if the plist is missing entirely (e.g., manual cleanup, failed upgrade)
-    if not plist_path.exists():
-        new_plist = generate_launchd_plist()
-        if _refuse_temp_home_service_write(new_plist, "launchd plist"):
-            sys.exit(1)
-        print("↻ launchd plist missing; regenerating service definition")
-        plist_path.parent.mkdir(parents=True, exist_ok=True)
-        plist_path.write_text(new_plist, encoding="utf-8")
-        try:
-            _launchctl_bootstrap(_launchd_domain(), plist_path, label, timeout=30)
-            subprocess.run(
-                ["launchctl", "kickstart", f"{_launchd_domain()}/{label}"],
-                check=True,
-                timeout=30,
-            )
-        except subprocess.CalledProcessError as e:
-            if not _launchctl_domain_unsupported(e.returncode):
-                raise
-            _launchd_fallback_to_detached(f"launchctl exit {e.returncode}")
-            return
+    refresh_launchd_plist_if_needed()
+    if regenerated:
+        subprocess.run(["launchctl", "bootout", target], check=False, timeout=90)
+        subprocess.run(["launchctl", "bootstrap", _launchd_domain(), str(plist_path)], check=True, timeout=30)
+        subprocess.run(["launchctl", "kickstart", target], check=True, timeout=30)
         print("✓ Service started")
         _clear_launchd_unsupported_marker()
         return
 
-    refresh_launchd_plist_if_needed()
     try:
-        subprocess.run(
-            ["launchctl", "kickstart", f"{_launchd_domain()}/{label}"],
-            check=True,
-            timeout=30,
-        )
+        subprocess.run(["launchctl", "kickstart", target], check=True, timeout=30)
     except subprocess.CalledProcessError as e:
         if not _launchd_error_indicates_unloaded(e):
             raise
@@ -4548,8 +4996,6 @@ def launchd_start():
 
 
 def launchd_stop():
-    label = get_launchd_label()
-    target = f"{_launchd_domain()}/{label}"
     try:
         from gateway.status import get_running_pid, write_planned_stop_marker
 
@@ -4562,18 +5008,27 @@ def launchd_stop():
     # the process.  A plain `kill SIGTERM` only signals the process — launchd
     # immediately restarts it because KeepAlive is unconditionally true.
     # `hermes gateway start` re-bootstraps when it detects the job is unloaded.
-    try:
-        subprocess.run(["launchctl", "bootout", target], check=True, timeout=90)
-    except subprocess.CalledProcessError as e:
-        # Job already unloaded (3/113/125), or the domain can't be managed at
-        # all (5/125, macOS 26+ detached-fallback process, issue #23387) — in
-        # both cases just fall through to the PID-based kill below.
-        if _launchd_error_indicates_unloaded(e) or _launchctl_domain_unsupported(
-            e.returncode
-        ):
-            pass
-        else:
-            raise
+    targets = [
+        (label, plist_path)
+        for label, plist_path in _launchd_service_targets()
+        if plist_path.exists()
+    ]
+    if not targets:
+        targets = [(get_launchd_label(), get_launchd_plist_path())]
+    for label, _plist_path in targets:
+        target = f"{_launchd_domain()}/{label}"
+        try:
+            subprocess.run(["launchctl", "bootout", target], check=True, timeout=90)
+        except subprocess.CalledProcessError as e:
+            # Job already unloaded (3/113/125), or the domain can't be managed at
+            # all (5/125, macOS 26+ detached-fallback process, issue #23387) — in
+            # both cases just fall through to the PID-based kill below.
+            if _launchd_error_indicates_unloaded(e) or _launchctl_domain_unsupported(
+                e.returncode
+            ):
+                pass
+            else:
+                raise
     _wait_for_gateway_exit(timeout=10.0, force_after=5.0)
     print("✓ Service stopped")
 
@@ -4631,6 +5086,7 @@ def _wait_for_gateway_exit(
 
 
 def launchd_restart():
+    migrated = _migrate_custom_root_launchd_service()
     label = get_launchd_label()
     target = f"{_launchd_domain()}/{label}"
     drain_timeout = _get_restart_drain_timeout()
@@ -4639,6 +5095,22 @@ def launchd_restart():
     try:
         pid = get_running_pid()
         if pid is not None and _request_gateway_self_restart(pid):
+            if migrated:
+                if pid != os.getpid():
+                    exited = _wait_for_gateway_exit(
+                        timeout=drain_timeout,
+                        force_after=None,
+                    )
+                    if not exited:
+                        print(
+                            f"⚠ Gateway drain timed out after {drain_timeout:.0f}s — "
+                            "loading migrated launchd service anyway"
+                        )
+                plist_path = _ensure_launchd_plist_exists()
+                _bootstrap_launchd_service_if_needed(label, plist_path)
+                subprocess.run(["launchctl", "kickstart", target], check=True, timeout=30)
+                print("✓ Service restarted")
+                return
             print("✓ Service restart requested")
             _clear_launchd_unsupported_marker()
             return
@@ -4677,7 +5149,7 @@ def launchd_restart():
             raise
         # Job not loaded — bootstrap and start fresh
         print("↻ launchd job was unloaded; reloading")
-        plist_path = get_launchd_plist_path()
+        plist_path = _ensure_launchd_plist_exists()
         try:
             # Restart is the one path where the job is almost always still
             # registered (we just drained it), so a plain bootstrap would hit
@@ -4705,8 +5177,12 @@ def launchd_restart():
 
 
 def launchd_status(deep: bool = False):
-    plist_path = get_launchd_plist_path()
-    label = get_launchd_label()
+    legacy_mode = (
+        _has_migratable_custom_root_launchd_service()
+        and not get_launchd_plist_path().exists()
+    )
+    plist_path = _legacy_custom_root_launchd_plist_path() if legacy_mode else get_launchd_plist_path()
+    label = _LEGACY_DEFAULT_LAUNCHD_LABEL if legacy_mode else get_launchd_label()
     try:
         result = subprocess.run(
             ["launchctl", "list", label],
@@ -4744,7 +5220,10 @@ def launchd_status(deep: bool = False):
 
     # ── Report ──
     print(f"Launchd plist: {plist_path}")
-    if launchd_plist_is_current():
+    if legacy_mode:
+        print("⚠ Legacy gateway service is installed under the old launchd label")
+        print(f"  Run: hermes gateway start  # migrates it to {get_launchd_label()}")
+    elif launchd_plist_is_current():
         print("✓ Service definition matches the current Hermes install")
     else:
         print("⚠ Service definition is stale relative to the current Hermes install")
@@ -5878,12 +6357,9 @@ def _setup_standard_platform(platform: dict):
 def _is_service_installed() -> bool:
     """Check if the gateway is installed as a system service."""
     if supports_systemd_services():
-        return (
-            get_systemd_unit_path(system=False).exists()
-            or get_systemd_unit_path(system=True).exists()
-        )
+        return _has_any_systemd_service_definition()
     elif is_macos():
-        return get_launchd_plist_path().exists()
+        return _has_launchd_service_definition()
     elif is_windows():
         from hermes_cli import gateway_windows
 
@@ -5894,49 +6370,40 @@ def _is_service_installed() -> bool:
 def _is_service_running() -> bool:
     """Check if the gateway service is currently running."""
     if supports_systemd_services():
-        user_unit_exists = get_systemd_unit_path(system=False).exists()
-        system_unit_exists = get_systemd_unit_path(system=True).exists()
-
-        if user_unit_exists:
-            try:
-                result = _run_systemctl(
-                    ["is-active", get_service_name()],
-                    system=False,
-                    capture_output=True,
-                    text=True, encoding='utf-8', errors='replace',
-                    timeout=10,
-                )
-                if result.stdout.strip() == "active":
-                    return True
-            except (RuntimeError, subprocess.TimeoutExpired):
-                pass
-
-        if system_unit_exists:
-            try:
-                result = _run_systemctl(
-                    ["is-active", get_service_name()],
-                    system=True,
-                    capture_output=True,
-                    text=True, encoding='utf-8', errors='replace',
-                    timeout=10,
-                )
-                if result.stdout.strip() == "active":
-                    return True
-            except (RuntimeError, subprocess.TimeoutExpired):
-                pass
+        for is_system in (False, True):
+            if not _has_systemd_service_definition(system=is_system):
+                continue
+            for service_name, unit_path in _systemd_service_targets(system=is_system):
+                if not unit_path.exists():
+                    continue
+                try:
+                    result = _run_systemctl(
+                        ["is-active", service_name],
+                        system=is_system, capture_output=True, text=True,
+                        encoding='utf-8', errors='replace',
+                        timeout=10,
+                    )
+                    if result.stdout.strip() == "active":
+                        return True
+                except (RuntimeError, subprocess.TimeoutExpired):
+                    pass
 
         return False
-    elif is_macos() and get_launchd_plist_path().exists():
-        try:
-            result = subprocess.run(
-                ["launchctl", "list", get_launchd_label()],
-                capture_output=True,
-                text=True, encoding='utf-8', errors='replace',
-                timeout=10,
-            )
-            return result.returncode == 0
-        except subprocess.TimeoutExpired:
-            return False
+    elif is_macos() and _has_launchd_service_definition():
+        for label, plist_path in _launchd_service_targets():
+            if not plist_path.exists():
+                continue
+            try:
+                result = subprocess.run(
+                    ["launchctl", "list", label],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            if result.returncode == 0:
+                return True
+        return False
     elif is_windows():
         from hermes_cli import gateway_windows
 
@@ -7227,16 +7694,13 @@ def _gateway_command_inner(args):
         if stop_all:
             # --all: kill every gateway process on the machine
             service_available = False
-            if supports_systemd_services() and (
-                get_systemd_unit_path(system=False).exists()
-                or get_systemd_unit_path(system=True).exists()
-            ):
+            if supports_systemd_services() and _has_any_systemd_service_definition():
                 try:
                     systemd_stop(system=system)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
-            elif is_macos() and get_launchd_plist_path().exists():
+            elif is_macos() and _has_launchd_service_definition():
                 try:
                     launchd_stop()
                     service_available = True
@@ -7260,16 +7724,13 @@ def _gateway_command_inner(args):
         else:
             # Default: stop only the current profile's gateway
             service_available = False
-            if supports_systemd_services() and (
-                get_systemd_unit_path(system=False).exists()
-                or get_systemd_unit_path(system=True).exists()
-            ):
+            if supports_systemd_services() and _has_any_systemd_service_definition():
                 try:
                     systemd_stop(system=system)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
-            elif is_macos() and get_launchd_plist_path().exists():
+            elif is_macos() and _has_launchd_service_definition():
                 try:
                     launchd_stop()
                     service_available = True
@@ -7324,16 +7785,13 @@ def _gateway_command_inner(args):
         if restart_all:
             # --all: stop every gateway process across all profiles, then start fresh
             service_stopped = False
-            if supports_systemd_services() and (
-                get_systemd_unit_path(system=False).exists()
-                or get_systemd_unit_path(system=True).exists()
-            ):
+            if supports_systemd_services() and _has_any_systemd_service_definition():
                 try:
                     systemd_stop(system=system)
                     service_stopped = True
                 except subprocess.CalledProcessError:
                     pass
-            elif is_macos() and get_launchd_plist_path().exists():
+            elif is_macos() and _has_launchd_service_definition():
                 try:
                     launchd_stop()
                     service_stopped = True
@@ -7356,12 +7814,9 @@ def _gateway_command_inner(args):
 
             # Start the current profile's service fresh
             print("Starting gateway...")
-            if supports_systemd_services() and (
-                get_systemd_unit_path(system=False).exists()
-                or get_systemd_unit_path(system=True).exists()
-            ):
+            if supports_systemd_services() and _has_any_systemd_service_definition():
                 systemd_start(system=system)
-            elif is_macos() and get_launchd_plist_path().exists():
+            elif is_macos() and _has_launchd_service_definition():
                 launchd_start()
             elif is_windows():
                 from hermes_cli import gateway_windows
@@ -7377,17 +7832,14 @@ def _gateway_command_inner(args):
                 run_gateway(verbose=0)
             return
 
-        if supports_systemd_services() and (
-            get_systemd_unit_path(system=False).exists()
-            or get_systemd_unit_path(system=True).exists()
-        ):
+        if supports_systemd_services() and _has_any_systemd_service_definition():
             service_configured = True
             try:
                 systemd_restart(system=system)
                 service_available = True
             except subprocess.CalledProcessError:
                 pass
-        elif is_macos() and get_launchd_plist_path().exists():
+        elif is_macos() and _has_launchd_service_definition():
             service_configured = True
             try:
                 launchd_restart()
@@ -7470,7 +7922,7 @@ def _gateway_command_inner(args):
         ):
             systemd_status(deep, system=system, full=full)
             _print_gateway_process_mismatch(snapshot)
-        elif is_macos() and get_launchd_plist_path().exists():
+        elif is_macos() and _has_launchd_service_definition():
             launchd_status(deep)
             _print_gateway_process_mismatch(snapshot)
         elif _windows_service_installed:
