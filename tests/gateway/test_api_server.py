@@ -322,6 +322,7 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
         "/api/platforms/{platform}/events",
         adapter._handle_platform_event_callback,
     )
+    app.router.add_post("/v1/runs", adapter._handle_runs)
     return app
 
 
@@ -2484,6 +2485,40 @@ class TestSessionKeyHeader:
 
                 owner_delete_resp = await cli.delete(f"/v1/responses/{response_id}", headers=owner_headers)
                 assert owner_delete_resp.status == 200
+
+    @pytest.mark.asyncio
+    async def test_runs_previous_response_id_is_scoped_to_session_key(self, auth_adapter):
+        """Runs API previous_response_id chaining cannot cross X-Hermes-Session-Key owners."""
+        response_id = "resp_owner"
+        auth_adapter._response_store.put(
+            response_id,
+            {
+                "response": {"id": response_id},
+                "conversation_history": [{"role": "user", "content": "private context"}],
+                "instructions": "private instructions",
+                "session_id": "owner-session",
+                "gateway_session_key": "webui:owner",
+            },
+        )
+
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(auth_adapter, "_create_agent") as mock_create_agent:
+                resp = await cli.post(
+                    "/v1/runs",
+                    headers={
+                        "X-Hermes-Session-Key": "webui:other",
+                        "Authorization": "Bearer sk-secret",
+                    },
+                    json={
+                        "model": "hermes-agent",
+                        "input": "continue",
+                        "previous_response_id": response_id,
+                    },
+                )
+
+        assert resp.status == 404
+        mock_create_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_conversation_names_are_not_reused_across_session_keys(self, auth_adapter):
