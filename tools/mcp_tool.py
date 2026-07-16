@@ -442,6 +442,7 @@ def _jittered(seconds: float) -> float:
     return max(0.0, seconds * random.uniform(1.0 - _BACKOFF_JITTER,
                                              1.0 + _BACKOFF_JITTER))
 
+
 # Keepalive cadence for HTTP/SSE sessions. The MCP spec lets a server expire
 # idle sessions on any TTL it chooses (Streamable HTTP "Session Management"),
 # so a client that wants a session to survive idle periods MUST refresh faster
@@ -3811,11 +3812,16 @@ class MCPServerTask:
         finally:
             for task in (shutdown_task, reconnect_task):
                 if not task.done():
-                    task.cancel()
                     try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
+                        task.cancel()
+                    except RuntimeError:
+                        # Event loop already closed (benign shutdown race).
                         pass
+                    else:
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
 
 # ---------------------------------------------------------------------------
@@ -7678,6 +7684,7 @@ async def _drain_and_stop_mcp_loop() -> None:
         loop.call_soon(loop.stop)
 
 
+
 def _stop_mcp_loop(*, only_if_idle: bool = False) -> bool:
     """Stop the background event loop and join its thread."""
     global _mcp_loop, _mcp_thread
@@ -7726,6 +7733,7 @@ def _stop_mcp_loop(*, only_if_idle: bool = False) -> bool:
 
         if not stop_owned_by_loop and loop.is_running():
             loop.call_soon_threadsafe(loop.stop)
+
         if thread is not None:
             thread.join(timeout=5)
             if thread.is_alive():
