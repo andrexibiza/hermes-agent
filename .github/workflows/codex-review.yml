@@ -10,8 +10,6 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: read
 
 jobs:
   request-review:
@@ -20,7 +18,7 @@ jobs:
     steps:
       - name: Request Codex review once per head commit
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.ARES_REVIEW_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -30,7 +28,7 @@ jobs:
           comments_json="$(mktemp)"
           trap 'rm -f "${comments_json}"' EXIT
           gh api --paginate --slurp             "repos/${GH_REPO}/issues/${PR_NUMBER}/comments"             >"${comments_json}"
-          if python3 -c 'import json,sys; pages=json.load(open(sys.argv[1], encoding="utf-8")); marker=sys.argv[2]; raise SystemExit(0 if any(c.get("user", {}).get("login") == "github-actions[bot]" and marker in c.get("body", "") for page in pages for c in page) else 1)'               "${comments_json}" "${marker}"; then
+          if python3 -c 'import json,sys; pages=json.load(open(sys.argv[1], encoding="utf-8")); marker=sys.argv[2]; raise SystemExit(0 if any(c.get("user", {}).get("login") == "andrexibiza" and marker in c.get("body", "") for page in pages for c in page) else 1)'               "${comments_json}" "${marker}"; then
             echo "Codex review already requested for ${HEAD_SHA}."
             exit 0
           fi
