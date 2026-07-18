@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
 
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   issues: write
@@ -28,6 +32,11 @@ jobs:
           gh api --paginate --slurp             "repos/${GH_REPO}/issues/${PR_NUMBER}/comments"             >"${comments_json}"
           if python3 -c 'import json,sys; pages=json.load(open(sys.argv[1], encoding="utf-8")); marker=sys.argv[2]; raise SystemExit(0 if any(c.get("user", {}).get("login") == "github-actions[bot]" and marker in c.get("body", "") for page in pages for c in page) else 1)'               "${comments_json}" "${marker}"; then
             echo "Codex review already requested for ${HEAD_SHA}."
+            exit 0
+          fi
+          current_head="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          if [ "${current_head}" != "${HEAD_SHA}" ]; then
+            echo "PR advanced from ${HEAD_SHA} to ${current_head}; newer run owns the review request."
             exit 0
           fi
           gh api --method POST             "repos/${GH_REPO}/issues/${PR_NUMBER}/comments"             -f body="${marker}
