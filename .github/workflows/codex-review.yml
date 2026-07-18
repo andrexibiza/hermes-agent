@@ -23,7 +23,10 @@ jobs:
         run: |
           set -euo pipefail
           marker="<!-- ares-codex-review:${HEAD_SHA} -->"
-          if gh api --paginate               "repos/${GH_REPO}/issues/${PR_NUMBER}/comments"               | jq -se --arg marker "${marker}"                 'any(.[][]; .user.login == "github-actions[bot]" and (.body | contains($marker)))'                 >/dev/null; then
+          comments_json="$(mktemp)"
+          trap 'rm -f "${comments_json}"' EXIT
+          gh api --paginate --slurp             "repos/${GH_REPO}/issues/${PR_NUMBER}/comments"             >"${comments_json}"
+          if python3 -c 'import json,sys; pages=json.load(open(sys.argv[1], encoding="utf-8")); marker=sys.argv[2]; raise SystemExit(0 if any(c.get("user", {}).get("login") == "github-actions[bot]" and marker in c.get("body", "") for page in pages for c in page) else 1)'               "${comments_json}" "${marker}"; then
             echo "Codex review already requested for ${HEAD_SHA}."
             exit 0
           fi
