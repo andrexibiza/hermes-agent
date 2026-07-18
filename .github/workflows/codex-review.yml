@@ -21,9 +21,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
           marker="<!-- ares-codex-review:${HEAD_SHA} -->"
-          already_requested="$(gh api --paginate             "repos/${GH_REPO}/issues/${PR_NUMBER}/comments"             --jq "any(.[]; .body | contains(\"${marker}\"))")"
-          if [ "${already_requested}" = "true" ]; then
+          if gh api --paginate               "repos/${GH_REPO}/issues/${PR_NUMBER}/comments"               | jq -se --arg marker "${marker}"                 'any(.[][]; .user.login == "github-actions[bot]" and (.body | contains($marker)))'                 >/dev/null; then
             echo "Codex review already requested for ${HEAD_SHA}."
             exit 0
           fi
