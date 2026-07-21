@@ -2055,6 +2055,50 @@ class ElicitationHandler:
 # Server task -- each MCP server lives in one long-lived asyncio Task
 # ---------------------------------------------------------------------------
 
+
+def _normalize_name_filter(value: Any, label: str) -> set[str]:
+    """Normalize include/exclude config to a set of tool names."""
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {value}
+    if isinstance(value, (list, tuple, set)):
+        return {str(item) for item in value}
+    logger.warning(
+        "MCP config %s must be a string or list of strings; ignoring %r",
+        label,
+        value,
+    )
+    return set()
+
+
+def _filter_discovered_mcp_tools(
+    server_name: str,
+    discovered_tools: list,
+    config: dict,
+) -> list:
+    """Apply one server's include/exclude policy to a tools/list result.
+
+    This is the single filtering boundary for initial discovery, reconnects,
+    dynamic list_changed refreshes, and defensive direct registration.
+    """
+    tools_filter = config.get("tools") or {}
+    include_set = _normalize_name_filter(
+        tools_filter.get("include"),
+        f"mcp_servers.{server_name}.tools.include",
+    )
+    exclude_set = _normalize_name_filter(
+        tools_filter.get("exclude"),
+        f"mcp_servers.{server_name}.tools.exclude",
+    )
+
+    if include_set:
+        return [tool for tool in discovered_tools if tool.name in include_set]
+    if exclude_set:
+        return [tool for tool in discovered_tools if tool.name not in exclude_set]
+    return list(discovered_tools)
+
+
 class MCPServerTask:
     """Manages a single MCP server connection in a dedicated asyncio Task.
 
@@ -2070,7 +2114,7 @@ class MCPServerTask:
         "_task", "_ready", "_shutdown_event", "_reconnect_event",
         "_tools", "_error", "_config",
         "_sampling", "_elicitation",
-        "_registered_tool_names", "_auth_type", "_refresh_lock",
+        "_registered_tool_names", "_has_published_tools", "_auth_type", "_refresh_lock",
         "_rpc_lock", "_pending_refresh_tasks",
         "_pending_call_context",
         "_lifecycle_started_at", "_last_tool_call_at",
@@ -2098,6 +2142,9 @@ class MCPServerTask:
         self._sampling: Optional[SamplingHandler] = None
         self._elicitation: Optional[ElicitationHandler] = None
         self._registered_tool_names: list[str] = []
+        # Remains true after parking deregisters every tool, allowing the next
+        # successful self-probe to distinguish revival from initial discovery.
+        self._has_published_tools: bool = False
         self._reconnect_retries: int = 0
         # Rapid-drop budget (#62212): a freshly (re)established session is
         # UNPROVEN until it demonstrates real health — it survived at least
@@ -2324,8 +2371,6 @@ class MCPServerTask:
         After the initial ``await`` (list_tools), all mutations are synchronous
         — atomic from the event loop's perspective.
         """
-        from tools.registry import registry
-
         if not self._advertises_tools():
             # A server that doesn't implement tools/* should never send
             # tools/list_changed, but guard anyway — calling tools/list
@@ -2342,46 +2387,15 @@ class MCPServerTask:
                     self.session.list_tools, "tools", self.name
                 )
 
-            # 2. Re-register with fresh tool list. Avoid nuke-and-repave for
-            # all names: live agent turns may already have tool-call IDs
-            # pointing at existing handler functions. Replacing entries
-            # in-place is enough for unchanged names and avoids transient
-            # "tool not connected" / stale-handler races during startup
-            # notifications. Tools absent from the fresh list are no longer
-            # callable, so remove only those stale registry entries first.
-            toolset_name = f"mcp-{self.name}"
-            stale_tool_names = old_tool_names - {
-                mcp_prefixed_tool_name(self.name, tool.name)
-                for tool in new_mcp_tools
-            }
-            for tool_name in stale_tool_names:
-                # Never let one server's refresh remove a colliding name that
-                # is currently owned by another server.
-                if registry.get_toolset_for_tool(tool_name) != toolset_name:
-                    continue
-                registry.deregister(tool_name)
-                _forget_mcp_tool_server(tool_name)
+            # 2. Apply the same include/exclude policy used by the initial
+            # handshake and every reconnect, then reconcile the live registry.
+            # Comparing stale names against the RAW list is unsafe: a tool can
+            # still exist on the server while being removed by tools.include.
+            # That previously left hundreds of filtered-out entries registered
+            # and then forgot their ownership when this list was overwritten.
+            self._replace_discovered_tools(new_mcp_tools, reconcile_registry=True)
 
-            # 3. Re-register with the fresh list. The helper may skip names that
-            # are ambiguous after normalization.
-            self._tools = new_mcp_tools
-            registered_names = _register_server_tools(
-                self.name, self, self._config
-            )
-
-            # A previously unique raw name can become ambiguous without changing
-            # its normalized registry name. In that case the pre-pass above does
-            # not consider it stale, so remove any old entry that the final,
-            # collision-checked registration set no longer owns.
-            registered_name_set = set(registered_names)
-            for tool_name in old_tool_names - registered_name_set:
-                if registry.get_toolset_for_tool(tool_name) != toolset_name:
-                    continue
-                registry.deregister(tool_name)
-                _forget_mcp_tool_server(tool_name)
-            self._registered_tool_names = registered_names
-
-            # 4. Log what changed (user-visible notification)
+            # 3. Log what changed (user-visible notification)
             new_tool_names = set(self._registered_tool_names)
             added = new_tool_names - old_tool_names
             removed = old_tool_names - new_tool_names
@@ -3280,43 +3294,66 @@ class MCPServerTask:
                 "skipping tools/list (prompts/resources remain available)",
                 self.name,
             )
-            self._tools = []
-            self._register_discovered_tools_if_needed()
+            self._replace_discovered_tools([])
             return
         async with self._rpc_lock:
-            self._tools = await _paginate_full_list(
+            discovered_tools = await _paginate_full_list(
                 self.session.list_tools, "tools", self.name
             )
-        self._register_discovered_tools_if_needed()
+        self._replace_discovered_tools(discovered_tools)
 
-    def _register_discovered_tools_if_needed(self) -> None:
-        """Re-register tools after an owned server reconnects if needed.
+    def _replace_discovered_tools(
+        self,
+        discovered_tools: list,
+        *,
+        reconcile_registry: bool = False,
+    ) -> None:
+        """Filter a tools/list result and reconcile reconnect registry state.
 
         Initial registration is performed by ``_discover_and_register_server``
-        after ``start()`` completes. During a later reconnect, outage handling
-        may clear ``_ready`` before discovery and may deregister stale tools.
-        A managed server can still be identified by its entry in ``_servers``;
-        publish its freshly discovered tools before transport readiness is
-        restored so a successful revival cannot come back with zero tools.
-        A server retained after a recoverable initial failure is likewise
-        registry-owned before its first successful session, so ownership also
-        authorizes its first publication.
+        after ``start()`` completes. Every later discovery result must refresh
+        the existing registration, even when ``run()`` cleared ``_ready`` before
+        rebuilding the transport. This also scrubs stale entries left by older
+        unfiltered paths instead of losing their ownership tracking.
         """
-        if self._registered_tool_names:
+        from tools.registry import registry
+
+        own_toolset = f"mcp-{self.name}"
+        # Registry membership is authoritative. Older refresh code could
+        # overwrite _registered_tool_names with only the filtered subset while
+        # leaving filtered-out entries live, so tracking alone cannot identify
+        # every stale tool that must be scrubbed.
+        old_tool_names = set(
+            registry.get_tool_names_for_toolset(own_toolset)
+        )
+        old_tool_names.update(self._registered_tool_names)
+        self._tools = _filter_discovered_mcp_tools(
+            self.name, discovered_tools, self._config
+        )
+
+        # Initial discovery deliberately leaves registration to
+        # _discover_and_register_server. Reconnects are recognizable by either
+        # prior registrations or a previously-ready lifecycle (parked revival).
+        should_reconcile = (
+            reconcile_registry
+            or bool(old_tool_names)
+            or self._ready.is_set()
+            or self._has_published_tools
+        )
+        if not should_reconcile:
             return
-        if not self._ready.is_set():
-            with _lock:
-                if _servers.get(self.name) is not self:
-                    return
-        self._registered_tool_names = _register_server_tools(
+
+        registered_names = _register_server_tools(
             self.name, self, self._config
         )
-        # A retained initial-failure server that just published tools has
-        # recovered: drop its stale connect error so status surfaces stop
-        # reporting it as failed.
-        with _lock:
-            if _servers.get(self.name) is self:
-                _server_connect_errors.pop(self.name, None)
+        new_tool_names = set(registered_names)
+        for tool_name in old_tool_names - new_tool_names:
+            # Never remove a built-in/plugin entry that may now own a formerly
+            # MCP-shaped name. Only scrub entries still owned by this server.
+            if registry.get_toolset_for_tool(tool_name) == own_toolset:
+                registry.deregister(tool_name)
+                _forget_mcp_tool_server(tool_name)
+        self._registered_tool_names = registered_names
 
     async def run(self, config: dict):
         """Long-lived coroutine: connect, discover tools, wait, disconnect.
@@ -6300,43 +6337,26 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
     registered_names: List[str] = []
     toolset_name = f"mcp-{name}"
 
-    # Selective tool loading: honour include/exclude lists from config.
-    # Rules (matching issue #690 spec, extended with glob support):
-    #   tools.include — whitelist: only matching tool names are registered
-    #   tools.exclude — blacklist: all tools EXCEPT matching ones are registered
-    #   entries may be exact names or fnmatch globs (e.g. "*_radar_*")
-    #   include takes precedence over exclude
-    #   Neither set → register all tools (backward-compatible default)
-    tools_filter = config.get("tools") or {}
-    include_set = _normalize_name_filter(
-        tools_filter.get("include"), f"mcp_servers.{name}.tools.include"
-    )
-    exclude_set = _normalize_name_filter(
-        tools_filter.get("exclude"), f"mcp_servers.{name}.tools.exclude"
-    )
+    # Discovery already filters before storing server._tools. Apply the shared
+    # helper again defensively for direct/fake connection paths that bypass the
+    # normal MCPServerTask handshake.
+    filtered_tools = _filter_discovered_mcp_tools(name, server._tools, config)
 
-    def _should_register(tool_name: str) -> bool:
-        if include_set:
-            return matches_name_filter(tool_name, include_set)
-        if exclude_set:
-            return not matches_name_filter(tool_name, exclude_set)
-        return True
+    for mcp_tool in filtered_tools:
 
-    check_fn = _make_check_fn(name)
-    candidates: List[dict] = []
+        # Scan tool description for prompt injection patterns
+        _scan_mcp_description(name, mcp_tool.name, mcp_tool.description or "")
 
-    # Trust-tier metadata (security boundary): capture the server's
-    # configured trust tier and each tool's readOnlyHint annotation NOW,
-    # at discovery, so the call-time gate in _make_tool_handler classifies
-    # from data we control rather than re-reading server-supplied state.
-    _record_tool_trust_metadata(name, config, server._tools)
+        schema = _convert_mcp_schema(name, mcp_tool)
+        tool_name_prefixed = schema["name"]
 
-    for mcp_tool in server._tools:
-        if not _should_register(mcp_tool.name):
-            logger.debug(
-                "MCP server '%s': skipping tool '%s' (filtered by config)",
-                name,
-                mcp_tool.name,
+        # Guard against collisions with built-in (non-MCP) tools.
+        existing_toolset = registry.get_toolset_for_tool(tool_name_prefixed)
+        if existing_toolset and not existing_toolset.startswith("mcp-"):
+            logger.warning(
+                "MCP server '%s': tool '%s' (→ '%s') collides with built-in "
+                "tool in toolset '%s' — skipping to preserve built-in",
+                name, mcp_tool.name, tool_name_prefixed, existing_toolset,
             )
             continue
 
@@ -6641,14 +6661,11 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]
 
     if registered_names:
         registry.register_toolset_alias(name, toolset_name)
-        with _lock:
-            _lazy_server_configs[name] = dict(config)
-            _lazy_server_fingerprints[name] = fingerprint
-            _lazy_server_tool_names[name] = list(registered_names)
-        logger.info(
-            "MCP server '%s' (lazy): registered %d tool(s) from schema cache",
-            name, len(registered_names),
-        )
+
+    # Publication history must survive _deregister_tools() while a server is
+    # parked. Its later self-probe runs with empty ownership tracking and a
+    # cleared readiness event but still needs to republish filtered tools.
+    server._has_published_tools = True
     return registered_names
 
 async def _discover_and_register_server(name: str, config: dict) -> List[str]:
