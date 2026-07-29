@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse, urlunparse
@@ -1449,12 +1450,32 @@ def init_agent(
         agent._tool_snapshot_generation = _snapshot_registry._generation
     except Exception:
         agent._tool_snapshot_generation = 0
-    agent.tools = _ra().get_tool_definitions(
+    raw_tool_defs = _ra().get_tool_definitions(
         enabled_toolsets=enabled_toolsets,
         disabled_toolsets=disabled_toolsets,
-        quiet_mode=agent.quiet_mode,
+        quiet_mode=True,
+        skip_tool_search_assembly=True,
     )
-    
+    agent._deferred_tool_defs_snapshot = deepcopy(raw_tool_defs or [])
+    raw_tool_names = [
+        tool["function"]["name"]
+        for tool in (raw_tool_defs or [])
+    ]
+    from tools.mcp_tool import (
+        get_static_lazy_tool_generations,
+        has_static_lazy_mcp_catalogs,
+    )
+
+    agent._deferred_tool_snapshot_locked = has_static_lazy_mcp_catalogs()
+    agent._deferred_tool_generations_snapshot = get_static_lazy_tool_generations(
+        raw_tool_names
+    )
+    from model_tools import assemble_tool_search_definitions
+
+    agent.tools = assemble_tool_search_definitions(
+        raw_tool_defs or [], quiet_mode=agent.quiet_mode
+    )
+
     # Show tool configuration and store valid tool names for validation
     agent.valid_tool_names = set()
     if agent.tools:

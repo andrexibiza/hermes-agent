@@ -963,7 +963,12 @@ def scoped_deferrable_names(tool_defs: List[Dict[str, Any]]) -> frozenset[str]:
     return frozenset(names)
 
 
-def validate_deferred_call_args(name: str, args: Dict[str, Any]) -> Optional[str]:
+def validate_deferred_call_args(
+    name: str,
+    args: Dict[str, Any],
+    *,
+    current_tool_defs: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[str]:
     """Probe-validate ``tool_call`` arguments against the deferred tool's schema.
 
     A deferred tool's parameter schema is invisible to the model until it
@@ -986,11 +991,23 @@ def validate_deferred_call_args(name: str, args: Dict[str, Any]) -> Optional[str
     call should dispatch.
     """
     try:
-        from tools.registry import registry as _registry
-        schema = _registry.get_schema(name)
+        schema = None
+        if current_tool_defs is not None:
+            for tool_def in current_tool_defs:
+                function = tool_def.get("function") or {}
+                if function.get("name") == name:
+                    schema = tool_def
+                    break
+        else:
+            from tools.registry import registry as _registry
+            schema = _registry.get_schema(name)
         if not isinstance(schema, dict):
             return None
-        fn = schema.get("function") if schema.get("type") == "function" else schema
+        fn = schema
+        for _ in range(2):
+            if fn.get("type") != "function" or not isinstance(fn.get("function"), dict):
+                break
+            fn = fn["function"]
         if not isinstance(fn, dict):
             return None
         params = fn.get("parameters")

@@ -104,6 +104,22 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
         help="Re-authenticate every OAuth server in config, one at a time",
     )
 
+    mcp_snapshot_p = mcp_sub.add_parser(
+        "snapshot",
+        help="Refresh static tool schemas for lazy MCP startup",
+    )
+    mcp_snapshot_p.add_argument(
+        "name",
+        nargs="?",
+        help="Configured MCP server name (omit with --all)",
+    )
+    mcp_snapshot_p.add_argument(
+        "--all",
+        action="store_true",
+        dest="snapshot_all",
+        help="Refresh snapshots for every enabled MCP server",
+    )
+
     # ── Catalog (Nous-approved MCPs shipped with the repo) ─────────────────
     mcp_sub.add_parser(
         "picker",

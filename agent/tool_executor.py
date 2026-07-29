@@ -341,16 +341,25 @@ def _tool_search_scoped_names(agent) -> frozenset:
     set: the deferrable subset of the session's own enabled/disabled toolset
     scope.
 
-    Result is cached on the agent and refreshed when the tool registry's
-    generation changes (e.g. an MCP server reconnects), so the common case is
-    a dict lookup, not a full tool-defs rebuild on every tool call.
+    Current agents pin the pre-assembly definitions at initialization. Older
+    and external agent doubles without that attribute retain the live-registry
+    fallback for compatibility.
     """
     try:
         import model_tools
         from tools import tool_search as _ts
-        from tools.registry import registry as _registry
     except Exception:
         return frozenset()
+
+    snapshot = getattr(agent, "_deferred_tool_defs_snapshot", None)
+    if snapshot is not None:
+        cached = getattr(agent, "_deferred_tool_names_snapshot", None)
+        if cached is None:
+            cached = _ts.scoped_deferrable_names(snapshot)
+            agent._deferred_tool_names_snapshot = cached
+        return cached
+
+    from tools.registry import registry as _registry
 
     enabled = getattr(agent, "enabled_toolsets", None)
     disabled = getattr(agent, "disabled_toolsets", None)
@@ -854,7 +863,13 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                         # Probe-validate before unwrapping (ironclaw#5149):
                         # missing required args return the parameter schema
                         # instead of dispatching into an opaque failure.
-                        _probe_err = _ts.validate_deferred_call_args(_underlying, _underlying_args)
+                        _probe_err = _ts.validate_deferred_call_args(
+                            _underlying,
+                            _underlying_args,
+                            current_tool_defs=getattr(
+                                agent, "_deferred_tool_defs_snapshot", None
+                            ),
+                        )
                         if _probe_err is not None:
                             _ts_scope_block = _probe_err
                         else:
@@ -1695,7 +1710,13 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                         # Probe-validate before unwrapping (ironclaw#5149):
                         # missing required args return the parameter schema
                         # instead of dispatching into an opaque failure.
-                        _probe_err = _ts.validate_deferred_call_args(_underlying, _underlying_args)
+                        _probe_err = _ts.validate_deferred_call_args(
+                            _underlying,
+                            _underlying_args,
+                            current_tool_defs=getattr(
+                                agent, "_deferred_tool_defs_snapshot", None
+                            ),
+                        )
                         if _probe_err is not None:
                             # This path wraps _block_msg in {"error": ...} —
                             # flatten the probe payload to one plain string.
@@ -2042,6 +2063,12 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                         tool_request_middleware_trace=list(middleware_trace),
                         enabled_toolsets=getattr(agent, "enabled_toolsets", None),
                         disabled_toolsets=getattr(agent, "disabled_toolsets", None),
+                        deferred_tool_defs=getattr(
+                            agent, "_deferred_tool_defs_snapshot", None
+                        ),
+                        deferred_tool_generations=getattr(
+                            agent, "_deferred_tool_generations_snapshot", None
+                        ),
                     )
 
                 (
@@ -2121,6 +2148,12 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                         tool_request_middleware_trace=list(middleware_trace),
                         enabled_toolsets=getattr(agent, "enabled_toolsets", None),
                         disabled_toolsets=getattr(agent, "disabled_toolsets", None),
+                        deferred_tool_defs=getattr(
+                            agent, "_deferred_tool_defs_snapshot", None
+                        ),
+                        deferred_tool_generations=getattr(
+                            agent, "_deferred_tool_generations_snapshot", None
+                        ),
                     )
 
                 (

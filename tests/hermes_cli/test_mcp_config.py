@@ -840,3 +840,51 @@ class TestMcpReauth:
         cmd_mcp_reauth(_make_args(name="ghost", all=False))
         out = capsys.readouterr().out
         assert "not found" in out
+
+
+class TestMcpSnapshot:
+    def test_snapshot_one_server(self, tmp_path, capsys, monkeypatch):
+        _seed_config(tmp_path, {
+            "docs": {"url": "https://docs.example.com/mcp", "lazy_connect": True},
+        })
+        from tools import mcp_tool
+
+        visited = []
+        monkeypatch.setattr(
+            mcp_tool,
+            "refresh_mcp_static_catalog",
+            lambda name, config: visited.append((name, config)) or {
+                "generation": "sha256:" + "a" * 64,
+                "tools": [{"registry_name": "mcp__docs__lookup"}],
+            },
+        )
+        from hermes_cli.mcp_config import cmd_mcp_snapshot
+
+        cmd_mcp_snapshot(_make_args(name="docs", snapshot_all=False))
+        out = capsys.readouterr().out
+
+        assert [name for name, _ in visited] == ["docs"]
+        assert "1 tools" in out
+        assert "aaaaaaaaaaaa" in out
+        assert "new session" in out
+
+    def test_snapshot_all_skips_disabled_servers(self, tmp_path, monkeypatch):
+        _seed_config(tmp_path, {
+            "enabled": {"url": "https://one.example.com/mcp"},
+            "disabled": {"url": "https://two.example.com/mcp", "enabled": False},
+        })
+        from tools import mcp_tool
+
+        visited = []
+        monkeypatch.setattr(
+            mcp_tool,
+            "refresh_mcp_static_catalog",
+            lambda name, config: visited.append(name) or {
+                "generation": "sha256:" + "b" * 64,
+                "tools": [],
+            },
+        )
+        from hermes_cli.mcp_config import cmd_mcp_snapshot
+
+        cmd_mcp_snapshot(_make_args(name=None, snapshot_all=True))
+        assert visited == ["enabled"]

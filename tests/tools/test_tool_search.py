@@ -461,6 +461,127 @@ class TestRegression_ToolsetScoping:
         assert "terminal" not in names
 
 
+class TestRegression_SessionCatalogSnapshot:
+    """Deferred discovery must stay fixed for the life of an agent session."""
+
+    @staticmethod
+    def _register(name, *, required=(), field_type="string"):
+        from tools.registry import registry
+
+        params = {
+            "type": "object",
+            "properties": {
+                field: {"type": field_type}
+                for field in required
+            },
+            "required": list(required),
+        }
+
+        def _handler(args, task_id=None, **kw):
+            return json.dumps({"ok": True, "tool": name, "args": args})
+
+        registry.register(
+            name=name,
+            handler=_handler,
+            schema={
+                "name": name,
+                "description": f"snapshot test {name}",
+                "parameters": params,
+            },
+            toolset="mcp-session-snapshot",
+        )
+
+    @staticmethod
+    def _snapshot():
+        import model_tools
+
+        return model_tools.get_tool_definitions(
+            enabled_toolsets=["mcp-session-snapshot"],
+            quiet_mode=True,
+            skip_tool_search_assembly=True,
+        )
+
+    def test_search_and_call_scope_ignore_tools_registered_after_snapshot(self):
+        import model_tools
+
+        self._register("mcp_session_snapshot_before")
+        snapshot = self._snapshot()
+        self._register("mcp_session_snapshot_after")
+
+        searched = json.loads(model_tools.handle_function_call(
+            function_name="tool_search",
+            function_args={"query": "session snapshot", "limit": 20},
+            enabled_toolsets=["mcp-session-snapshot"],
+            deferred_tool_defs=snapshot,
+        ))
+        hit_names = {entry["name"] for entry in searched["matches"]}
+        assert "mcp_session_snapshot_before" in hit_names
+        assert "mcp_session_snapshot_after" not in hit_names
+        assert searched["total_available"] == 1
+
+        rejected = json.loads(model_tools.handle_function_call(
+            function_name="tool_call",
+            function_args={
+                "name": "mcp_session_snapshot_after",
+                "arguments": {},
+            },
+            enabled_toolsets=["mcp-session-snapshot"],
+            deferred_tool_defs=snapshot,
+        ))
+        assert "not available in this session" in rejected["error"]
+
+    def test_argument_probe_uses_snapshot_schema_after_registry_changes(self):
+        import model_tools
+
+        name = "mcp_session_snapshot_schema"
+        self._register(name, required=("old_arg",))
+        snapshot = self._snapshot()
+        self._register(name, required=("new_arg",))
+
+        result = json.loads(model_tools.handle_function_call(
+            function_name="tool_call",
+            function_args={"name": name, "arguments": {}},
+            enabled_toolsets=["mcp-session-snapshot"],
+            deferred_tool_defs=snapshot,
+        ))
+        assert "old_arg" in result["error"]
+        assert "new_arg" not in result["error"]
+
+    def test_argument_coercion_uses_snapshot_schema_after_registry_changes(self):
+        import model_tools
+
+        name = "mcp_session_snapshot_coercion"
+        self._register(name, required=("count",), field_type="integer")
+        snapshot = self._snapshot()
+        self._register(name, required=("count",), field_type="string")
+
+        result = json.loads(model_tools.handle_function_call(
+            function_name="tool_call",
+            function_args={"name": name, "arguments": {"count": "42"}},
+            enabled_toolsets=["mcp-session-snapshot"],
+            deferred_tool_defs=snapshot,
+        ))
+        assert result["args"]["count"] == 42
+
+    def test_agent_executor_scope_uses_the_session_snapshot(self):
+        from agent.tool_executor import _tool_search_scoped_names
+
+        name = "mcp__snapshot_scope__original"
+        self._register(name)
+        snapshot = self._snapshot()
+
+        class Agent:
+            enabled_toolsets = None
+            disabled_toolsets = None
+            _deferred_tool_defs_snapshot = snapshot
+
+        agent = Agent()
+        names = _tool_search_scoped_names(agent)
+
+        assert name in names
+        assert not hasattr(agent, "_tool_search_scoped_cache")
+
+
 # ---------------------------------------------------------------------------
 # Catalog listing (skills-style progressive disclosure)
 # ---------------------------------------------------------------------------

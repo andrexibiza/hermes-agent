@@ -588,23 +588,29 @@ def _compute_tool_definitions(
     except Exception as e:  # pragma: no cover — defensive
         logger.warning("Schema sanitization skipped: %s", e)
 
-    # ── Tool Search (progressive disclosure) ────────────────────────────
-    # Conditionally replace MCP + plugin (non-core) tools with three bridge
-    # tools (tool_search / tool_describe / tool_call) when the deferrable
-    # surface exceeds the configured threshold (default 10% of context
-    # window). Core Hermes tools (toolsets._HERMES_CORE_TOOLS) are NEVER
-    # deferred. See tools/tool_search.py for full design notes.
-    #
-    # This is deliberately the last step before returning — sanitization
-    # has already normalized schemas, and the assembly is idempotent in
-    # case some caller invokes get_tool_definitions twice.
+    if not skip_tool_search_assembly:
+        filtered_tools = assemble_tool_search_definitions(
+            filtered_tools,
+            quiet_mode=quiet_mode,
+        )
+
+    return filtered_tools
+
+
+def assemble_tool_search_definitions(
+    tool_defs: List[Dict[str, Any]],
+    *,
+    quiet_mode: bool = False,
+) -> List[Dict[str, Any]]:
+    """Apply progressive disclosure to an already-scoped raw tool snapshot."""
+    assembled_defs = tool_defs
     try:
         from tools.tool_search import assemble_tool_defs, load_config as _load_ts_config
         ts_cfg = _load_ts_config()
-        if not skip_tool_search_assembly and ts_cfg.enabled != "off":
+        if ts_cfg.enabled != "off":
             context_length = _resolve_active_context_length()
             assembly = assemble_tool_defs(
-                filtered_tools,
+                assembled_defs,
                 context_length=context_length,
                 config=ts_cfg,
             )
@@ -619,11 +625,10 @@ def _compute_tool_definitions(
                     f"MCP/plugin tools deferred (~{assembly.deferred_tokens} tokens) behind "
                     f"tool_search/describe/call — {_forms.get(assembly.listing_form, assembly.listing_form)}."
                 )
-            filtered_tools = assembly.tool_defs
+            assembled_defs = assembly.tool_defs
     except Exception as e:  # pragma: no cover — never break tool loading
         logger.warning("Tool search assembly skipped: %s", e)
-
-    return filtered_tools
+    return assembled_defs
 
 
 def _resolve_active_context_length() -> int:
@@ -764,7 +769,12 @@ def _sanitize_tool_error(error_msg: str) -> str:
 # Tool argument type coercion
 # =========================================================================
 
-def coerce_tool_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+def coerce_tool_args(
+    tool_name: str,
+    args: Dict[str, Any],
+    *,
+    schema_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Coerce tool call arguments to match their JSON Schema types.
 
     LLMs frequently return numbers as strings (``"42"`` instead of ``42``)
@@ -785,7 +795,7 @@ def coerce_tool_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if not args or not isinstance(args, dict):
         return args
 
-    schema = registry.get_schema(tool_name)
+    schema = schema_override or registry.get_schema(tool_name)
     if not schema:
         return args
 
@@ -1173,6 +1183,8 @@ def handle_function_call(
     tool_request_middleware_trace: Optional[List[Dict[str, Any]]] = None,
     enabled_toolsets: Optional[List[str]] = None,
     disabled_toolsets: Optional[List[str]] = None,
+    deferred_tool_defs: Optional[List[Dict[str, Any]]] = None,
+    deferred_tool_generations: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     Main function call dispatcher that routes calls to the tool registry.
@@ -1194,12 +1206,30 @@ def handle_function_call(
                        matching ``get_tool_definitions`` semantics.
         disabled_toolsets: The session's disabled toolsets, applied as a
                        subtraction when scoping the bridge catalog.
+        deferred_tool_defs: Optional immutable pre-assembly tool snapshot for
+                       this session. When supplied, deferred discovery and
+                       invocation authorization do not consult live registry
+                       mutations.
+        deferred_tool_generations: Hidden session mapping from static lazy MCP
+                       tool names to their pinned catalog generation.
 
     Returns:
         Function result as a JSON string.
     """
-    # Coerce string arguments to their schema-declared types (e.g. "42"→42)
-    function_args = coerce_tool_args(function_name, function_args)
+    # Coerce against the schema the session actually saw. Falling back to the
+    # live registry is retained for non-agent callers and legacy direct tools.
+    _coercion_schema = None
+    if deferred_tool_defs is not None:
+        for _tool_def in deferred_tool_defs:
+            _fn = _tool_def.get("function", _tool_def)
+            if isinstance(_fn, dict) and _fn.get("name") == function_name:
+                _coercion_schema = _fn
+                break
+    function_args = coerce_tool_args(
+        function_name,
+        function_args,
+        schema_override=_coercion_schema,
+    )
     if not isinstance(function_args, dict):
         function_args = {}
     _tool_middleware_trace = list(tool_request_middleware_trace or [])
@@ -1233,27 +1263,30 @@ def handle_function_call(
         _ts_mod = None
 
     if _ts_mod is not None and _ts_mod.is_bridge_tool(function_name):
-        try:
-            # Use skip_tool_search_assembly=True so we see the real catalog,
-            # not the already-collapsed bridge-only list (the bridge would
-            # otherwise be searching only itself).
-            #
-            # Scope the catalog to the session's toolsets so the bridge can
-            # only surface and invoke tools the session was actually granted.
-            # Without this, a restricted-toolset session (subagent, kanban
-            # worker, curated gateway session) would see and be able to call
-            # the entire process registry via the bridge. Passing the same
-            # enabled/disabled toolsets the session was assembled with keeps
-            # the deferred catalog identical to the deferrable subset of the
-            # session's own tool list, and avoids polluting the process-global
-            # _last_resolved_tool_names with out-of-scope tools.
-            current_defs = get_tool_definitions(
-                enabled_toolsets=enabled_toolsets,
-                disabled_toolsets=disabled_toolsets,
-                quiet_mode=True, skip_tool_search_assembly=True,
-            ) or []
-        except Exception:
-            current_defs = []
+        if deferred_tool_defs is not None:
+            current_defs = deferred_tool_defs
+        else:
+            try:
+                # Use skip_tool_search_assembly=True so we see the real catalog,
+                # not the already-collapsed bridge-only list (the bridge would
+                # otherwise be searching only itself).
+                #
+                # Scope the catalog to the session's toolsets so the bridge can
+                # only surface and invoke tools the session was actually granted.
+                # Without this, a restricted-toolset session (subagent, kanban
+                # worker, curated gateway session) would see and be able to call
+                # the entire process registry via the bridge. Passing the same
+                # enabled/disabled toolsets the session was assembled with keeps
+                # the deferred catalog identical to the deferrable subset of the
+                # session's own tool list, and avoids polluting the process-global
+                # _last_resolved_tool_names with out-of-scope tools.
+                current_defs = get_tool_definitions(
+                    enabled_toolsets=enabled_toolsets,
+                    disabled_toolsets=disabled_toolsets,
+                    quiet_mode=True, skip_tool_search_assembly=True,
+                ) or []
+            except Exception:
+                current_defs = []
         if function_name == _ts_mod.TOOL_SEARCH_NAME:
             return _return_bridge_result(
                 _ts_mod.dispatch_tool_search(
@@ -1291,7 +1324,11 @@ def handle_function_call(
             # Probe-validate against the deferred tool's schema (ironclaw#5149):
             # a blind call missing required arguments returns the parameter
             # schema instead of dispatching into an opaque downstream failure.
-            _probe_err = _ts_mod.validate_deferred_call_args(underlying_name, underlying_args)
+            _probe_err = _ts_mod.validate_deferred_call_args(
+                underlying_name,
+                underlying_args,
+                current_tool_defs=current_defs,
+            )
             if _probe_err is not None:
                 return _return_bridge_result(_probe_err)
             # Recurse with the underlying tool. All hooks fire against the
@@ -1312,6 +1349,8 @@ def handle_function_call(
                 tool_request_middleware_trace=list(_tool_middleware_trace),
                 enabled_toolsets=enabled_toolsets,
                 disabled_toolsets=disabled_toolsets,
+                deferred_tool_defs=deferred_tool_defs,
+                deferred_tool_generations=deferred_tool_generations,
             )
 
     _tool_original_args = dict(function_args)
@@ -1468,12 +1507,19 @@ def handle_function_call(
                     )
             else:
                 def _dispatch(next_args: Dict[str, Any]) -> Any:
-                    return registry.dispatch(
-                        function_name, next_args,
-                        task_id=task_id,
-                        session_id=session_id,
-                        user_task=user_task,
+                    dispatch_kwargs = {
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "user_task": user_task,
+                    }
+                    expected_generation = (deferred_tool_generations or {}).get(
+                        function_name
                     )
+                    if expected_generation is not None:
+                        dispatch_kwargs["_deferred_catalog_generation"] = (
+                            expected_generation
+                        )
+                    return registry.dispatch(function_name, next_args, **dispatch_kwargs)
             if skip_tool_execution_middleware:
                 result = _dispatch(function_args)
             else:

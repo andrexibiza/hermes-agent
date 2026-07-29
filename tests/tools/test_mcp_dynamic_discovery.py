@@ -75,6 +75,54 @@ class TestRefreshTools:
             assert "mcp__live_srv__new_tool" in resolve_toolset("live_srv")
             assert server._registered_tool_names == ["mcp__live_srv__new_tool"]
 
+    @pytest.mark.asyncio
+    async def test_static_catalog_marks_stale_without_mutating_registry(self, mock_registry):
+        from tools.mcp_static_catalog import build_catalog
+
+        server = MCPServerTask("static_srv")
+        server._refresh_lock = asyncio.Lock()
+        server._config = {"tools": {"resources": False, "prompts": False}}
+        old_tool = _make_mcp_tool("old_tool", "old behavior")
+        server._tools = [old_tool]
+        expected = build_catalog(
+            "static_srv",
+            [
+                {
+                    "registry_name": "mcp__static_srv__old_tool",
+                    "remote_name": "old_tool",
+                    "kind": "tool",
+                    "schema": {
+                        "name": "mcp__static_srv__old_tool",
+                        "description": "old behavior",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        )
+        server._static_catalog_generation = expected["generation"]
+
+        mock_registry.register(
+            name="mcp__static_srv__old_tool",
+            toolset="mcp-static_srv",
+            schema={},
+            handler=lambda x: x,
+        )
+        server._registered_tool_names = ["mcp__static_srv__old_tool"]
+        server.session = SimpleNamespace(
+            list_tools=AsyncMock(
+                return_value=SimpleNamespace(
+                    tools=[_make_mcp_tool("new_tool", "new behavior")]
+                )
+            )
+        )
+
+        with patch("tools.registry.registry", mock_registry):
+            await server._refresh_tools()
+
+        assert "mcp__static_srv__old_tool" in mock_registry.get_all_tool_names()
+        assert "mcp__static_srv__new_tool" not in mock_registry.get_all_tool_names()
+        assert server._static_catalog_stale is True
+
 
 class TestMessageHandler:
     """Tests for MCPServerTask._make_message_handler dispatch."""

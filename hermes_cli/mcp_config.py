@@ -1068,6 +1068,55 @@ def cmd_mcp_configure(args):
     _info("Start a new session for changes to take effect.")
 
 
+# ─── Static lazy-catalog snapshots ──────────────────────────────────────────
+
+def cmd_mcp_snapshot(args):
+    """Explicitly refresh generation-bound tool snapshots for lazy MCPs."""
+    from tools.mcp_tool import _parse_boolish, refresh_mcp_static_catalog
+
+    servers = _get_mcp_servers()
+    refresh_all = bool(getattr(args, "snapshot_all", False))
+    requested = str(getattr(args, "name", None) or "")
+    if not refresh_all and not requested:
+        _error("Specify a server name or pass --all")
+        raise SystemExit(2)
+
+    if refresh_all:
+        targets = [
+            (name, config)
+            for name, config in servers.items()
+            if _parse_boolish(config.get("enabled", True), default=True)
+        ]
+    else:
+        config = servers.get(requested)
+        if config is None:
+            _error(f"MCP server '{requested}' is not configured")
+            raise SystemExit(2)
+        targets = [(requested, config)]
+
+    if not targets:
+        _warning("No enabled MCP servers to snapshot")
+        return
+
+    failures = 0
+    for name, config in targets:
+        _info(f"Refreshing static MCP snapshot for '{name}'...")
+        try:
+            catalog = refresh_mcp_static_catalog(name, config)
+        except Exception as exc:
+            failures += 1
+            _error(f"{name}: {exc}")
+            continue
+        generation = catalog["generation"].removeprefix("sha256:")[:12]
+        _success(
+            f"{name}: {len(catalog['tools'])} tools, generation {generation}"
+        )
+
+    if failures:
+        raise SystemExit(1)
+    _info("Start a new session to use the refreshed snapshot.")
+
+
 # ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 def mcp_command(args):
@@ -1108,6 +1157,7 @@ def mcp_command(args):
         "config": cmd_mcp_configure,
         "login": cmd_mcp_login,
         "reauth": cmd_mcp_reauth,
+        "snapshot": cmd_mcp_snapshot,
     }
 
     handler = handlers.get(action)
@@ -1132,4 +1182,5 @@ def mcp_command(args):
         _info("hermes mcp configure <name>                   Toggle tools")
         _info("hermes mcp login <name>                       Re-authenticate OAuth")
         _info("hermes mcp reauth <name> | --all              Re-auth one or all OAuth servers")
+        _info("hermes mcp snapshot <name> | --all            Refresh lazy tool snapshots")
         print()
