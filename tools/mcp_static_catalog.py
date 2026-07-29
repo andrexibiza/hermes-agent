@@ -229,7 +229,6 @@ def write_catalog(catalog: dict[str, Any], *, root: Path | None = None) -> Path:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
-        os.chmod(path, 0o600)
         try:
             dir_fd = os.open(path.parent, os.O_RDONLY)
             try:

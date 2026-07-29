@@ -6863,6 +6863,138 @@ def _lazy_connect_error(error_type: str, message: str) -> str:
     )
 
 
+def _ensure_lazy_server_connected(
+    server_name: str,
+    *,
+    config: Optional[dict] = None,
+    expected: Optional[dict] = None,
+) -> Optional[str]:
+    """Connect and verify one lazy server; return a JSON error on failure."""
+    from tools.mcp_static_catalog import build_catalog
+
+    with _lock:
+        config = config or _lazy_server_configs.get(server_name)
+        expected = expected or _lazy_server_catalogs.get(server_name)
+        connected = _servers.get(server_name)
+        if connected is not None:
+            if (
+                expected is None
+                or getattr(connected, "_static_catalog_generation", None)
+                != expected["generation"]
+                or getattr(connected, "_static_catalog_stale", False)
+            ):
+                return _lazy_connect_error(
+                    "mcp_catalog_stale",
+                    f"Static MCP catalog for '{server_name}' became stale; refresh it and start a new session.",
+                )
+            return None
+        connect_lock = _lazy_connect_locks.setdefault(server_name, threading.Lock())
+    if config is None or expected is None:
+        return _lazy_connect_error(
+            "mcp_catalog_unavailable",
+            f"Static MCP catalog for '{server_name}' is unavailable; refresh it first.",
+        )
+
+    with connect_lock:
+        # Re-validate under the per-server lock: if _clear_lazy_server_catalog_registration
+        # ran between releasing _lock and acquiring connect_lock, our lock is now orphaned
+        # and config/catalog are gone. Bail out so the caller retries with fresh state.
+        with _lock:
+            if _lazy_connect_locks.get(server_name) is not connect_lock:
+                return _lazy_connect_error(
+                    "mcp_catalog_unavailable",
+                    f"Static MCP catalog for '{server_name}' was cleared; retry.",
+                )
+            # Re-read config/expected in case they were replaced
+            config = _lazy_server_configs.get(server_name)
+            expected = _lazy_server_catalogs.get(server_name)
+            if config is None or expected is None:
+                return _lazy_connect_error(
+                    "mcp_catalog_unavailable",
+                    f"Static MCP catalog for '{server_name}' is unavailable; refresh it first.",
+                )
+            connected = _servers.get(server_name)
+            if connected is not None:
+                if (
+                    getattr(connected, "_static_catalog_generation", None)
+                    != expected["generation"]
+                    or getattr(connected, "_static_catalog_stale", False)
+                ):
+                    return _lazy_connect_error(
+                        "mcp_catalog_stale",
+                        f"Static MCP catalog for '{server_name}' became stale; refresh it and start a new session.",
+                    )
+                return None
+            failed = _lazy_connect_failures.get(server_name)
+        if (
+            failed
+            and failed[2] == expected["generation"]
+            and time.monotonic() - failed[0] < _LAZY_CONNECT_FAILURE_COOLDOWN_S
+        ):
+            return failed[1]
+
+        server = None
+        try:
+            _ensure_mcp_loop()
+            connect_timeout = float(
+                config.get("connect_timeout", _DEFAULT_CONNECT_TIMEOUT)
+            )
+            with _lock:
+                _server_connecting.add(server_name)
+            connect_config = dict(config)
+            connect_config["_static_catalog_generation"] = expected["generation"]
+            server = _run_on_mcp_loop(
+                lambda: _connect_server(server_name, connect_config),
+                timeout=connect_timeout,
+            )
+            live_entries = _catalog_entries_from_server(server_name, server, config)
+            live_catalog = build_catalog(server_name, live_entries)
+            if live_catalog["generation"] != expected["generation"]:
+                stale_server = server
+                _run_on_mcp_loop(
+                    lambda: stale_server.shutdown(),
+                    timeout=min(connect_timeout, 15.0),
+                )
+                server = None
+                error = _lazy_connect_error(
+                    "mcp_catalog_stale",
+                    f"Static MCP catalog for '{server_name}' does not match the live server; refresh it before retrying.",
+                )
+                with _lock:
+                    _lazy_connect_failures[server_name] = (
+                        time.monotonic(), error, expected["generation"]
+                    )
+                return error
+
+            with _lock:
+                server._registered_tool_names = [
+                    entry["registry_name"] for entry in expected["tools"]
+                ]
+                _servers[server_name] = server
+                _server_connect_errors.pop(server_name, None)
+                _lazy_connect_failures.pop(server_name, None)
+            return None
+        except Exception as exc:
+            if server is not None:
+                try:
+                    _run_on_mcp_loop(lambda: server.shutdown(), timeout=5)
+                except Exception:
+                    logger.debug("Lazy MCP cleanup failed", exc_info=True)
+            message = _sanitize_error(
+                f"Lazy MCP server '{server_name}' failed to connect: {type(exc).__name__}: {_exc_str(exc)}"
+            )
+            error = _lazy_connect_error("mcp_lazy_connect_failed", message)
+            with _lock:
+                _server_connect_errors[server_name] = message
+                _lazy_connect_failures[server_name] = (
+                    time.monotonic(), error, expected["generation"]
+                )
+            return error
+        finally:
+            with _lock:
+                _server_connecting.discard(server_name)
+
+
 def _clear_lazy_server_catalog_registration(name: str) -> None:
     """Remove one lazy server's placeholders and process-local state."""
     from tools.registry import registry
