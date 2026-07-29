@@ -31,6 +31,7 @@ mcp_servers:
     # client_key: "/path/to/key.pem"  # optional, when key lives in a separate file
 
     enabled: true
+    lazy_connect: false
     timeout: 120
     connect_timeout: 60
     supports_parallel_tool_calls: false
@@ -54,6 +55,7 @@ mcp_servers:
 | `client_cert` | string or list | HTTP | mTLS client certificate. String = path to a PEM file containing cert + key. List `[cert, key]` = separate files. List `[cert, key, password]` = encrypted key |
 | `client_key` | string | HTTP | Path to the client private key, when `client_cert` is a string and the key is in a separate file |
 | `enabled` | bool | both | Skip the server entirely when false |
+| `lazy_connect` | bool | both | Load a generation-bound static tool snapshot at startup and defer the real MCP connection until the first tool call (default: `false`) |
 | `timeout` | number | both | Tool call timeout in seconds (default: `300`) |
 | `connect_timeout` | number | both | Initial connection timeout in seconds (default: `60`) |
 | `supports_parallel_tool_calls` | bool | both | Allow tools from this server to run concurrently |
@@ -197,6 +199,60 @@ Behavior:
 - no discovery
 - no tool registration
 - config remains in place for later reuse
+
+## True lazy startup with `lazy_connect`
+
+`lazy_connect: true` separates tool discovery from the live MCP transport. Hermes
+loads a previously verified static tool snapshot into its internal registry, but
+does not start a stdio child process or open an HTTP connection during startup.
+The first call to one of the server's tools establishes a single shared
+connection, fetches the live schemas, and compares their generation digest with
+the snapshot before dispatching.
+
+Create or refresh the snapshot explicitly:
+
+```bash
+hermes mcp snapshot github
+# or every enabled server
+hermes mcp snapshot --all
+```
+
+Then enable lazy startup:
+
+```yaml
+mcp_servers:
+  github:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    lazy_connect: true
+```
+
+Important behavior:
+
+- Missing, malformed, or tampered snapshots **do not** trigger an eager fallback.
+  The server remains disconnected and unavailable until an explicit snapshot
+  refresh succeeds.
+- The first concurrent calls share one connection attempt. A failed attempt is
+  cached briefly so concurrent callers do not respawn a broken server.
+- Live schema drift fails closed. Run `hermes mcp snapshot <name>` and start a
+  new session; Hermes never changes the current session's tool catalog.
+- Snapshots contain schemas and routing names only—never MCP commands, URLs,
+  headers, environment values, or credentials. They are written atomically with
+  owner-only permissions under the active `HERMES_HOME/mcp/tool_catalogs`
+  state directory.
+
+For the smallest model-visible surface, combine lazy startup with bare Tool
+Search bridges:
+
+```yaml
+tools:
+  tool_search:
+    enabled: on
+    listing: off
+```
+
+This keeps the raw MCP schemas internal. The model sees only `tool_search`,
+`tool_describe`, and `tool_call` for deferred capabilities.
 
 ## Empty result behavior
 

@@ -83,6 +83,10 @@ tools:
     listing_max_tokens: 4000
 ```
 
+For a bare bridge with no embedded tool-name manifest, set `listing: off`.
+This is useful with generation-bound lazy MCP snapshots when the session's
+stable behavior policy already instructs the model to search before calling.
+
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `auto` | `auto`/`on` activate whenever at least one deferrable tool exists; `off` disables entirely (everything stays eager). |
@@ -141,10 +145,11 @@ to any progressive-disclosure design, not specific to this implementation:
   less well; the published Anthropic numbers (49% → 74% on Opus 4 with
   vs. without tool search) show the upside but also that ~26 points of
   accuracy is still retrieval failure.
-- **Toolset edits invalidate cache.** Adding or removing a tool mid-
-  session changes the bridge tools' descriptions (which include the
-  count of deferred tools) and the catalog, so the prompt cache is
-  invalidated. This is the same trade-off as any toolset edit.
+- **Toolset edits require a new static-lazy session.** Normal eager MCP sessions
+  can still accept explicit reloads at a turn boundary. A session containing a
+  static-lazy MCP catalog instead pins its tool definitions and allowlist at
+  agent initialization; refreshed snapshots become visible only to new
+  sessions, preserving the prompt-cache prefix.
 
 ## Implementation details
 
@@ -153,10 +158,12 @@ to any progressive-disclosure design, not specific to this implementation:
   BM25 returns no positive-score hits, which protects against
   zero-IDF degenerate cases (e.g. searching `"github"` against a
   catalog where every tool name contains "github").
-- **Catalog is stateless across turns.** It rebuilds from the current
-  tool-defs list every assembly — no session-keyed `Map`. This avoids
-  the class of bug where a stored catalog drifts out of sync with the
-  live tool registry.
+- **Catalog input is session-scoped.** Each agent snapshots its granted raw
+  tool definitions before progressive-disclosure assembly. Bridge search,
+  describe, argument validation, and call authorization all read that same
+  snapshot instead of the process-global live registry. Static-lazy sessions
+  also lock model-visible tool refreshes so a first connection or server
+  notification cannot mutate an active conversation.
 - **The catalog is scoped to the session's toolsets.** `tool_search`,
   `tool_describe`, and `tool_call` only ever see and invoke tools the
   session was actually granted. A subagent, kanban worker, or gateway

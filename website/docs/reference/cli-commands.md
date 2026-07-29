@@ -1355,6 +1355,7 @@ Manage MCP (Model Context Protocol) server configurations and run Hermes as an M
 | `remove <name>` (alias: `rm`) | Remove an MCP server from config. |
 | `list` (alias: `ls`) | List configured MCP servers. |
 | `test <name>` | Test connection to an MCP server. |
+| `snapshot <name>` or `snapshot --all` | Refresh generation-bound tool schemas used by `lazy_connect` servers. |
 | `configure <name>` (alias: `config`) | Toggle tool selection for a server. |
 | `login <name>` | Force re-authentication for an OAuth-based MCP server. |
 
