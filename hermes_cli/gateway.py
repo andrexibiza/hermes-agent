@@ -1298,10 +1298,18 @@ def _parse_launchd_pid_from_list_output(output: str) -> int | None:
 def _probe_launchd_service_running() -> bool:
     """Return True when launchd is actively supervising the gateway process.
 
-    ``launchctl list <label>`` returns exit 0 whenever the service definition is
-    registered with launchd — even when ``state = not running`` (macOS 26+).
-    We additionally require a PID in the output to confirm launchd is actually
-    managing a live process, not just holding a static definition.
+    Primary probe is ``launchctl list <label>`` — exit 0 indicates the
+    service definition is registered, and a positive PID in the output
+    confirms launchd is actively managing a live process (not just holding
+    a static definition).
+
+    Fallback: on macOS 26+, ``launchctl list`` may show ``exit = -15`` in
+    column 2 for 5–30 seconds after ``hermes update`` (the previous
+    SIGTERM residue does not refresh in lockstep with the new PID).
+    When ``list`` yields no positive PID we fall back to ``launchctl print``
+    in the active domain — that command reads its view of the service
+    directly from launchd and reports the live ``pid = <N>`` line that
+    ``list`` may not yet have committed. See #75021 follow-up.
     """
     if not get_launchd_plist_path().exists():
         return False
@@ -1313,10 +1321,38 @@ def _probe_launchd_service_running() -> bool:
             timeout=10,
         )
     except subprocess.TimeoutExpired:
+        # ``list`` timing out is the same as no PID found — fall back to print.
+        result = None
+    if result is not None and result.returncode == 0:
+        list_pid = _parse_launchd_pid_from_list_output(result.stdout)
+        if list_pid is not None:
+            return True
+    # Fallback: domain-qualified launchctl print (see #75021).
+    try:
+        domain = _launchd_domain()
+    except Exception:
+        return False
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"{domain}/{get_launchd_label()}"],
+            capture_output=True,
+            text=True, encoding='utf-8', errors='replace',
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
     if result.returncode != 0:
         return False
-    return _parse_launchd_pid_from_list_output(result.stdout) is not None
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("pid") and "=" in stripped:
+            _, _, val = stripped.partition("=")
+            val = val.strip()
+            try:
+                return int(val) > 0
+            except ValueError:
+                return False
+    return False
 
 
 def get_gateway_runtime_snapshot(system: bool = False) -> GatewayRuntimeSnapshot:

@@ -2035,3 +2035,182 @@ class TestRetryLaunchctlBootstrapUntilRegistered:
         assert ok is False
         assert list_calls["n"] >= 1
 
+
+class TestProbeLaunchdServiceRunningFallback:
+    """Regression tests for ``_probe_launchd_service_running()`` (#75021 follow-up).
+
+    On macOS 26+, ``launchctl list <label>`` may show ``exit = -15`` in column 2
+    for 5–30 seconds after ``hermes update`` because the previous SIGTERM residue
+    does not refresh in lockstep with the new PID. The probe must fall back to
+    ``launchctl print`` and trust its ``pid = <N>`` line in that window.
+    """
+
+    def _setup(self, tmp_path, monkeypatch):
+        """Common setup: existing plist + macOS platform."""
+        plist_path = tmp_path / "ai.hermes.gateway.plist"
+        plist_path.write_text(gateway_cli.generate_launchd_plist(), encoding="utf-8")
+        monkeypatch.setattr(gateway_cli, "get_launchd_plist_path", lambda: plist_path)
+        # _launchd_domain() caches; reset between tests.
+        gateway_cli._resolved_launchd_domain = None
+        monkeypatch.setattr(os, "getuid", lambda: 501)
+
+    def test_list_with_positive_pid_returns_true_without_print(self, tmp_path, monkeypatch):
+        """Happy path: ``list`` exit 0 with a positive PID -> True, no print probe."""
+        self._setup(tmp_path, monkeypatch)
+        run_calls = []
+
+        def fake_run(cmd, **kwargs):
+            run_calls.append(cmd)
+            if cmd[:2] == ["launchctl", "list"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='{\n    "Label" = "ai.hermes.gateway";\n    "PID" = 12345;\n}',
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is True
+        assert all(call[:2] != ["launchctl", "print"] for call in run_calls)
+
+    def test_list_exit_nonzero_falls_back_to_print_with_pid(self, tmp_path, monkeypatch):
+        """The macOS 26+ artifact: ``list`` rc=1 but ``print`` reports a live PID."""
+        self._setup(tmp_path, monkeypatch)
+        run_calls = []
+
+        def fake_run(cmd, **kwargs):
+            run_calls.append(cmd)
+            if cmd[:2] == ["launchctl", "list"]:
+                # rc=1 with no PID column == the SIGTERM residue window
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            if cmd[:2] == ["launchctl", "print"]:
+                # ``_launchd_domain()`` first probes ``gui/<uid>``; let it succeed there
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="gui/501/ai.hermes.gateway = {\n    state = running\n    pid = 59038\n}\n",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is True
+        # Verify the print probe actually happened
+        assert any(call[:2] == ["launchctl", "print"] for call in run_calls)
+
+    def test_list_exit_zero_no_pid_falls_back_to_print(self, tmp_path, monkeypatch):
+        """``list`` rc=0 but no PID field (registered definition, not managing) -> print."""
+        self._setup(tmp_path, monkeypatch)
+        run_calls = []
+
+        def fake_run(cmd, **kwargs):
+            run_calls.append(cmd)
+            if cmd[:2] == ["launchctl", "list"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='{\n    "Label" = "ai.hermes.gateway";\n    "OnDemand" = true;\n}',
+                    stderr="",
+                )
+            if cmd[:2] == ["launchctl", "print"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="gui/501/ai.hermes.gateway = {\n    state = running\n    pid = 59038\n}\n",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is True
+
+    def test_both_list_and_print_report_no_pid_returns_false(self, tmp_path, monkeypatch):
+        """Genuinely down: list has no PID and print has no PID -> False."""
+        self._setup(tmp_path, monkeypatch)
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:2] == ["launchctl", "list"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='{\n    "Label" = "ai.hermes.gateway";\n    "OnDemand" = true;\n}',
+                    stderr="",
+                )
+            if cmd[:2] == ["launchctl", "print"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="gui/501/ai.hermes.gateway = {\n    state = not running\n}\n",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is False
+
+    def test_print_pid_zero_is_not_running(self, tmp_path, monkeypatch):
+        """``pid = 0`` in ``print`` output must NOT be treated as running."""
+        self._setup(tmp_path, monkeypatch)
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:2] == ["launchctl", "list"]:
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            if cmd[:2] == ["launchctl", "print"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="gui/501/ai.hermes.gateway = {\n    state = not running\n    pid = 0\n}\n",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is False
+
+    def test_no_plist_returns_false_without_running_any_command(self, tmp_path, monkeypatch):
+        """Missing plist -> False without launching subprocess."""
+        # tmp_path has no plist; setup only patches plist helper, write none.
+        monkeypatch.setattr(
+            gateway_cli,
+            "get_launchd_plist_path",
+            lambda: tmp_path / "does-not-exist.plist",
+        )
+        run_called = {"v": False}
+
+        def fake_run(*args, **kwargs):
+            run_called["v"] = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is False
+        assert run_called["v"] is False
+
+    def test_list_timeout_falls_back_to_print(self, tmp_path, monkeypatch):
+        """``launchctl list`` timing out must not break the probe; print is tried."""
+        self._setup(tmp_path, monkeypatch)
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:2] == ["launchctl", "list"]:
+                raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 10))
+            if cmd[:2] == ["launchctl", "print"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="gui/501/ai.hermes.gateway = {\n    state = running\n    pid = 59038\n}\n",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is True
+
+    def test_print_timeout_returns_false(self, tmp_path, monkeypatch):
+        """Both probes timing out -> False."""
+        self._setup(tmp_path, monkeypatch)
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 10))
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is False
