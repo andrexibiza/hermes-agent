@@ -56,6 +56,7 @@ class GatewayDiagnosticEvent:
     profile: Optional[str] = None
     version: Optional[str] = None
     severity: str = "warning"
+    reason: Optional[str] = None
     ts_ns: int = field(default_factory=_now_ns)
     source_logger: Optional[str] = None
 

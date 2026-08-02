@@ -38,6 +38,7 @@ _DIAGNOSTIC_ATTRIBUTE_KEYS = frozenset({
     "platform",
     "old_state",
     "new_state",
+    "reason",
     "version",
     "severity",
 })
