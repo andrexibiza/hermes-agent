@@ -11133,14 +11133,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             write_runtime_status(gateway_state="starting", exit_reason=None)
         except Exception:
             pass
-        try:
-            from hermes_cli.config import load_config
-            from agent.monitoring.gateway_health_export import start_gateway_health_export
-            self._gateway_health_export_runtime = start_gateway_health_export(load_config())
-            if getattr(self._gateway_health_export_runtime, "enabled", False):
-                logger.info("Gateway health OTLP export: enabled")
-        except Exception:
-            logger.debug("gateway health OTLP export startup failed", exc_info=True)
+        _start_gateway_monitoring(self)
 
         # Log any active supply-chain security advisories. Operators see this
         # in gateway.log and `hermes status` surfaces it; we do NOT block
@@ -27414,8 +27407,46 @@ async def _await_thread_exit(
     return not thread.is_alive()
 
 
+def _start_gateway_monitoring(runner: Any) -> None:
+    """Start health export and alert notifier in independent fail-open blocks."""
+    try:
+        from hermes_cli.config import load_config
+        from agent.monitoring.gateway_health_export import start_gateway_health_export
+
+        runner._gateway_health_export_runtime = start_gateway_health_export(load_config())
+        if getattr(runner._gateway_health_export_runtime, "enabled", False):
+            logger.info("Gateway health OTLP export: enabled")
+    except Exception:
+        try:
+            logger.debug("gateway health OTLP export startup failed", exc_info=True)
+        except Exception:
+            pass
+
+    # Alert notifier: subscribe to monitoring emitter, push alerts to Feishu
+    # incoming webhook. Fail-silent if webhook is unconfigured or unavailable.
+    try:
+        from hermes_cli.config import load_config
+        from agent.monitoring.alert_notifier import start_alert_notifier
+
+        start_alert_notifier(load_config())
+    except Exception:
+        try:
+            logger.debug("alert notifier startup failed", exc_info=True)
+        except Exception:
+            pass
+
+
 def _shutdown_gateway_health_export(runner: Any) -> None:
     """Idempotently drain and detach Gateway Health OTLP export."""
+    # Alert notifier: unsubscribe + drain thread pool (fail-silent).
+    try:
+        from agent.monitoring.alert_notifier import stop_alert_notifier
+        stop_alert_notifier()
+    except Exception:
+        try:
+            logger.debug("alert notifier shutdown failed", exc_info=True)
+        except Exception:
+            pass
     runtime = getattr(runner, "_gateway_health_export_runtime", None)
     if runtime is None:
         return
@@ -27423,7 +27454,10 @@ def _shutdown_gateway_health_export(runner: Any) -> None:
     try:
         runtime.shutdown()
     except Exception:
-        logger.debug("gateway health OTLP export shutdown failed", exc_info=True)
+        try:
+            logger.debug("gateway health OTLP export shutdown failed", exc_info=True)
+        except Exception:
+            pass
 
 
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
