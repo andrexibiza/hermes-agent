@@ -2201,6 +2201,27 @@ def _windows_cron_python_invocation(python_exe: str) -> tuple[str, dict[str, str
     return str(interpreter), env_overlay
 
 
+def _bash_script_arg(path: Path) -> str:
+    """Return the script path in the form the selected bash accepts.
+
+    On native Windows the resolved script path is a backslash form like
+    ``C:\\Users\\...\\scripts\\watchdog.sh``.  Git Bash / MSYS treats each
+    backslash as an escape character, collapsing the argument to
+    ``C:Users...scriptswatchdog.sh`` so bash exits 127 with "No such file
+    or directory" — every ``.sh``/``.bash`` no_agent cron on Windows.
+
+    Convert to the MSYS form (``/c/Users/.../scripts/watchdog.sh``) that
+    git-bash understands natively.  On POSIX ``str(path)`` is already a
+    valid absolute path, so it is passed through unchanged.
+    """
+    raw = str(path)
+    if sys.platform != "win32":
+        return raw
+    if len(raw) >= 2 and raw[1] == ":":
+        return "/" + raw[0].lower() + raw[2:].replace("\\", "/")
+    return raw.replace("\\", "/")
+
+
 def _run_job_script(
     script_path: str,
     workdir: Optional[str] = None,
@@ -2288,7 +2309,7 @@ def _run_job_script(
                 "On Windows, install Git for Windows (which ships Git Bash) "
                 "or rewrite the script as Python (.py)."
         )
-        argv = [_bash, str(path)]
+        argv = [_bash, _bash_script_arg(path)]
         env_overlay: dict[str, str] = {}
     else:
         python_exe, env_overlay = _windows_cron_python_invocation(sys.executable)
