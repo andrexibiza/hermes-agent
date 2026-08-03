@@ -170,7 +170,7 @@ def test_run_job_script_windows_argv_uses_msys_path(hermes_env, monkeypatch):
     from cron.scheduler import _run_job_script
 
     script_path = hermes_env / "scripts" / "nightly.sh"
-    script_path.write_text('printf "ok\\n"\n')
+    script_path.write_text('printf "ok\\n"\n', encoding="utf-8")
 
     captured = {}
 
@@ -203,7 +203,7 @@ def test_run_job_script_posix_argv_unchanged(hermes_env, monkeypatch):
     from cron.scheduler import _run_job_script
 
     script_path = hermes_env / "scripts" / "nightly.sh"
-    script_path.write_text('printf "ok\\n"\n')
+    script_path.write_text('printf "ok\\n"\n', encoding="utf-8")
 
     captured = {}
 
