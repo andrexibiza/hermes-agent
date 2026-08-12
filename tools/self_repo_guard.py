@@ -534,18 +534,23 @@ def _mutates_worktree(subcommand: str, args: list[str]) -> bool:
         )
         return worktree or not staged
     if subcommand == "apply":
-        # `--check`/`--stat`/`--numstat`/`--summary` only report what the
-        # patch WOULD do; every other form writes the patched content to
-        # disk exactly like the worktree mutations above.
+        # These options suppress application unless `--apply` overrides them.
+        # Only inspect options before `--`; later values are patch filenames.
+        options = args[: args.index("--")] if "--" in args else args
         inspect_only = frozenset({"--check", "--stat", "--numstat", "--summary"})
-        return not any(arg in inspect_only for arg in args)
+        return "--apply" in options or not any(arg in inspect_only for arg in options)
     if subcommand == "am":
-        # `git am` applies-and-commits a patch series (mutating the tree AND
-        # HEAD) for every form except pure session inspection; --abort and
-        # --skip both reset tracked files to recover from a stopped am, so
-        # they stay classified as mutating too.
-        inspect_only = frozenset({"--show-current-patch"})
-        return not any(arg in inspect_only for arg in args)
+        # `git am` mutates the tree and HEAD except when inspecting the patch
+        # from an in-progress session. Values after `--` are mailbox names.
+        options = args[: args.index("--")] if "--" in args else args
+        inspect_only = frozenset(
+            {
+                "--show-current-patch",
+                "--show-current-patch=diff",
+                "--show-current-patch=raw",
+            }
+        )
+        return not any(arg in inspect_only for arg in options)
     return subcommand in _WORKTREE_MUTATIONS
 
 
