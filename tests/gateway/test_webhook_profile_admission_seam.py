@@ -4,7 +4,6 @@ import typing
 
 from aiohttp import web
 
-from gateway.platforms.base import BasePlatformAdapter
 from gateway.platforms.webhook import WebhookAdapter, _PROFILE_REJECTED as legacy_rejected
 from gateway.platforms.webhook_profile_admission import (
     WebhookProfileAdmissionMixin,
@@ -13,11 +12,11 @@ from gateway.platforms.webhook_profile_admission import (
 
 
 def test_webhook_composes_profile_admission_mixin_without_wrappers():
-    assert WebhookAdapter.__mro__[:3] == (
-        WebhookAdapter,
-        WebhookProfileAdmissionMixin,
-        BasePlatformAdapter,
-    )
+    # The adapter must compose the profile-admission mixin into its MRO and
+    # resolve its methods through it. Assert membership + identity rather than
+    # an exact prefix, so adding further mixins (e.g. WebhookAuthMixin) does
+    # not break the seam contract.
+    assert WebhookProfileAdmissionMixin in WebhookAdapter.__mro__
     assert (
         WebhookAdapter._resolve_request_profile
         is WebhookProfileAdmissionMixin._resolve_request_profile
