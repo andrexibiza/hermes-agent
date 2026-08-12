@@ -1,0 +1,213 @@
+{
+  "exactHead": "47bc2b1ba0641aad8a3645ad823a8c6b2a5b161e",
+  "generatedAt": "2026-08-12T22:15:10.718Z",
+  "harness": "real UsageView + real normalization + real styles/providers + production-shaped raw RPC fixtures",
+  "records": [
+    {
+      "deck": "overview",
+      "viewport": {
+        "name": "wide",
+        "width": 1440,
+        "height": 1000
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-overview-wide.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 1440,
+        "bodyScrollWidth": 1440,
+        "documentClientWidth": 1440,
+        "documentScrollWidth": 1440,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 1956,
+        "mainScrollHeight": 1956,
+        "clipped": []
+      }
+    },
+    {
+      "deck": "routes",
+      "viewport": {
+        "name": "wide",
+        "width": 1440,
+        "height": 1000
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-routes-wide.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 1440,
+        "bodyScrollWidth": 1440,
+        "documentClientWidth": 1440,
+        "documentScrollWidth": 1440,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 1000,
+        "mainScrollHeight": 1000,
+        "clipped": [
+          "Inspect"
+        ]
+      }
+    },
+    {
+      "deck": "ledger",
+      "viewport": {
+        "name": "wide",
+        "width": 1440,
+        "height": 1000
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-ledger-wide.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 1440,
+        "bodyScrollWidth": 1440,
+        "documentClientWidth": 1440,
+        "documentScrollWidth": 1440,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 1000,
+        "mainScrollHeight": 1000,
+        "clipped": []
+      }
+    },
+    {
+      "deck": "overview",
+      "viewport": {
+        "name": "medium",
+        "width": 1024,
+        "height": 768
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-overview-medium.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 1024,
+        "bodyScrollWidth": 1024,
+        "documentClientWidth": 1024,
+        "documentScrollWidth": 1024,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 2407,
+        "mainScrollHeight": 2407,
+        "clipped": [
+          "Jul 13"
+        ]
+      }
+    },
+    {
+      "deck": "routes",
+      "viewport": {
+        "name": "medium",
+        "width": 1024,
+        "height": 768
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-routes-medium.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 1024,
+        "bodyScrollWidth": 1024,
+        "documentClientWidth": 1024,
+        "documentScrollWidth": 1024,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 1025,
+        "mainScrollHeight": 1025,
+        "clipped": [
+          "Inspect"
+        ]
+      }
+    },
+    {
+      "deck": "ledger",
+      "viewport": {
+        "name": "medium",
+        "width": 1024,
+        "height": 768
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-ledger-medium.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 1024,
+        "bodyScrollWidth": 1024,
+        "documentClientWidth": 1024,
+        "documentScrollWidth": 1024,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 972,
+        "mainScrollHeight": 972,
+        "clipped": []
+      }
+    },
+    {
+      "deck": "overview",
+      "viewport": {
+        "name": "narrow",
+        "width": 390,
+        "height": 844
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-overview-narrow.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 390,
+        "bodyScrollWidth": 390,
+        "documentClientWidth": 390,
+        "documentScrollWidth": 390,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 3433,
+        "mainScrollHeight": 3433,
+        "clipped": []
+      }
+    },
+    {
+      "deck": "routes",
+      "viewport": {
+        "name": "narrow",
+        "width": 390,
+        "height": 844
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-routes-narrow.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 390,
+        "bodyScrollWidth": 390,
+        "documentClientWidth": 390,
+        "documentScrollWidth": 390,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 1386,
+        "mainScrollHeight": 1386,
+        "clipped": [
+          "Inspect"
+        ]
+      }
+    },
+    {
+      "deck": "ledger",
+      "viewport": {
+        "name": "narrow",
+        "width": 390,
+        "height": 844
+      },
+      "screenshot": "C:\\HERMES-TEMP\\usage-dashboard-preview-47bc2b1ba\\usage-ledger-narrow.png",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "probe": {
+        "bodyClientWidth": 390,
+        "bodyScrollWidth": 390,
+        "documentClientWidth": 390,
+        "documentScrollWidth": 390,
+        "horizontalOverflow": false,
+        "mainOverflowY": "visible",
+        "mainClientHeight": 1436,
+        "mainScrollHeight": 1436,
+        "clipped": []
+      }
+    }
+  ]
+}
