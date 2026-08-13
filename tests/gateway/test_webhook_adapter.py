@@ -173,7 +173,9 @@ class TestValidateSignature:
         adapter = _make_adapter()
         secret = "gl-tökén-välue"
         req = _mock_request(headers={"X-Gitlab-Token": secret})
-        assert adapter._validate_signature(req, b"{}", secret) is True
+        assert adapter._validate_signature(
+            req, b"{}", secret, signature_mode="gitlab"
+        ) is True
 
     def test_validate_no_secret_allows_all(self):
         """When the secret is empty/falsy, the validator is never even called
@@ -254,11 +256,15 @@ class TestValidateSignature:
         secret = "generic-secret"
         sig = _generic_signature(body, secret)
         original_request = _mock_request(headers={"X-Webhook-Signature": sig})
-        assert adapter._validate_signature(original_request, body, secret) is True
+        assert adapter._validate_signature(
+            original_request, body, secret, signature_mode="generic_v1"
+        ) is True
         # "Time passes" — nothing about a V1 signature depends on time, so
         # a captured pair replayed much later still validates.
         replayed_request = _mock_request(headers={"X-Webhook-Signature": sig})
-        assert adapter._validate_signature(replayed_request, body, secret) is True
+        assert adapter._validate_signature(
+            replayed_request, body, secret, signature_mode="generic_v1"
+        ) is True
 
 
     def test_validate_svix_signature_raw_secret_valid(self):
@@ -276,7 +282,9 @@ class TestValidateSignature:
                 "svix-signature": sig,
             }
         )
-        assert adapter._validate_signature(req, body, secret) is True
+        assert adapter._validate_signature(
+            req, body, secret, signature_mode="svix"
+        ) is True
 
 
 # ===================================================================
@@ -956,6 +964,7 @@ class TestMultiplexProfileWebhookAuthentication:
                 "gh": {
                     "profile": "worker",
                     "secret": route_secret,
+                    "signature_mode": "github",
                     "events": ["pull_request"],
                     "prompt": "PR: {action}",
                 }

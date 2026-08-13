@@ -30,6 +30,25 @@ def _hmac_str_equal(provided: str, expected: str) -> bool:
     return hmac.compare_digest(provided.encode(), expected.encode())
 
 
+# Replay tolerance in seconds applied to timestamp-bearing schemes (generic V2
+# and Svix). Kept as a module constant so tests can patch it deterministically.
+DEFAULT_REPLAY_TOLERANCE_SECONDS = 300
+
+# Supported provider schemes. Routes bind to exactly one of these via
+# ``signature_mode``; validation never infers a scheme from request headers.
+SIGNATURE_MODES = frozenset(
+    {"github", "gitlab", "svix", "generic_v2", "generic_v1"}
+)
+
+
+
+
+def _header(request: "web.Request", name: str) -> str:
+    return (
+        request.headers.get(name, "")
+        or request.headers.get(name.lower(), "")
+        or request.headers.get(name.upper(), "")
+    )
 
 
 class WebhookAuthMixin:
@@ -39,27 +58,91 @@ class WebhookAuthMixin:
         super().__init__(*args, **kwargs)
         self._v1_signature_warned: set[str] = set()
 
-    def _validate_signature(
-        self, request: "web.Request", body: bytes, secret: str
-    ) -> bool:
-        """Validate webhook signature (GitHub, GitLab, Svix, generic HMAC-SHA256)."""
-        def _header(name: str) -> str:
-            return (
-                request.headers.get(name, "")
-                or request.headers.get(name.lower(), "")
-                or request.headers.get(name.upper(), "")
-            )
+    def _verify_github(self, request, body, secret) -> bool:
+        gh_sig = _header(request, "X-Hub-Signature-256")
+        if not gh_sig:
+            return False
+        expected = "sha256=" + hmac.new(
+            secret.encode(), body, hashlib.sha256
+        ).hexdigest()
+        return _hmac_str_equal(gh_sig, expected)
 
-        # Svix / AgentMail:
-        #   svix-id: msg_...
-        #   svix-timestamp: unix seconds
-        #   svix-signature: v1,<base64-hmac> [v1,<base64-hmac> ...]
-        # Signed content is: "{id}.{timestamp}.{raw_body}".  Svix secrets
-        # usually start with "whsec_" and the remainder is base64-encoded.
-        svix_id = _header("svix-id")
-        svix_timestamp = _header("svix-timestamp")
-        svix_signature = _header("svix-signature")
-        if svix_id or svix_timestamp or svix_signature:
+    def _verify_gitlab(self, request, secret) -> bool:
+        gl_token = _header(request, "X-Gitlab-Token")
+        if not gl_token:
+            return False
+        return _hmac_str_equal(gl_token, secret)
+
+    def _verify_generic_v2(self, request, body, secret) -> bool:
+        v2_sig = _header(request, "X-Webhook-Signature-V2")
+        if not v2_sig:
+            return False
+        v2_timestamp = _header(request, "X-Webhook-Timestamp")
+        if not v2_timestamp:
+            logger.warning(
+                "[webhook] Route '%s' sent X-Webhook-Signature-V2 with "
+                "no X-Webhook-Timestamp — rejecting rather than "
+                "falling back to legacy V1",
+                request.match_info.get("route_name", ""),
+            )
+            return False
+        try:
+            ts = int(v2_timestamp)
+        except (TypeError, ValueError):
+            return False
+        if abs(int(time.time()) - ts) > DEFAULT_REPLAY_TOLERANCE_SECONDS:
+            logger.warning(
+                "[webhook] Route '%s' generic HMAC V2 timestamp outside replay window",
+                request.match_info.get("route_name", ""),
+            )
+            return False
+        signed_content = v2_timestamp.encode() + b"." + body
+        expected_v2 = hmac.new(
+            secret.encode(), signed_content, hashlib.sha256
+        ).hexdigest()
+        return _hmac_str_equal(v2_sig, expected_v2)
+
+    def _verify_generic_v1(self, request, body, secret) -> bool:
+        generic_sig = _header(request, "X-Webhook-Signature")
+        if not generic_sig:
+            return False
+        expected = hmac.new(
+            secret.encode(), body, hashlib.sha256
+        ).hexdigest()
+        route_name = request.match_info.get("route_name", "")
+        if route_name not in self._v1_signature_warned:
+            self._v1_signature_warned.add(route_name)
+            logger.warning(
+                "[webhook] Route '%s' uses legacy body-only HMAC (no "
+                "timestamp), which is vulnerable to replay attacks. Add "
+                "an 'X-Webhook-Timestamp' header and switch to "
+                "'X-Webhook-Signature-V2' (HMAC-SHA256 of "
+                "'<timestamp>.<body>').",
+                route_name,
+            )
+        return _hmac_str_equal(generic_sig, expected)
+
+    def _validate_signature(
+        self,
+        request: "web.Request",
+        body: bytes,
+        secret: str,
+        signature_mode: str = "generic_v2",
+    ) -> bool:
+        """Validate webhook signature for an explicit provider scheme.
+
+        The configured ``signature_mode`` decides the scheme; a route never
+        infers a weaker scheme from attacker-controlled headers. An unknown or
+        empty mode fails closed.
+        """
+        if signature_mode == "github":
+            return self._verify_github(request, body, secret)
+        if signature_mode == "gitlab":
+            return self._verify_gitlab(request, secret)
+        if signature_mode == "svix":
+            svix_id = _header(request, "svix-id")
+            svix_timestamp = _header(request, "svix-timestamp")
+            svix_signature = _header(request, "svix-signature")
             return self._validate_svix_signature(
                 body=body,
                 secret=secret,
@@ -67,90 +150,15 @@ class WebhookAuthMixin:
                 timestamp=svix_timestamp,
                 signature_header=svix_signature,
             )
+        if signature_mode == "generic_v1":
+            return self._verify_generic_v1(request, body, secret)
+        if signature_mode == "generic_v2":
+            return self._verify_generic_v2(request, body, secret)
 
-        # GitHub: X-Hub-Signature-256 = sha256=<hex>
-        gh_sig = request.headers.get("X-Hub-Signature-256", "")
-        if gh_sig:
-            expected = "sha256=" + hmac.new(
-                secret.encode(), body, hashlib.sha256
-            ).hexdigest()
-            return _hmac_str_equal(gh_sig, expected)
-
-        # GitLab: X-Gitlab-Token = <plain secret>
-        gl_token = request.headers.get("X-Gitlab-Token", "")
-        if gl_token:
-            return _hmac_str_equal(gl_token, secret)
-
-        # Generic V2: X-Webhook-Signature-V2 = <hex HMAC-SHA256 of "<timestamp>.<body>">
-        #             X-Webhook-Timestamp = <unix seconds> (required for V2)
-        # Checked independently of (and before) legacy V1 below — a sender
-        # that only ever sends V2 headers must still validate here; nesting
-        # this inside `if generic_sig:` would silently skip V2-only senders.
-        #
-        # The presence of X-Webhook-Signature-V2 alone selects V2 mode and
-        # commits to it — it must NOT fall through to the V1 branch just
-        # because the timestamp is missing/malformed/expired. A sender
-        # migrating to V2 typically sends both V1 and V2 headers together
-        # for compatibility; if incomplete V2 fell through to V1, an
-        # attacker who captured one such mixed request could strip the
-        # X-Webhook-Timestamp header from a replay and have it validate
-        # against the still-present, still-unprotected V1 signature instead
-        # — silently downgrading a V2-protected request back to the replay
-        # hole V2 exists to close.
-        v2_sig = request.headers.get("X-Webhook-Signature-V2", "")
-        if v2_sig:
-            v2_timestamp = request.headers.get("X-Webhook-Timestamp", "")
-            if not v2_timestamp:
-                logger.warning(
-                    "[webhook] Route '%s' sent X-Webhook-Signature-V2 with "
-                    "no X-Webhook-Timestamp — rejecting rather than "
-                    "falling back to legacy V1",
-                    request.match_info.get("route_name", ""),
-                )
-                return False
-            try:
-                ts = int(v2_timestamp)
-            except (TypeError, ValueError):
-                return False
-            if abs(int(time.time()) - ts) > 300:
-                logger.warning(
-                    "[webhook] Route '%s' generic HMAC V2 timestamp outside replay window",
-                    request.match_info.get("route_name", ""),
-                )
-                return False
-            signed_content = v2_timestamp.encode() + b"." + body
-            expected_v2 = hmac.new(
-                secret.encode(), signed_content, hashlib.sha256
-            ).hexdigest()
-            return _hmac_str_equal(v2_sig, expected_v2)
-
-        # Generic V1 (legacy): X-Webhook-Signature = <hex HMAC-SHA256 of body>
-        # (deprecated — no replay protection, since the signature only
-        # covers the body: a captured (body, signature) pair replays
-        # indefinitely with no timestamp binding it to a specific delivery.)
-        # Only reachable when X-Webhook-Signature-V2 was not sent at all —
-        # see the guard above.
-        generic_sig = request.headers.get("X-Webhook-Signature", "")
-        if generic_sig:
-            expected = hmac.new(
-                secret.encode(), body, hashlib.sha256
-            ).hexdigest()
-            route_name = request.match_info.get("route_name", "")
-            if route_name not in self._v1_signature_warned:
-                self._v1_signature_warned.add(route_name)
-                logger.warning(
-                    "[webhook] Route '%s' uses legacy body-only HMAC (no "
-                    "timestamp), which is vulnerable to replay attacks. Add "
-                    "an 'X-Webhook-Timestamp' header and switch to "
-                    "'X-Webhook-Signature-V2' (HMAC-SHA256 of "
-                    "'<timestamp>.<body>').",
-                    route_name,
-                )
-            return _hmac_str_equal(generic_sig, expected)
-
-        # No recognised signature header but secret is configured → reject
-        logger.debug(
-            "[webhook] Secret configured but no signature header found"
+        logger.warning(
+            "[webhook] Route '%s' has unsupported signature_mode %r",
+            request.match_info.get("route_name", ""),
+            signature_mode,
         )
         return False
 

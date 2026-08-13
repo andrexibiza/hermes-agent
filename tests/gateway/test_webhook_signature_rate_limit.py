@@ -75,6 +75,7 @@ class TestSignatureBeforeRateLimit:
         routes = {
             route_name: {
                 "secret": secret,
+                "signature_mode": "github",
                 "events": ["push"],
                 "prompt": "Event: {event}",
                 "deliver": "log",

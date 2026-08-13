@@ -91,6 +91,7 @@ class TestGitHubPRWebhook:
         routes = {
             "github-pr": {
                 "secret": secret,
+                "signature_mode": "github",
                 "events": ["pull_request"],
                 "prompt": (
                     "Review PR #{number} by {sender.login}: "

@@ -622,7 +622,10 @@ class WebhookAdapter(WebhookAuthMixin, WebhookProfileAdmissionMixin, BasePlatfor
                 status=403,
             )
         if secret != _INSECURE_NO_AUTH:
-            if not self._validate_signature(request, raw_body, secret):
+            sig_mode = route_config.get("signature_mode", "generic_v2")
+            if not self._validate_signature(
+                request, raw_body, secret, signature_mode=sig_mode
+            ):
                 logger.warning(
                     "[webhook] Invalid signature for route %s", route_name
                 )
