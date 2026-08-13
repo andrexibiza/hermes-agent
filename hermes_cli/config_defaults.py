@@ -4391,6 +4391,13 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "messaging",
     },
+    "WEBHOOK_HOST": {
+        "description": "Host/interface for the webhook HTTP server (empty binds all interfaces).",
+        "prompt": "Webhook bind host",
+        "url": None,
+        "password": False,
+        "category": "messaging",
+    },
     "WEBHOOK_PORT": {
         "description": "Port for the webhook HTTP server (default: 8644).",
         "prompt": "Webhook port",
