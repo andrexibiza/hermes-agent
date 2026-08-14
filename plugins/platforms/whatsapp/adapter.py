@@ -16,11 +16,13 @@ with different backends via a bridge pattern.
 """
 
 import asyncio
+import errno
 import logging
 import os
 import platform
 import re
 import signal
+import stat
 import subprocess
 import tempfile
 
@@ -189,7 +191,26 @@ def _kill_stale_bridge_by_pidfile(session_path: Path) -> None:
     try:
         # Format: line 1 = pid, optional line 2 = kernel start time. Legacy
         # files written before the guard existed have only the pid.
-        lines = pid_file.read_text(encoding="utf-8").split("\n")
+        # Open with O_NONBLOCK so a hostile FIFO fails fast with ENXIO
+        # instead of blocking startup until a writer opens the other end;
+        # O_NOFOLLOW rejects symlinks, and only a single-link regular file
+        # is ever read.
+        fd = os.open(
+            pid_file,
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened_stat = os.fstat(fd)
+            if not stat.S_ISREG(opened_stat.st_mode):
+                raise OSError(errno.ENXIO, "bridge.pid is not a regular file")
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = -1
+                lines = handle.read().split("\n")
+        finally:
+            if fd >= 0:
+                os.close(fd)
         pid = int(lines[0].strip())
         if len(lines) > 1 and lines[1].strip():
             recorded_start = int(lines[1].strip())
