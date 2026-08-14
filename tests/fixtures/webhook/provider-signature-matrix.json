@@ -1,0 +1,48 @@
+{
+  "body": "{\"event\":\"push\",\"repository\":\"hermes-agent\"}",
+  "cases": [
+    {
+      "expected": true,
+      "mode": "github",
+      "name": "github"
+    },
+    {
+      "expected": true,
+      "mode": "gitlab",
+      "name": "gitlab"
+    },
+    {
+      "expected": true,
+      "mode": "svix",
+      "name": "svix"
+    },
+    {
+      "expected": true,
+      "mode": "generic_v2",
+      "name": "generic-v2"
+    },
+    {
+      "expected": true,
+      "mode": "generic_v1",
+      "name": "generic-v1-explicit"
+    },
+    {
+      "expected": false,
+      "mode": "generic_v2",
+      "name": "v1-under-v2"
+    },
+    {
+      "expected": false,
+      "mode": "gitlab",
+      "name": "github-under-gitlab"
+    },
+    {
+      "expected": false,
+      "mode": "unknown",
+      "name": "unknown-mode"
+    }
+  ],
+  "description": "Hermes provider signature matrix: explicit provider-selected cases and downgrade attacks. Hindsight integrations use the documented generic_v2 recipe unless an upstream provider-specific signing fixture is supplied.",
+  "schema_version": 1,
+  "secret": "fixture-secret"
+}

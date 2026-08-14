@@ -1,0 +1,13 @@
+{
+  "branch": "wr/task-09-signature-contract",
+  "expected_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+  "head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+  "mode": "existing_pr",
+  "phase": "preflight",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\task-09-signature-contract",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 9,
+  "task_title": "Explicit replay-safe provider signatures",
+  "timestamp": "2026-08-14T23:17:47Z"
+}

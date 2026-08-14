@@ -1,0 +1,15 @@
+{
+  "branch": "wr/task-09-signature-contract",
+  "changed_files": [
+    "tests/fixtures/webhook/provider-signature-matrix.json",
+    "tests/gateway/test_webhook_provider_fixtures.py"
+  ],
+  "head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+  "head_before_commit": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+  "phase": "verification",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\task-09-signature-contract",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 9,
+  "timestamp": "2026-08-14T23:18:49Z"
+}
