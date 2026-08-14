@@ -863,29 +863,29 @@ def _moa_provider_row(current_provider: str = "") -> dict | None:
 def _freemaxxing_provider_row(current_provider: str = "") -> dict | None:
     """Build the virtual ``freemaxxing`` provider row for model pickers.
 
-    Freemaxxing is a dynamic alias that resolves to the best available free
-    model across OpenRouter, Kilo, Nous, etc. at runtime. It appears as a
-    single virtual provider entry — the model IS the provider (like MOA).
+    The model ID stays opaque inside Hermes core. The local proxy owns live
+    catalog inspection, backend health, concrete-model selection, cooldowns,
+    and failover.
     """
     try:
-        from hermes_cli.model_switch import _discover_freemaxxing_model
-        
-        best = _discover_freemaxxing_model()
-        if not best:
-            return None
-        
-        model_id, provider_id, base_url = best
-        return {
-            "slug": "freemaxxing",
-            "name": "Freemaxxing (Auto Free Model)",
-            "is_current": (current_provider or "").lower() == "freemaxxing",
-            "is_user_defined": False,
-            "models": ["freemaxxing"],  # The model IS the provider (router alias)
-            "total_models": 1,
-            "source": "virtual",
-            "authenticated": True,
-            "auth_type": "virtual",
-            "warning": "Dynamically resolves to the best free model across OpenRouter, Kilo, Nous, etc. via openrouter/free router.",
-        }
+        from hermes_cli.model_switch import _ensure_freemaxxing_proxy
+
+        _ensure_freemaxxing_proxy()
     except Exception:
         return None
+
+    return {
+        "slug": "freemaxxing",
+        "name": "Freemaxxing (Auto Free Model)",
+        "is_current": (current_provider or "").lower() == "freemaxxing",
+        "is_user_defined": False,
+        "models": ["freemaxxing"],
+        "total_models": 1,
+        "source": "virtual",
+        "authenticated": True,
+        "auth_type": "virtual",
+        "warning": (
+            "Routes through the local Freemaxxing proxy, which chooses and "
+            "fails over across available free backends."
+        ),
+    }

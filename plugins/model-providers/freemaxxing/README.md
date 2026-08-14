@@ -25,6 +25,10 @@ The pool is **model-aware**: a request for a given model only reaches backends
 that advertise it. If none advertise it (or the catalog is unknown), it
 round-robins across all available backends.
 
+The `freemaxxing` model ID remains opaque inside Hermes core. Hermes never
+rewrites it to a concrete vendor/provider; the local proxy is the single
+routing authority and substitutes a concrete model only when forwarding.
+
 ## Routing and failover
 
 - **Model-aware selection** — prefer backends whose `/models` catalog lists the
@@ -98,7 +102,7 @@ A health view is at `http://127.0.0.1:PORT/healthz` (port in the log line).
 - `plugin.yaml` — manifest (`kind: model-provider`, v1 manifest format)
 - `__init__.py` — registers the profile at module level, builds the pool, spawns the proxy
 - `proxy.py` — the forward proxy (stdlib-only: `ThreadingHTTPServer` + `urllib`)
-- `test_freemaxxing_proxy.py` — 12 unit tests (mock backends, no network)
+- `test_freemaxxing_proxy.py` — 19 unit tests (mock backends, no network)
 
 ## Why a local proxy, not a core change
 

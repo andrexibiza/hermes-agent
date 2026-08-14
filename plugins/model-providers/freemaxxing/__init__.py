@@ -1,12 +1,12 @@
 """Freemaxxing model-provider plugin.
 
-Registers a single `freemaxxing` provider that fronts a pool of all-free LLM
+Registers a single ``freemaxxing`` provider that fronts a pool of all-free LLM
 backends (Nous Portal, OpenRouter, HuggingFace) behind one local OpenAI-
 compatible proxy, with model-aware routing and seamless failover.
 
-CRITICAL CONTRACT: model-provider discovery (providers/__init__.py
-_import_plugin_dir) does ``spec.loader.exec_module(module)`` and relies on the
-MODULE-LEVEL ``register_provider()`` side effect. It does NOT call a
+CRITICAL CONTRACT: model-provider discovery (``providers/__init__.py``
+``_import_plugin_dir``) does ``spec.loader.exec_module(module)`` and relies on
+the MODULE-LEVEL ``register_provider()`` side effect. It does NOT call a
 ``register(ctx)`` function — that contract belongs to general plugins. We
 therefore self-register at import time, exactly like the bundled
 ``huggingface`` and ``nous`` profiles do.
@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from providers import register_provider
 from providers.base import ProviderProfile
-from proxy import spawn_proxy, pool, Backend
+from proxy import Backend, pool, spawn_proxy
 
 logger = logging.getLogger("freemaxxing")
 
@@ -30,16 +30,17 @@ _HF_BASE_URL = "https://router.huggingface.co/v1"
 
 # Stable port so the persisted model.base_url survives gateway restarts. A
 # dynamic (OS-assigned) port would leave config.yaml pointing at a dead socket
-# after every restart, which is what separates a *provider* from a throwaway
+# after every restart, which is what separates a provider from a throwaway
 # proxy. Override with FREEMAXXING_PORT if the default collides.
 _DEFAULT_PORT = 11435
+_ROUTER_MODEL = "freemaxxing"
 
 
 def _resolve_key(provider_name: str, env_fallbacks: list) -> str:
     """Resolve an API-key env var via the profile-scoped secret scope.
 
-    OpenRouter and HuggingFace are bundled *plugin* providers, not entries in
-    the hand-maintained ``PROVIDER_REGISTRY``, so
+    OpenRouter and HuggingFace are bundled plugin providers, not entries in the
+    hand-maintained ``PROVIDER_REGISTRY``, so
     ``resolve_api_key_provider_credentials`` raises ``AuthError`` for them.
     Their keys are plain env-var credentials, read through
     ``agent.secret_scope.get_secret`` — which honors the active profile scope
@@ -48,12 +49,14 @@ def _resolve_key(provider_name: str, env_fallbacks: list) -> str:
     """
     try:
         from agent.secret_scope import get_secret
+
         for env in env_fallbacks:
             val = get_secret(env)
             if val and str(val).strip():
                 return str(val).strip()
     except Exception:
         pass
+
     # Last-resort fallback: single-profile deployments may provide keys via the
     # process environment rather than a secret scope.
     for env in env_fallbacks:
@@ -64,56 +67,51 @@ def _resolve_key(provider_name: str, env_fallbacks: list) -> str:
 
 
 def _resolve_nous_credentials():
-    """Resolve Nous Portal inference credentials (OAuth JWT), not a static API key.
+    """Resolve Nous Portal inference credentials (OAuth JWT), not a static key.
 
     Nous Portal is an OAuth provider, so ``resolve_api_key_provider_credentials``
     raises ``AuthError``. The correct resolver is
     ``resolve_nous_runtime_credentials``, which returns the inference-scoped JWT
-    plus the dynamically-resolved inference base URL (may differ from the
-    hardcoded production default). Returns (base_url, api_key) or (None, "").
+    plus the dynamically-resolved inference base URL. Returns
+    ``(base_url, api_key)`` or ``(default_base_url, "")``.
 
-    The import is done lazily inside a retry loop because this function can be
-    called during ``providers`` discovery, which itself runs inside
-    ``hermes_cli.auth``'s module import — at which point ``auth`` is only
-    partially initialized and the runtime resolver does not exist yet. Defer
-    the first real resolution to the first request (via the backend's
-    ``refresh`` hook) rather than failing at registration.
+    This can run during ``hermes_cli.auth`` import, while that module is only
+    partially initialized. In that case the backend is still registered with a
+    refresh hook, and the first real request resolves the JWT after auth loading
+    has completed.
     """
     try:
         from hermes_cli import auth as auth_mod
+
         creds = auth_mod.resolve_nous_runtime_credentials()
         api_key = creds.get("api_key", "")
         base_url = creds.get("base_url") or _NOUS_BASE_URL
         return base_url, api_key
-    except Exception as e:
-        # Could be a genuine "not logged in" OR a circular-import-at-discovery
-        # artifact (``auth`` partially initialized). Fall back to env key.
-        logger.debug("freemaxxing: nous runtime resolution failed: %s", e)
+    except Exception as exc:
+        logger.debug("freemaxxing: nous runtime resolution failed: %s", exc)
         api_key = _resolve_key("nous", ["NOUS_API_KEY"])
         return _NOUS_BASE_URL, api_key
 
 
 def _add_nous_portal_backend() -> None:
-    """Add the Nous Portal backend, resolving the JWT lazily if needed.
-
-    At discovery time (during ``hermes_cli.auth``'s own import) the runtime
-    resolver is not yet defined, so ``_resolve_nous_credentials`` falls back to
-    an empty key. Always add the backend with its ``refresh`` hook, so the
-    first real request re-resolves the JWT (auth is fully loaded by then) and
-    succeeds without a wasted 401 round-trip.
-    """
+    """Add Nous Portal, resolving its rotating JWT lazily when necessary."""
     base_url, api_key = _resolve_nous_credentials()
-    pool.add(Backend(
-        name="nous-portal",
-        base_url=base_url,
-        api_key=api_key,
-        tier=0,
-        refresh=_resolve_nous_credentials,  # rotating JWT → re-resolve on 401/403 or empty key
-    ))
+    pool.add(
+        Backend(
+            name="nous-portal",
+            base_url=base_url,
+            api_key=api_key,
+            tier=0,
+            refresh=_resolve_nous_credentials,
+        )
+    )
     if api_key:
         logger.info("freemaxxing: Tier 0 — Nous Portal added (auto-detected)")
     else:
-        logger.info("freemaxxing: Tier 0 — Nous Portal added (JWT deferred to first request)")
+        logger.info(
+            "freemaxxing: Tier 0 — Nous Portal added "
+            "(JWT deferred to first request)"
+        )
 
 
 def _add_openrouter_backend() -> None:
@@ -121,7 +119,14 @@ def _add_openrouter_backend() -> None:
     if not api_key:
         logger.debug("freemaxxing: no OPENROUTER_API_KEY — Tier 1 skipped")
         return
-    pool.add(Backend(name="openrouter", base_url=_OPENROUTER_BASE_URL, api_key=api_key, tier=1))
+    pool.add(
+        Backend(
+            name="openrouter",
+            base_url=_OPENROUTER_BASE_URL,
+            api_key=api_key,
+            tier=1,
+        )
+    )
     logger.info("freemaxxing: Tier 1 — OpenRouter added")
 
 
@@ -130,7 +135,14 @@ def _add_huggingface_backend() -> None:
     if not api_key:
         logger.debug("freemaxxing: no HF_TOKEN — Tier 2 skipped")
         return
-    pool.add(Backend(name="huggingface", base_url=_HF_BASE_URL, api_key=api_key, tier=2))
+    pool.add(
+        Backend(
+            name="huggingface",
+            base_url=_HF_BASE_URL,
+            api_key=api_key,
+            tier=2,
+        )
+    )
     logger.info("freemaxxing: Tier 2 — HuggingFace added")
 
 
@@ -149,14 +161,7 @@ def _build_pool() -> None:
 
 
 def _is_freemaxxing_selected() -> bool:
-    """Return True when the user has actually opted into freemaxxing.
-
-    Spawning the local proxy is a process-wide side effect, so it must only
-    happen when the user selected this provider as primary or fallback — not
-    on mere provider discovery (which `hermes model` / `hermes doctor` /
-    `hermes auth` / setup all trigger). An unselected bundled provider stays
-    dormant: profile registered, no listener, zero cost.
-    """
+    """Return True when the user selected freemaxxing as primary or fallback."""
     try:
         from hermes_cli.config import load_config
 
@@ -164,47 +169,83 @@ def _is_freemaxxing_selected() -> bool:
         model_cfg = cfg.get("model") or {}
         if str(model_cfg.get("provider") or "").strip().lower() == "freemaxxing":
             return True
+
         for entry in cfg.get("fallback_providers") or []:
-            if isinstance(entry, dict) and str(entry.get("provider") or "").strip().lower() == "freemaxxing":
+            if (
+                isinstance(entry, dict)
+                and str(entry.get("provider") or "").strip().lower()
+                == "freemaxxing"
+            ):
                 return True
+
         # Legacy single-fallback shape.
-        fb = cfg.get("fallback_model")
-        if isinstance(fb, dict) and str(fb.get("provider") or "").strip().lower() == "freemaxxing":
-            return True
-        if isinstance(fb, list):
-            for entry in fb:
-                if isinstance(entry, dict) and str(entry.get("provider") or "").strip().lower() == "freemaxxing":
-                    return True
-    except Exception as e:
-        logger.debug("freemaxxing: selection check failed: %s", e)
+        fallback = cfg.get("fallback_model")
+        if isinstance(fallback, dict):
+            return (
+                str(fallback.get("provider") or "").strip().lower()
+                == "freemaxxing"
+            )
+        if isinstance(fallback, list):
+            return any(
+                isinstance(entry, dict)
+                and str(entry.get("provider") or "").strip().lower()
+                == "freemaxxing"
+                for entry in fallback
+            )
+    except Exception as exc:
+        logger.debug("freemaxxing: selection check failed: %s", exc)
     return False
+
+
+def _configured_port() -> int:
+    try:
+        return int(os.environ.get("FREEMAXXING_PORT", str(_DEFAULT_PORT)))
+    except (TypeError, ValueError):
+        return _DEFAULT_PORT
+
+
+def _loopback_base_url(port: int) -> str:
+    return f"http://127.0.0.1:{port}/v1"
+
+
+def ensure_proxy() -> str:
+    """Start the stable loopback proxy on demand and return its base URL.
+
+    This function performs lifecycle setup only. The proxy remains the sole
+    authority for backend eligibility, health, concrete-model selection,
+    cooldowns, and failover. We deliberately do not fall back to an ephemeral
+    port: Hermes may persist this named provider route, and an ephemeral port
+    would leave the next process pointing at a dead socket.
+    """
+    port = _configured_port()
+    server = spawn_proxy(port=port)
+    actual_port = int(server.server_address[1])
+    if actual_port != port:
+        raise RuntimeError(
+            "freemaxxing proxy already bound to unexpected port "
+            f"{actual_port}; expected {port}"
+        )
+    return _loopback_base_url(actual_port)
 
 
 def _register() -> None:
     _build_pool()
-    try:
-        port = int(os.environ.get("FREEMAXXING_PORT", str(_DEFAULT_PORT)))
-    except (TypeError, ValueError):
-        port = _DEFAULT_PORT
 
-    # Only spawn the proxy when the user selected freemaxxing. Otherwise
-    # register the profile dormant — discovery alone must not bind a port.
-    actual_port = port
+    port = _configured_port()
+    base_url = _loopback_base_url(port)
+
+    # Existing primary/fallback configurations must be live at process startup.
+    # New selections start the same endpoint from the picker/alias path.
     if _is_freemaxxing_selected():
-        # Bind the stable port. If another process already owns it, fall back to
-        # an ephemeral port so the provider still registers.
         try:
-            server = spawn_proxy(port=port)
-            actual_port = server.server_address[1]
-        except OSError as e:
+            base_url = ensure_proxy()
+        except Exception as exc:
             logger.warning(
-                "freemaxxing: port %d unavailable (%s); using an ephemeral port", port, e
+                "freemaxxing: could not bind stable port %d (%s). "
+                "Set FREEMAXXING_PORT to an unused port.",
+                port,
+                exc,
             )
-            server = spawn_proxy(port=0)
-            actual_port = server.server_address[1]
-    else:
-        logger.debug("freemaxxing: not selected — provider registered dormant (no proxy)")
-    base_url = f"http://127.0.0.1:{actual_port}/v1"
 
     profile = ProviderProfile(
         name="freemaxxing",
@@ -219,14 +260,15 @@ def _register() -> None:
         supports_vision=False,
         supports_noauth_loopback=True,
         default_aux_model="",
-        fallback_models=(
-            "freemaxxing",
-        ),
+        fallback_models=(_ROUTER_MODEL,),
     )
     register_provider(profile)
+
     logger.info(
         "freemaxxing: provider registered at %s with %d backends (tiers: %s)",
-        base_url, len(pool.backends), sorted({b.tier for b in pool.backends}),
+        base_url,
+        len(pool.backends),
+        sorted({backend.tier for backend in pool.backends}),
     )
 
 

@@ -370,129 +370,23 @@ class DirectAlias(NamedTuple):
 # Built-in direct aliases (can be extended via config.yaml model_aliases:)
 _BUILTIN_DIRECT_ALIASES: dict[str, DirectAlias] = {}
 
-# Dynamic freemaxxing resolver - discovers best free model at runtime
-_FREEMAXXING_CACHE: dict[str, tuple[str, str, str]] = {}  # provider -> (model, provider, base_url)
+def _ensure_freemaxxing_proxy() -> str:
+    """Start the bundled loopback endpoint without selecting a vendor model.
 
-
-def _discover_freemaxxing_model() -> Optional[tuple[str, str, str]]:
-    """Discover the best available free model across free-tier providers at runtime.
-    
-    Returns (model_id, provider, base_url) for the best free model, or None.
-    Checks providers known to have free models: openrouter, kilo, vercel, nous.
-    Prefers models with tool calling + reasoning + large context.
-    Prefers auto-free routers (openrouter/auto, kilo-auto/free) that dynamically route.
+    Provider discovery installs the bundled plugin under the stable module name
+    ``plugins.model_providers.freemaxxing``. The plugin owns process lifecycle;
+    this helper merely ensures its local endpoint is listening before picker or
+    model validation probes ``/v1/models``.
     """
-    from agent.models_dev import list_provider_models, get_model_info
-    from hermes_cli.providers import get_provider
-    
-    # Providers known to have :free models, in priority order
-    free_providers = [
-        ("openrouter", "https://openrouter.ai/api/v1"),
-        ("kilo", "https://api.kilocode.ai/v1"),
-        ("vercel", "https://ai-gateway.vercel.sh/v1"),
-        ("nous", "https://inference-api.nousresearch.com/v1"),
-    ]
-    
-    for provider_id, base_url in free_providers:
-        if provider_id in _FREEMAXXING_CACHE:
-            return _FREEMAXXING_CACHE[provider_id]
-        
-        try:
-            catalog = list_provider_models(provider_id)
-            
-            # For Nous Portal, also query the live API since it's not in models.dev catalog
-            if provider_id == "nous" and (not catalog or len(catalog) == 0):
-                try:
-                    import requests
-                    r = requests.get(f"{base_url}/models", timeout=10)
-                    if r.status_code == 200:
-                        data = r.json()
-                        # Extract model IDs from Nous Portal response format
-                        catalog = [m.get("id") for m in data.get("data", []) if m.get("id")]
-                except Exception:
-                    pass
-            
-            if not catalog:
-                continue
-            
-            # Find free models
-            free_models = [m for m in catalog if ':free' in m.lower()]
-            
-            # Explicitly include openrouter/free (the free tier router) if present
-            free_router_models = [m for m in catalog if m == 'openrouter/free']
-            
-            # Combine free models and free router, prioritizing the router
-            candidate_models = []
-            
-            # Free router gets highest priority (it routes to best available free model)
-            for m in free_router_models:
-                candidate_models.append((m, True))  # True = is_free_router
-            
-            # Then regular free models
-            for m in free_models:
-                if m not in free_router_models:
-                    candidate_models.append((m, False))
-            
-            if not candidate_models:
-                continue
-            
-            # Score models: free router first, then tools+reasoning, then larger context, then prefer known-good families
-            def score_model(model_id: str, is_free_router: bool) -> tuple:
-                # Check capabilities via models.dev
-                try:
-                    info = get_model_info(provider_id, model_id)
-                    if info:
-                        has_tools = info.tool_call
-                        has_reasoning = info.reasoning
-                        ctx = info.context_window or 0
-                    else:
-                        has_tools = has_reasoning = False
-                        ctx = 0
-                except Exception:
-                    has_tools = has_reasoning = False
-                    ctx = 0
-                
-                # Priority family bonus (known-good models)
-                mid_lower = model_id.lower()
-                family_bonus = 0
-                if 'nemotron-3-ultra' in mid_lower:
-                    family_bonus = 100  # 1M ctx, tools, reasoning - best overall
-                elif 'nemotron-3-super' in mid_lower:
-                    family_bonus = 90
-                elif 'gemma-4' in mid_lower:
-                    family_bonus = 80
-                elif 'gpt-oss' in mid_lower:
-                    family_bonus = 70
-                elif 'nemotron' in mid_lower:
-                    family_bonus = 60
-                elif 'laguna' in mid_lower:
-                    family_bonus = 50
-                elif 'north-mini' in mid_lower:
-                    family_bonus = 40
-                elif 'lfm' in mid_lower:
-                    family_bonus = 30
-                
-                # Capability score: tools+reasoning > tools > reasoning > base
-                capability_score = (has_tools and has_reasoning, has_tools, has_reasoning)
-                
-                # Free router gets highest priority (routes to best available free model)
-                free_router_bonus = 1000 if is_free_router else 0
-                
-                # Return tuple for sorting (higher = better)
-                return (free_router_bonus, capability_score, family_bonus, ctx, model_id)
-            
-            # Sort candidates
-            candidate_models.sort(key=lambda x: score_model(x[0], x[1]), reverse=True)
-            best_model = candidate_models[0][0]
-            
-            result = (best_model, provider_id, base_url)
-            _FREEMAXXING_CACHE[provider_id] = result
-            return result
-            
-        except Exception:
-            continue
-    
-    return None
+    from importlib import import_module
+
+    from providers import get_provider_profile
+
+    if get_provider_profile("freemaxxing") is None:
+        raise RuntimeError("Freemaxxing provider plugin is not available")
+    plugin = import_module("plugins.model_providers.freemaxxing")
+    return plugin.ensure_proxy()
+
 
 # Merged dict (builtins + user config); populated by _load_direct_aliases()
 DIRECT_ALIASES: dict[str, DirectAlias] = {}
@@ -1095,14 +989,15 @@ def resolve_alias(
     if direct is not None:
         return (direct.provider, direct.model, key)
 
-    # Dynamic freemaxxing: discover best free model at runtime
-    if key == "freemaxxing":
-        discovered = _discover_freemaxxing_model()
-        if discovered:
-            model_id, provider_id, base_url = discovered
-            # Return the discovered model on its native provider
-            # The caller (switch_model) will handle provider switching
-            return (provider_id, model_id, key)
+    # Freemaxxing remains opaque inside Hermes core. Starting the local
+    # loopback endpoint is lifecycle setup only; concrete backend/model
+    # selection belongs exclusively to that proxy.
+    if key in {"freemaxxing", "fm", "freemaxxing-auto"}:
+        try:
+            _ensure_freemaxxing_proxy()
+        except Exception as exc:
+            logger.debug("Freemaxxing proxy startup deferred: %s", exc)
+        return ("freemaxxing", "freemaxxing", key)
 
     # Reverse lookup: match by model ID so full names (e.g. "kimi-k2.5",
     # "glm-4.7") route through direct aliases instead of falling through
