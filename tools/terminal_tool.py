@@ -1497,6 +1497,10 @@ _HOST_CWD_PREFIXES = ("/Users/", "/home/", "C:\\", "C:/")
 
 _CONTAINER_BACKENDS = frozenset({"docker", "singularity", "modal", "daytona", "vercel_sandbox"})
 
+_VALID_TERMINAL_BACKENDS = frozenset({
+    "local", "docker", "singularity", "modal", "daytona", "vercel_sandbox", "ssh",
+})
+
 
 def _is_unusable_container_cwd(cwd: str) -> bool:
     """Return True if *cwd* is a host/relative path that won't work as the
@@ -1588,24 +1592,42 @@ def _terminal_env_snapshot() -> Dict[str, str]:
 
 
 def _probe_config_unreadable() -> bool:
-    """Return True when config.yaml *exists* but cannot be parsed.
+    """Return True when config.yaml *exists* but is not a trustworthy terminal config.
 
-    ``read_raw_config()`` returns ``{}`` for both "file absent" and "parse
-    failure".  This helper distinguishes the two: a present-but-malformed
-    config is a security risk (it may carry ``terminal.backend: docker``),
-    while an absent config is safe (just use env vars).
+    ``read_raw_config()`` normalizes "file absent", "empty document", a
+    non-mapping root (list/scalar), and "parse failure" all to ``{}``.  This
+    helper distinguishes a safe absent config from a present-but-corrupt one:
+    a config that exists but cannot be trusted — unparseable, an empty or
+    non-mapping document, a non-mapping ``terminal`` section, or an
+    unrecognized ``terminal.backend`` — is a security risk (it may carry
+    ``terminal.backend: docker``) and must fail closed rather than silently
+    downgrading an isolated backend to host-local execution.
     """
     try:
         from hermes_cli.config import get_config_path, fast_safe_load
         config_path = get_config_path()
         config_path.stat()
         with open(config_path, encoding="utf-8") as f:
-            fast_safe_load(f)
-        return False
+            data = fast_safe_load(f)
     except FileNotFoundError:
         return False
     except Exception:
         return True
+
+    # A present document that is empty, a list, or a scalar cannot carry a
+    # trustworthy terminal.backend — treat it as unreadable.
+    if not isinstance(data, dict):
+        return True
+
+    terminal = data.get("terminal")
+    if terminal is None:
+        return False
+    if not isinstance(terminal, dict):
+        return True
+    backend = terminal.get("backend")
+    if backend is None:
+        return False
+    return str(backend).strip().lower() not in _VALID_TERMINAL_BACKENDS
 
 
 def _resolve_backend_type(env: Optional[Dict[str, str]] = None) -> str:
@@ -1615,6 +1637,26 @@ def _resolve_backend_type(env: Optional[Dict[str, str]] = None) -> str:
     if env_val:
         return env_val
     return "local"
+
+
+def resolve_terminal_backend() -> str:
+    """Resolve the active terminal backend from the bridged config snapshot.
+
+    Public resolver for sibling tools (``image_source``, ``vision_tools``,
+    ``image_generation_tool``, ``browser_tool``, ``credential_files``, ...) that
+    need the same backend determination as terminal dispatch.  Goes through
+    :func:`_terminal_env_snapshot` so a config.yaml ``terminal.backend`` is
+    honored even on cold start, before the launch-time bridge has run.
+
+    On an untrusted snapshot (config bridge failed or config unreadable) this
+    returns the non-local sentinel ``"unknown"`` so callers that gate host-side
+    reads / SSRF exemptions on ``== "local"`` fail closed instead of silently
+    downgrading an isolated backend to host execution.
+    """
+    snapshot = _terminal_env_snapshot()
+    if snapshot.get("_config_bridge_failed"):
+        return "unknown"
+    return _resolve_backend_type(snapshot)
 
 
 def _get_env_config() -> Dict[str, Any]:

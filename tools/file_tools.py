@@ -199,9 +199,13 @@ def _terminal_env_type_for_task(task_id: str = "default") -> str:
             if "daytona" in name:
                 return "daytona"
         cfg = _get_env_config()
-        return str(cfg.get("env_type") or os.getenv("TERMINAL_ENV") or "local").lower()
+        return str(cfg.get("env_type") or "local").lower()
     except Exception:
-        return str(os.getenv("TERMINAL_ENV") or "local").lower()
+        try:
+            from tools.terminal_tool import resolve_terminal_backend
+            return resolve_terminal_backend()
+        except Exception:
+            return "unknown"
 
 
 def _uses_container_paths(task_id: str = "default") -> bool:

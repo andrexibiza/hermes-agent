@@ -248,3 +248,122 @@ class TestResolveBackendType:
 
         with pytest.raises(RuntimeError, match="config.yaml is unreadable"):
             _tt_mod._get_env_config()
+
+
+class TestProbeConfigUnreadableShapes:
+    """_probe_config_unreadable() must reject empty / non-mapping / invalid configs."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",                       # empty document
+            "# comment only\n",        # comment-only document
+            "[]\n",                   # list root
+            "- a\n- b\n",             # list root with items
+            "just a string\n",        # scalar root
+            "42\n",                   # numeric scalar root
+        ],
+    )
+    def test_present_but_invalid_shape_is_unreadable(self, monkeypatch, tmp_path, raw):
+        """A present config that is empty/list/scalar cannot carry a backend."""
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(raw, encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert _tt_mod._probe_config_unreadable() is True
+
+    def test_non_mapping_terminal_section_is_unreadable(self, monkeypatch, tmp_path):
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text("terminal: [docker]\n", encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert _tt_mod._probe_config_unreadable() is True
+
+    def test_invalid_backend_value_is_unreadable(self, monkeypatch, tmp_path):
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "terminal:\n  backend: kubernetes\n", encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert _tt_mod._probe_config_unreadable() is True
+
+    def test_valid_terminal_section_is_readable(self, monkeypatch, tmp_path):
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "terminal:\n  backend: docker\n", encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert _tt_mod._probe_config_unreadable() is False
+
+    def test_terminal_section_without_backend_is_readable(self, monkeypatch, tmp_path):
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "terminal:\n  cwd: /home/user\n", encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert _tt_mod._probe_config_unreadable() is False
+
+    def test_absent_config_is_readable(self, monkeypatch, tmp_path):
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert _tt_mod._probe_config_unreadable() is False
+
+
+class TestResolveTerminalBackend:
+    """resolve_terminal_backend() must honor config on cold start and fail closed."""
+
+    def test_cold_start_docker_config_resolves_docker(self, monkeypatch):
+        """config.yaml terminal.backend: docker + stale TERMINAL_ENV=local."""
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        def _mock_load_config():
+            return {"terminal": {"backend": "docker"}}
+
+        monkeypatch.setattr("hermes_cli.config.read_raw_config", _mock_load_config)
+        monkeypatch.setattr("hermes_cli.config.load_config_readonly", _mock_load_config)
+
+        assert _tt_mod.resolve_terminal_backend() == "docker"
+
+    def test_bridge_failure_returns_unknown_sentinel(self, monkeypatch):
+        """On an untrusted snapshot, return non-local sentinel (fail closed)."""
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+        monkeypatch.setattr(
+            "hermes_cli.config.apply_terminal_config_to_env",
+            lambda env=None: (_ for _ in ()).throw(RuntimeError("Bridge error")),
+        )
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config_readonly",
+            lambda: {"terminal": {"backend": "docker"}},
+        )
+
+        assert _tt_mod.resolve_terminal_backend() == "unknown"
+
+    def test_image_source_host_reads_fail_closed_on_cold_start_docker(self, monkeypatch):
+        """image_source must deny host reads when config selects docker on cold start."""
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        def _mock_load_config():
+            return {"terminal": {"backend": "docker"}}
+
+        monkeypatch.setattr("hermes_cli.config.read_raw_config", _mock_load_config)
+        monkeypatch.setattr("hermes_cli.config.load_config_readonly", _mock_load_config)
+
+        from tools.image_source import _is_local_terminal_backend
+
+        assert _is_local_terminal_backend() is False

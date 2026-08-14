@@ -194,7 +194,8 @@ def _build_probe_line() -> str:
     """
     # Bail out if a remote terminal backend is configured; the host's
     # Python state isn't where the agent's tools run.
-    backend = (os.getenv("TERMINAL_ENV") or "local").strip().lower()
+    from tools.terminal_tool import resolve_terminal_backend
+    backend = resolve_terminal_backend()
     if backend in _REMOTE_BACKENDS:
         return ""
 

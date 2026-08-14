@@ -903,8 +903,12 @@ def _is_local_backend() -> bool:
     if _get_cloud_provider() is not None:
         return False
     # When terminal runs in a container, browser on host can access
-    # internal networks the terminal can't → treat as non-local.
-    terminal_backend = os.getenv("TERMINAL_ENV", "local").strip().lower()
+    # internal networks the terminal can't → treat as non-local. Resolve
+    # through terminal_tool's bridged snapshot so a config.yaml
+    # terminal.backend: docker is honored on cold start; an uncertain
+    # backend fails closed (non-local) rather than skipping the SSRF gate.
+    from tools.terminal_tool import resolve_terminal_backend
+    terminal_backend = resolve_terminal_backend()
     return terminal_backend in ("local", "")
 
 
