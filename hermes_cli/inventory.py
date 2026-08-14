@@ -865,9 +865,7 @@ def _freemaxxing_provider_row(current_provider: str = "") -> dict | None:
 
     Freemaxxing is a dynamic alias that resolves to the best available free
     model across OpenRouter, Kilo, Nous, etc. at runtime. It appears as a
-    single virtual provider entry — no model sub-selection, the backend
-    dynamically picks the best free model (prefers auto-free routers like
-    openrouter/auto, kilo-auto/free).
+    single virtual provider entry — the model IS the provider (like MOA).
     """
     try:
         from hermes_cli.model_switch import _discover_freemaxxing_model
@@ -882,12 +880,12 @@ def _freemaxxing_provider_row(current_provider: str = "") -> dict | None:
             "name": "Freemaxxing (Auto Free Model)",
             "is_current": (current_provider or "").lower() == "freemaxxing",
             "is_user_defined": False,
-            "models": [],  # No model sub-selection — backend resolves dynamically
+            "models": ["freemaxxing"],  # The model IS the provider (router alias)
             "total_models": 1,
             "source": "virtual",
             "authenticated": True,
             "auth_type": "virtual",
-            "warning": "Dynamically resolves to the best free model across OpenRouter, Kilo, Nous, etc. Prefers auto-free routers (openrouter/auto, kilo-auto/free).",
+            "warning": "Dynamically resolves to the best free model across OpenRouter, Kilo, Nous, etc. via openrouter/free router.",
         }
     except Exception:
         return None

@@ -31,7 +31,11 @@ HEADERS = {"X-Hermes-Session-Token": _SESSION_TOKEN}
 # derived from the catalog so any future virtual provider is covered without a
 # hardcoded slug.
 _VIRTUAL = {d.slug for d in provider_catalog() if d.auth_type == "virtual"}
-_EXEMPT = {"custom"} | _VIRTUAL
+# No-auth loopback providers (e.g. freemaxxing) front a local endpoint and need
+# no credential card — they are configured by selecting the provider in the
+# model picker, exactly like `custom` and virtual providers.
+_NOAUTH = {d.slug for d in provider_catalog() if d.supports_noauth_loopback}
+_EXEMPT = {"custom"} | _VIRTUAL | _NOAUTH
 
 # Providers that legitimately offer BOTH auth methods and so intentionally
 # appear on both desktop tabs (an API-key card AND an account sign-in card).
