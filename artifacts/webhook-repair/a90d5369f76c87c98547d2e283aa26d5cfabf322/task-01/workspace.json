@@ -1,0 +1,21 @@
+{
+  "branch": "wr/webhook-revolution-controller",
+  "free_bytes": 3935228133376,
+  "git": "git version 2.53.0.windows.1",
+  "minimum_free_bytes": 21474836480,
+  "pin": "a505c3d97ef7e8d2c6dc3f9ac31bf38753f38bf0",
+  "platform": "Windows-10-10.0.26220-SP0",
+  "python": "3.11.15 (main, Jul 18 2026, 17:06:27) [MSC v.1944 64 bit (AMD64)]",
+  "remotes": {
+    "fork": "https://github.com/andrexibiza/hermes-agent.git",
+    "origin": "https://github.com/andrexibiza/hermes-agent.git",
+    "upstream": "https://github.com/NousResearch/hermes-agent.git"
+  },
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\controller",
+  "schema_version": 1,
+  "status": "?? artifacts/webhook-repair/0e4e8baf630e4d92fdf08bb2e51e6c7be275b317/task-01/commit.json\n?? artifacts/webhook-repair/0e4e8baf630e4d92fdf08bb2e51e6c7be275b317/task-01/push.json\n?? artifacts/webhook-repair/0e4e8baf630e4d92fdf08bb2e51e6c7be275b317/task-02/failure.json\n?? artifacts/webhook-repair/0e4e8baf630e4d92fdf08bb2e51e6c7be275b317/task-02/preflight.json\n?? artifacts/webhook-repair/a90d5369f76c87c98547d2e283aa26d5cfabf322/task-01/preflight.json",
+  "task": 1,
+  "timestamp": "2026-08-14T19:22:22Z",
+  "work_root": "D:\\HERMES-TEMP\\webhook-revolution",
+  "worktrees": "worktree D:/src/hermes-agent\nHEAD 642b735dbdbae4f01f5df0b9288d5f67a7e530f4\nbranch refs/heads/main\n\nworktree D:/HERMES-TEMP/webhook-revolution/controller\nHEAD a505c3d97ef7e8d2c6dc3f9ac31bf38753f38bf0\nbranch refs/heads/wr/webhook-revolution-controller"
+}

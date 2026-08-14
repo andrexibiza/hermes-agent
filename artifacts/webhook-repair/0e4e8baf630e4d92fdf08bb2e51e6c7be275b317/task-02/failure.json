@@ -1,0 +1,12 @@
+{
+  "branch": "wr/webhook-revolution-controller",
+  "error": "command failed (1): C:\\Program Files\\GitHub CLI\\gh.EXE api --paginate /repos/NousResearch/hermes-agent/pulls/71763/files?per_page=100\nGet \"https://api.github.com/repos/NousResearch/hermes-agent/pulls/71763/files?per_page=100\": net/http: TLS handshake timeout",
+  "error_type": "CampaignError",
+  "head": "a505c3d97ef7e8d2c6dc3f9ac31bf38753f38bf0",
+  "phase": "failure",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\controller",
+  "schema_version": 1,
+  "status": "fail",
+  "task": 2,
+  "timestamp": "2026-08-14T19:20:56Z"
+}
