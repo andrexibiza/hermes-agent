@@ -1,0 +1,13 @@
+{
+  "branch": "wr/webhook-revolution-controller",
+  "expected_head": null,
+  "head": "3a92abda99fcee88903bbddeb340ddaf358251d4",
+  "mode": "controller",
+  "phase": "preflight",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\controller",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 2,
+  "task_title": "Materialize source, issue, PR, and collision graph",
+  "timestamp": "2026-08-14T20:39:26Z"
+}
