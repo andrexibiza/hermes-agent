@@ -1,0 +1,8 @@
+name: freemaxxing
+kind: model-provider
+version: "0.1.0"
+description: "Zero-new-config multi-provider failover — Nous Portal, OpenRouter, HuggingFace. Model-aware pool with seamless failover. Primary or backup."
+author: Axl Ibiza
+license: MIT
+homepage: "https://github.com/NousResearch/hermes-agent"
+tags: [free, failover, routing, multi-provider]

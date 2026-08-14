@@ -532,6 +532,8 @@ def init_agent(
     checkpoint_max_file_size_mb: int = 10,
     pass_session_id: bool = False,
     requested_provider: str = None,
+    user_providers: Dict[str, Any] = None,
+    custom_providers: List[Any] = None,
 ):
     """
     Initialize the AI Agent.
@@ -758,6 +760,37 @@ def init_agent(
             daemon=True,
             name="openrouter-prewarm",
         ).start()
+
+    # Resolve dynamic model aliases like "freemaxxing" that need runtime catalog discovery
+    if agent.model and agent.model.strip().lower() == "freemaxxing":
+        try:
+            from hermes_cli.model_switch import switch_model
+            from hermes_cli.config import load_config as _load_config
+            _cfg = _load_config()
+            _user_provs = _cfg.get('providers', {}) if user_providers is None else user_providers
+            _custom_provs = _cfg.get('custom_providers', []) if custom_providers is None else custom_providers
+            
+            _result = switch_model(
+                raw_input="freemaxxing",
+                current_provider=agent.provider or "openrouter",
+                current_model=agent.model,
+                current_base_url=agent.base_url,
+                current_api_key=api_key,
+                is_global=False,
+                explicit_provider="",
+                user_providers=_user_provs,
+                custom_providers=_custom_provs,
+            )
+            if _result.success:
+                agent.model = _result.new_model
+                agent.provider = _result.target_provider
+                # Update base_url and api_mode if provider changed
+                if _result.base_url:
+                    agent.base_url = _result.base_url
+                if _result.api_mode:
+                    agent.api_mode = _result.api_mode
+        except Exception:
+            pass  # Keep original model if resolution fails
 
     agent.tool_progress_callback = tool_progress_callback
     agent.tool_start_callback = tool_start_callback

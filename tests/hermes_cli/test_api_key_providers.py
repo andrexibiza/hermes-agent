@@ -51,9 +51,6 @@ class TestProviderRegistry:
         assert pconfig.auth_type == auth_type
         assert pconfig.inference_base_url  # must have a default base URL
 
-
-
-
     def test_copilot_env_vars(self):
         pconfig = PROVIDER_REGISTRY["copilot"]
         assert pconfig.api_key_env_vars == ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
@@ -122,6 +119,42 @@ class TestProviderRegistry:
         assert PROVIDER_REGISTRY["nous"].auth_type == "oauth_device_code"
         assert "openai-codex" in PROVIDER_REGISTRY
         assert PROVIDER_REGISTRY["openai-codex"].auth_type == "oauth_external"
+
+
+def test_noauth_loopback_provider_resolves_placeholder_key():
+    """A profile with ``supports_noauth_loopback`` is admitted to
+    PROVIDER_REGISTRY even with empty ``env_vars``, and resolves a placeholder
+    key in ``resolve_api_key_provider_credentials`` so the runtime missing-key
+    gate passes — the generic equivalent of the lmstudio/actual carve-outs."""
+    import providers
+    from providers.base import ProviderProfile
+    from hermes_cli.auth import (
+        LOCAL_NOAUTH_PLACEHOLDER,
+        _extend_provider_registry_from_plugins,
+    )
+
+    profile = ProviderProfile(
+        name="test-noauth-loopback",
+        aliases=("tnl",),
+        display_name="Test No-Auth Loopback",
+        base_url="http://127.0.0.1:11435/v1",
+        auth_type="api_key",
+        supports_noauth_loopback=True,
+    )
+    providers.register_provider(profile)
+    _extend_provider_registry_from_plugins()
+
+    assert "test-noauth-loopback" in PROVIDER_REGISTRY
+    pconfig = PROVIDER_REGISTRY["test-noauth-loopback"]
+    assert pconfig.auth_type == "api_key"
+    assert pconfig.inference_base_url == "http://127.0.0.1:11435/v1"
+
+    creds = resolve_api_key_provider_credentials("test-noauth-loopback")
+    assert creds["api_key"] == LOCAL_NOAUTH_PLACEHOLDER
+    assert "127.0.0.1" in creds["base_url"]
+
+    # The alias is registered too, so resolve_provider resolves it.
+    assert resolve_provider("test-noauth-loopback") == "test-noauth-loopback"
 
 
 # =============================================================================

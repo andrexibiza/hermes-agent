@@ -370,6 +370,95 @@ class DirectAlias(NamedTuple):
 # Built-in direct aliases (can be extended via config.yaml model_aliases:)
 _BUILTIN_DIRECT_ALIASES: dict[str, DirectAlias] = {}
 
+# Dynamic freemaxxing resolver - discovers best free model at runtime
+_FREEMAXXING_CACHE: dict[str, tuple[str, str, str]] = {}  # provider -> (model, provider, base_url)
+
+
+def _discover_freemaxxing_model() -> Optional[tuple[str, str, str]]:
+    """Discover the best available free model across free-tier providers at runtime.
+    
+    Returns (model_id, provider, base_url) for the best free model, or None.
+    Checks providers known to have free models: openrouter, kilo, vercel.
+    Prefers models with tool calling + reasoning + large context.
+    """
+    from agent.models_dev import list_provider_models, get_model_info
+    from hermes_cli.providers import get_provider
+    
+    # Providers known to have :free models, in priority order
+    free_providers = [
+        ("openrouter", "https://openrouter.ai/api/v1"),
+        ("kilo", "https://api.kilocode.ai/v1"),
+        ("vercel", "https://ai-gateway.vercel.sh/v1"),
+    ]
+    
+    for provider_id, base_url in free_providers:
+        if provider_id in _FREEMAXXING_CACHE:
+            return _FREEMAXXING_CACHE[provider_id]
+        
+        try:
+            catalog = list_provider_models(provider_id)
+            if not catalog:
+                continue
+            
+            # Find free models
+            free_models = [m for m in catalog if ':free' in m.lower()]
+            if not free_models:
+                continue
+            
+            # Score models: prefer tools+reasoning, then larger context, then prefer known-good families
+            def score_model(model_id: str) -> tuple:
+                # Check capabilities via models.dev
+                try:
+                    info = get_model_info(provider_id, model_id)
+                    if info:
+                        has_tools = info.tool_call
+                        has_reasoning = info.reasoning
+                        ctx = info.context_window or 0
+                    else:
+                        has_tools = has_reasoning = False
+                        ctx = 0
+                except Exception:
+                    has_tools = has_reasoning = False
+                    ctx = 0
+                
+                # Priority family bonus (known-good models)
+                mid_lower = model_id.lower()
+                family_bonus = 0
+                if 'nemotron-3-ultra' in mid_lower:
+                    family_bonus = 100  # 1M ctx, tools, reasoning - best overall
+                elif 'nemotron-3-super' in mid_lower:
+                    family_bonus = 90
+                elif 'gemma-4' in mid_lower:
+                    family_bonus = 80
+                elif 'gpt-oss' in mid_lower:
+                    family_bonus = 70
+                elif 'nemotron' in mid_lower:
+                    family_bonus = 60
+                elif 'laguna' in mid_lower:
+                    family_bonus = 50
+                elif 'north-mini' in mid_lower:
+                    family_bonus = 40
+                elif 'lfm' in mid_lower:
+                    family_bonus = 30
+                
+                # Capability score: tools+reasoning > tools > reasoning > base
+                capability_score = (has_tools and has_reasoning, has_tools, has_reasoning)
+                
+                # Return tuple for sorting (higher = better)
+                return (capability_score, family_bonus, ctx, model_id)
+            
+            free_models.sort(key=score_model, reverse=True)
+            best_model = free_models[0]
+            
+            result = (best_model, provider_id, base_url)
+            _FREEMAXXING_CACHE[provider_id] = result
+            return result
+            
+        except Exception:
+            continue
+    
+    return None
+
 # Merged dict (builtins + user config); populated by _load_direct_aliases()
 DIRECT_ALIASES: dict[str, DirectAlias] = {}
 
@@ -970,6 +1059,15 @@ def resolve_alias(
     direct = DIRECT_ALIASES.get(key)
     if direct is not None:
         return (direct.provider, direct.model, key)
+
+    # Dynamic freemaxxing: discover best free model at runtime
+    if key == "freemaxxing":
+        discovered = _discover_freemaxxing_model()
+        if discovered:
+            model_id, provider_id, base_url = discovered
+            # Return the discovered model on its native provider
+            # The caller (switch_model) will handle provider switching
+            return (provider_id, model_id, key)
 
     # Reverse lookup: match by model ID so full names (e.g. "kimi-k2.5",
     # "glm-4.7") route through direct aliases instead of falling through

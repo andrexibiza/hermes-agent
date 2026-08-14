@@ -191,6 +191,7 @@ SERVICE_PROVIDER_NAMES: Dict[str, str] = {
 # any remote service.
 LMSTUDIO_NOAUTH_PLACEHOLDER = "dummy-lm-api-key"
 ACTUAL_LOCAL_NOAUTH_PLACEHOLDER = "dummy-actual-local-api-key"
+LOCAL_NOAUTH_PLACEHOLDER = "no-auth-local-provider"
 
 
 def is_actual_local_base_url(base_url: str) -> bool:
@@ -547,12 +548,23 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
 # Auto-extend PROVIDER_REGISTRY with any api-key provider registered in
 # providers/ that is not already declared above.  New providers only need a
 # plugins/model-providers/<name>/ plugin — no edits to this file required.
-try:
+
+
+def _extend_provider_registry_from_plugins() -> None:
+    """Admit plugin-registered api-key providers into ``PROVIDER_REGISTRY``.
+
+    Called once at import. Idempotent (skips names already present) and
+    extracted from the old inline block so the admission predicate — including
+    the ``supports_noauth_loopback`` no-key case — is unit-testable.
+    """
     from providers import list_providers as _list_providers_for_registry
+
     for _pp in _list_providers_for_registry():
         if _pp.name in PROVIDER_REGISTRY:
             continue
-        if _pp.auth_type != "api_key" or not _pp.env_vars:
+        if _pp.auth_type != "api_key":
+            continue
+        if not _pp.env_vars and not getattr(_pp, "supports_noauth_loopback", False):
             continue
         # Skip providers that need custom token resolution or are special-cased
         # in resolve_provider() (copilot/kimi/zai have bespoke token refresh;
@@ -575,6 +587,10 @@ try:
         for _alias in _pp.aliases:
             if _alias not in PROVIDER_REGISTRY:
                 PROVIDER_REGISTRY[_alias] = PROVIDER_REGISTRY[_pp.name]
+
+
+try:
+    _extend_provider_registry_from_plugins()
 except Exception:
     pass
 
@@ -7203,6 +7219,24 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
     if not api_key and provider_id == "lmstudio":
         api_key = LMSTUDIO_NOAUTH_PLACEHOLDER
         key_source = key_source or "default"
+
+    # Generic no-auth loopback providers (e.g. a local proxy fronting a pool
+    # of backends): the provider profile declares ``supports_noauth_loopback``
+    # and fronts a local endpoint, so no user key is required. Substitute a
+    # placeholder the same way the lmstudio/actual carve-outs do, so the
+    # "no usable credentials" gate in runtime resolution passes.
+    if not api_key:
+        try:
+            from providers import get_provider_profile as _gpp_noauth
+
+            _noauth_profile = _gpp_noauth(provider_id)
+            if _noauth_profile is not None and getattr(
+                _noauth_profile, "supports_noauth_loopback", False
+            ):
+                api_key = LOCAL_NOAUTH_PLACEHOLDER
+                key_source = key_source or "local-noauth"
+        except Exception:
+            pass
 
     env_url = ""
     if pconfig.base_url_env_var:

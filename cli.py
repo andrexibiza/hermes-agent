@@ -8503,6 +8503,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             )
             try:
                 from hermes_cli.model_switch import switch_model as _switch_model
+                from hermes_cli.config import load_config as _load_config
+                _cfg = _load_config()
+                _user_provs = _cfg.get('providers', {})
+                _custom_provs = _cfg.get('custom_providers', [])
 
                 _reset_result = _switch_model(
                     raw_input=_config_model,
@@ -8512,6 +8516,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     current_api_key=self.api_key or "",
                     is_global=False,
                     explicit_provider=_config_provider or "",
+                    user_providers=_user_provs,
+                    custom_providers=_custom_provs,
                 )
                 if _reset_result.success:
                     if self.agent:
