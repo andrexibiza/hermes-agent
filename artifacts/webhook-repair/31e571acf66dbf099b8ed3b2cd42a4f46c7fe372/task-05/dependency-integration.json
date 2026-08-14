@@ -1,0 +1,96 @@
+[
+  {
+    "after": "670b0fe58c7caa76c3dbb1bf0d695e3526349867",
+    "base": "1d3d021282098261ce2ad224a76d97d89b16188c",
+    "before": "31e571acf66dbf099b8ed3b2cd42a4f46c7fe372",
+    "branch": "campaign/webhook-revolution-b3aa561f",
+    "commits_applied": [
+      "148db0abdd1aea28821747809fa2cb0794e1ad8c",
+      "d6b539853f084cd837775bbdc751fa09c74662ba",
+      "76e5e0090696d429977a68c2d81560e8d55bcd95",
+      "6b25d17561aaca5ed5dde4eed776eb4b3096bced",
+      "ececc7c02563e53c942a7dbe9acdc3b5b49da807",
+      "68b56f46ad0b322728e945511d899ea5dd4c877f",
+      "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+      "159d70a78f052c40d8c4d8f2ff0a94a276fc4b9f"
+    ],
+    "commits_considered": [
+      "148db0abdd1aea28821747809fa2cb0794e1ad8c",
+      "d6b539853f084cd837775bbdc751fa09c74662ba",
+      "76e5e0090696d429977a68c2d81560e8d55bcd95",
+      "6b25d17561aaca5ed5dde4eed776eb4b3096bced",
+      "3163b826eb5dd0133909e6551532cf661d94599f",
+      "ececc7c02563e53c942a7dbe9acdc3b5b49da807",
+      "68b56f46ad0b322728e945511d899ea5dd4c877f",
+      "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+      "159d70a78f052c40d8c4d8f2ff0a94a276fc4b9f"
+    ],
+    "expected_head": "159d70a78f052c40d8c4d8f2ff0a94a276fc4b9f",
+    "pr": 84835,
+    "source_only": false
+  },
+  {
+    "after": "4fead3282cf88459cb6286ce929d812dde0dd9f0",
+    "base": "1d3d021282098261ce2ad224a76d97d89b16188c",
+    "before": "670b0fe58c7caa76c3dbb1bf0d695e3526349867",
+    "branch": "campaign/webhook-auth-extraction-2",
+    "commits_applied": [
+      "4b2be4b384cfe60d371975cf1450cf1533f61e04",
+      "fac829eec2b47bce1d24ebb982d8522482874985"
+    ],
+    "commits_considered": [
+      "148db0abdd1aea28821747809fa2cb0794e1ad8c",
+      "d6b539853f084cd837775bbdc751fa09c74662ba",
+      "76e5e0090696d429977a68c2d81560e8d55bcd95",
+      "6b25d17561aaca5ed5dde4eed776eb4b3096bced",
+      "4b2be4b384cfe60d371975cf1450cf1533f61e04",
+      "fac829eec2b47bce1d24ebb982d8522482874985",
+      "83eb755bd42703e07a19e1e1355f21dca64af99c",
+      "09ac2ae2e4b18c4badbbcfd7f17fe78e495974d0",
+      "5f270716c07b7ce45f32244ff12acf64a8f434ed"
+    ],
+    "expected_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "pr": 84849,
+    "source_only": false
+  },
+  {
+    "after": "4fead3282cf88459cb6286ce929d812dde0dd9f0",
+    "base": "1d3d021282098261ce2ad224a76d97d89b16188c",
+    "before": "4fead3282cf88459cb6286ce929d812dde0dd9f0",
+    "branch": "campaign/webhook-rendering-extraction",
+    "commits_applied": [],
+    "commits_considered": [
+      "148db0abdd1aea28821747809fa2cb0794e1ad8c",
+      "d6b539853f084cd837775bbdc751fa09c74662ba",
+      "76e5e0090696d429977a68c2d81560e8d55bcd95",
+      "6b25d17561aaca5ed5dde4eed776eb4b3096bced",
+      "4d6ea3fdb2cf76c4d1fdf62ceaaf36cfd2a43a59",
+      "59fa8200353d39b59f81c430d4df04ad517a3be7",
+      "746a3fff68dd38e7609507bc544c51f53aa1779f",
+      "fad39719caa0fa0b36b9e4af728a17840bb4ef93"
+    ],
+    "expected_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "pr": 84858,
+    "source_only": true
+  },
+  {
+    "after": "4fead3282cf88459cb6286ce929d812dde0dd9f0",
+    "base": "1d3d021282098261ce2ad224a76d97d89b16188c",
+    "before": "4fead3282cf88459cb6286ce929d812dde0dd9f0",
+    "branch": "campaign/webhook-delivery-extraction",
+    "commits_applied": [],
+    "commits_considered": [
+      "148db0abdd1aea28821747809fa2cb0794e1ad8c",
+      "d6b539853f084cd837775bbdc751fa09c74662ba",
+      "76e5e0090696d429977a68c2d81560e8d55bcd95",
+      "6b25d17561aaca5ed5dde4eed776eb4b3096bced",
+      "7f533edef7fc0ec8e1666280b37db2a3f24b3680",
+      "4ea172831afcb817b78b9e100a447e490188862f",
+      "3f9a1df9024fe9601ecc3ff226808512880d92fd",
+      "4594059f0c7f3b54281623f93389086355e6f058"
+    ],
+    "expected_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "pr": 84939,
+    "source_only": true
+  }
+]

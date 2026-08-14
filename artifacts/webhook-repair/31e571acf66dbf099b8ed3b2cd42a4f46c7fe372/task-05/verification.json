@@ -1,0 +1,18 @@
+{
+  "branch": "wr/task-05-adapter-seams",
+  "changed_files": [
+    "gateway/platforms/webhook.py",
+    "gateway/platforms/webhook_delivery.py",
+    "gateway/platforms/webhook_ingress.py",
+    "gateway/platforms/webhook_rendering.py",
+    "tests/gateway/test_webhook_seam_identity.py"
+  ],
+  "head": "4fead3282cf88459cb6286ce929d812dde0dd9f0",
+  "head_before_commit": "4fead3282cf88459cb6286ce929d812dde0dd9f0",
+  "phase": "verification",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\task-05-adapter-seams",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 5,
+  "timestamp": "2026-08-14T22:33:58Z"
+}
