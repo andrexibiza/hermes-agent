@@ -261,6 +261,7 @@ def test_disposable_board_roundtrip_via_direct_claude_cli(
         argv = receipt["argv"]
         assert "-p" in argv
         assert "--permission-mode" in argv
+        assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
 
         # --- workspace operation ------------------------------------------
         assert (workspace / "worker-artifact.txt").exists()

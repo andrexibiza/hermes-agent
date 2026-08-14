@@ -753,6 +753,44 @@ class TestSpawnCommand:
         assert rules[0] == "Edit"
         assert "Bash(hermes kanban show:*)" in rules
 
+    def test_allow_list_alone_does_not_suppress_permission_mode(
+        self, spawn_env, monkeypatch
+    ):
+        """Regression: `--allowedTools` whitelists tools but is NOT a
+        permission mode. It must not suppress permission-mode defaulting — a
+        worker with only an allow-list and no mode would silently no-op on
+        every tool outside the list."""
+        kb = spawn_env["kb"]
+        _select(
+            monkeypatch, kb, worker_executor="claude_cli",
+            claude_cli_extra_args=["--allowedTools", "Edit"],
+        )
+
+        kb._default_spawn(_make_task(kb), str(spawn_env["workspace"]))
+
+        cmd = spawn_env["captured"]["cmd"]
+        assert "--permission-mode" in cmd
+        assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
+
+    def test_allow_list_alone_does_not_suppress_the_warning(
+        self, spawn_env, monkeypatch, caplog
+    ):
+        """An allow-list-only config with an explicitly empty mode must still
+        hit the warning path (previously the allow-list skipped the whole
+        block, leaving a silent no-op)."""
+        kb = spawn_env["kb"]
+        _select(
+            monkeypatch, kb, worker_executor="claude_cli",
+            claude_cli_permission_mode="",
+            claude_cli_extra_args=["--allowedTools", "Edit"],
+        )
+
+        with caplog.at_level("WARNING"):
+            kb._default_spawn(_make_task(kb), str(spawn_env["workspace"]))
+
+        assert "--permission-mode" not in spawn_env["captured"]["cmd"]
+        assert "permission" in caplog.text.lower()
+
     def test_prompt_stays_after_the_variadic_run(self, spawn_env, monkeypatch):
         """Regression: a prompt trailing a variadic flag is eaten as another
         value — the CLI then exits "Input must be provided...". `-p` must

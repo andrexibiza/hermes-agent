@@ -10387,13 +10387,32 @@ ENV_ACTIVE_EXECUTOR = "HERMES_KANBAN_EXECUTOR"
 #: a command. We do NOT add one implicitly (silently escalating a worker's
 #: privileges is not ours to do); we warn so the operator sees why the lane
 #: appears to no-op.
+#:
+#: These are permission-*mode* flags: they decide how the CLI answers
+#: permission prompts for the whole run. Tool allow-lists (``--allowedTools`` /
+#: ``--allowed-tools``) are deliberately NOT here — see
+#: :data:`_CLAUDE_CLI_ALLOW_LIST_FLAGS`. Whitelisting a tool does not change
+#: the mode, so an allow-list must not suppress the defaulting (or the
+#: warning) below; a worker with only an allow-list and no mode would
+#: otherwise silently no-op on every tool outside the list.
 _CLAUDE_CLI_PERMISSION_FLAGS = (
     "--permission-mode",
     "--dangerously-skip-permissions",
     "--allow-dangerously-skip-permissions",
+    "--settings",
+)
+
+#: Tool allow-list flags for the direct lane. These whitelist specific tools
+#: but leave the permission *mode* untouched — with only ``--allowedTools``
+#: set, ``claude -p`` still runs in its default ask-a-human mode for
+#: everything outside the list, which a TTY-less worker cannot answer. They
+#: are therefore excluded from :data:`_CLAUDE_CLI_PERMISSION_FLAGS` so they
+#: neither suppress the default ``--permission-mode`` nor its warning, and
+#: they are merged (not replaced) with the board-protocol grants by
+#: :func:`_merge_allowed_tools`.
+_CLAUDE_CLI_ALLOW_LIST_FLAGS = (
     "--allowedTools",
     "--allowed-tools",
-    "--settings",
 )
 
 #: ``--permission-mode`` applied when the operator supplied no permission flag
@@ -10893,10 +10912,14 @@ def _build_claude_cli_worker_command(
         else:
             # Explicitly disabled. A read-only investigation lane is a
             # legitimate setup, but it is also the single most common reason
-            # this lane "does nothing", so it stays loud.
+            # this lane "does nothing", so it stays loud. Note an
+            # --allowedTools allow-list does NOT change the mode — it only
+            # whitelists specific tools, so it must not suppress this warning.
             _log.warning(
                 "kanban worker %s: kanban.claude_cli_permission_mode is empty and "
-                "no permission flag is set in kanban.claude_cli_extra_args, so "
+                "no permission-mode flag is set in kanban.claude_cli_extra_args "
+                "(an --allowedTools/--allowed-tools allow-list does not count — "
+                "it whitelists tools but leaves the mode at its default), so "
                 "`claude -p` runs in its default ask-a-human permission mode. The "
                 "worker can still report on the board (those commands are granted "
                 "explicitly) but cannot edit files or run any other command. Note "
@@ -10962,7 +10985,7 @@ def _merge_allowed_tools(extra: list[str], grants: list[str]) -> list[str]:
     they already supplied one, the grants are appended to that same run
     instead of being added as a second flag.
     """
-    aliases = ("--allowedTools", "--allowed-tools")
+    aliases = _CLAUDE_CLI_ALLOW_LIST_FLAGS
     out = list(extra)
     for idx, arg in enumerate(out):
         name = arg.split("=", 1)[0]
