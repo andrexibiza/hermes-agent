@@ -1,0 +1,1730 @@
+[
+  {
+    "file_jaccard": 0.8,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:84849",
+    "right_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.8,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:84858",
+    "right_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.8,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:84939",
+    "right_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.615385,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:84978",
+    "right_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.444444,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85002",
+    "right_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.347826,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85025",
+    "right_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.5,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85318",
+    "right_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.1,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.090909,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.222222,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.111111,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.111111,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.222222,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.1,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.222222,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.1,
+    "left": "pr:84835",
+    "left_head": "898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.666667,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:84858",
+    "right_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.666667,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:84939",
+    "right_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.533333,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:84978",
+    "right_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.4,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85002",
+    "right_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.32,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85025",
+    "right_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.642857,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85318",
+    "right_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_auth.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_auth_seam.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.076923,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.090909,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.090909,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84849",
+    "left_head": "5f270716c07b7ce45f32244ff12acf64a8f434ed",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.666667,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:84939",
+    "right_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.533333,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:84978",
+    "right_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.4,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85002",
+    "right_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.32,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85025",
+    "right_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.4375,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85318",
+    "right_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.076923,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.090909,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.090909,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84858",
+    "left_head": "fad39719caa0fa0b36b9e4af728a17840bb4ef93",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.533333,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:84978",
+    "right_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.4,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85002",
+    "right_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.32,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85025",
+    "right_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.4375,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85318",
+    "right_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.076923,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.090909,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.090909,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.181818,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:84939",
+    "left_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.409091,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85002",
+    "right_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "hermes_cli/webhook.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.333333,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85025",
+    "right_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "hermes_cli/webhook.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.368421,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85318",
+    "right_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.066667,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.133333,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "hermes_cli/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.071429,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.071429,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.133333,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.066667,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.066667,
+    "left": "pr:84978",
+    "left_head": "b84a954121a777bc69e9a8a4d605c9c0967ff4c4",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.782609,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85025",
+    "right_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/config.py",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "gateway/webhook_config.py",
+      "hermes_cli/config_defaults.py",
+      "hermes_cli/gateway.py",
+      "hermes_cli/setup.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "hermes_cli/webhook.py",
+      "tests/gateway/test_webhook_effective_config.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/hermes_cli/test_gateway_setup.py",
+      "tests/hermes_cli/test_webhook_cli.py",
+      "tests/hermes_cli/test_webhook_setup.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.291667,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85318",
+    "right_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.05,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.157895,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "hermes_cli/webhook.py",
+      "tests/hermes_cli/test_webhook_cli.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.105263,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.052632,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.052632,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.1,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.105263,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.05,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.105263,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.05,
+    "left": "pr:85002",
+    "left_head": "371639a63b1bc64a6bf37599f9ea06b447c8a18a",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.241379,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85318",
+    "right_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.04,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.125,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "hermes_cli/webhook.py",
+      "tests/hermes_cli/test_webhook_cli.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.041667,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.041667,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.08,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.04,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.083333,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.04,
+    "left": "pr:85025",
+    "left_head": "a4a6ebbdcfe35d581831cbb4f2aefa9ad291b713",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85523",
+    "right_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "shared_files": [
+      "gateway/platforms/webhook.py",
+      "tests/gateway/test_webhook_adapter.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.0625,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85634",
+    "right_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.071429,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.071429,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.214286,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "tests/gateway/test_webhook_integration.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.066667,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.066667,
+    "left": "pr:85318",
+    "left_head": "def3d90cf679250ad77e1bafeb383b33ebe05df1",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85523",
+    "left_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85523",
+    "left_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85523",
+    "left_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85523",
+    "left_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85636",
+    "right_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.142857,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85634",
+    "left_head": "81cda2beee50cbc91884978d877d3388714f4af0",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85636",
+    "left_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "right": "pr:85638",
+    "right_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85636",
+    "left_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.4,
+    "left": "pr:85636",
+    "left_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.5,
+    "left": "pr:85636",
+    "left_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85636",
+    "left_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.5,
+    "left": "pr:85636",
+    "left_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85636",
+    "left_head": "084c60084788e0e33e37c94399dee997e3ef5bed",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.333333,
+    "left": "pr:85638",
+    "left_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "right": "pr:85640",
+    "right_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85638",
+    "left_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85638",
+    "left_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85638",
+    "left_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85638",
+    "left_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85638",
+    "left_head": "d6cf23eb75f02c97b8fe2d1ff0bbad114194b306",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85640",
+    "left_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "right": "pr:85644",
+    "right_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85640",
+    "left_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85640",
+    "left_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85640",
+    "left_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.25,
+    "left": "pr:85640",
+    "left_head": "53d9cc2c501edd8fb1f0a0bda1867015cff27fab",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.4,
+    "left": "pr:85644",
+    "left_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "right": "pr:85645",
+    "right_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85644",
+    "left_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.4,
+    "left": "pr:85644",
+    "left_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.166667,
+    "left": "pr:85644",
+    "left_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85645",
+    "left_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "right": "pr:85653",
+    "right_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.5,
+    "left": "pr:85645",
+    "left_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85645",
+    "left_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85653",
+    "left_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "right": "pr:85674",
+    "right_head": "904ebb848a76b5b133296654cd337558021be946",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85653",
+    "left_head": "9ee07963f8955cf33c8e8ecb7fd1320308a77835",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  },
+  {
+    "file_jaccard": 0.2,
+    "left": "pr:85674",
+    "left_head": "904ebb848a76b5b133296654cd337558021be946",
+    "right": "pr:85675",
+    "right_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "shared_files": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ]
+  }
+]
