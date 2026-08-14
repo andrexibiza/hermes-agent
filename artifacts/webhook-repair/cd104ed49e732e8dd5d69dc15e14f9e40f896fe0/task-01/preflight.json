@@ -1,0 +1,13 @@
+{
+  "branch": "wr/webhook-revolution-controller",
+  "expected_head": null,
+  "head": "dff4a931f33d581921c2e0dc29158ad803f74d91",
+  "mode": "controller",
+  "phase": "preflight",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\controller",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 1,
+  "task_title": "Storage, clean workspace, and immutable source pin",
+  "timestamp": "2026-08-14T20:42:23Z"
+}
