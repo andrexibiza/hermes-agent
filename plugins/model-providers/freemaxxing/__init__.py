@@ -48,17 +48,32 @@ def _resolve_key(provider_name: str, env_fallbacks: list) -> str:
     profile's value (a plain ``os.environ.get`` would leak).
     """
     try:
-        from agent.secret_scope import get_secret
+        from agent.secret_scope import get_secret, is_multiplex_active
 
         for env in env_fallbacks:
             val = get_secret(env)
             if val and str(val).strip():
                 return str(val).strip()
-    except Exception:
-        pass
 
-    # Last-resort fallback: single-profile deployments may provide keys via the
-    # process environment rather than a secret scope.
+        # Multiplexing is ON: the secret scope is authoritative and we must NOT
+        # fall through to the process environment — under a multiplexer
+        # ``os.environ`` may hold another profile's value. Fail closed.
+        if is_multiplex_active():
+            return ""
+    except Exception:
+        # If the secret scope itself is unavailable (e.g. raised), do not
+        # silently reach for os.environ when multiplexing could be active.
+        try:
+            from agent.secret_scope import is_multiplex_active
+
+            if is_multiplex_active():
+                return ""
+        except Exception:
+            pass
+
+    # Single-profile deployments may provide keys via the process environment
+    # rather than a secret scope (systemd Environment=, secret-manager wrappers,
+    # plain shell exports). Only reach for os.environ when multiplexing is off.
     for env in env_fallbacks:
         val = os.environ.get(env, "")
         if val:

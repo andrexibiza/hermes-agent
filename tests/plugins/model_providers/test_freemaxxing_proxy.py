@@ -80,10 +80,15 @@ class MockBackend:
                 if outer.stream_chunks is not None:
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Connection", "close")
                     self.end_headers()
                     for chunk in outer.stream_chunks:
                         self.wfile.write(chunk)
                         self.wfile.flush()
+                    # Explicit end-of-body signal: tell the HTTP/1.1 handler to
+                    # close the connection after this response, so a client
+                    # waiting on read(8192) gets EOF instead of hanging.
+                    self.close_connection = True
                     return
 
                 if outer.status_code == 429 and outer.retry_after is not None:

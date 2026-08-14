@@ -22,6 +22,25 @@ from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger("freemaxxing.proxy")
 
+
+def _open_credentialed(req, *, timeout: float):
+    """Open a credentialed request without forwarding credentials across origins.
+
+    Preferred path is ``hermes_cli.urllib_security.open_credentialed_url`` (the
+    redirect-safe opener that strips auth on cross-origin 30x), matching how
+    ``providers/base.py`` fetches credentialed URLs. Falls back to plain
+    ``urlopen`` only when that helper is unavailable (standalone proxy/test use
+    outside a Hermes install). The request carries Authorization, so never use a
+    raw redirect-following opener when the security module is importable.
+    """
+    try:
+        from hermes_cli.urllib_security import open_credentialed_url
+
+        return open_credentialed_url(req, timeout=timeout)
+    except ImportError:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
 # ── Errors ───────────────────────────────────────────────────────────────────
 # Only these are cooldown-worthy (transient / recoverable):
 #   RateLimitError  -> 429, honor Retry-After
@@ -65,6 +84,9 @@ class Backend:
         self.last_success: float = 0.0
         self.cached_models: Optional[List[str]] = None
         self.cached_models_until: float = 0.0
+        # Serializes the refresh-and-assign of (base_url, api_key) so concurrent
+        # handler threads cannot interleave a new key with an old base URL.
+        self.refresh_lock = threading.Lock()
         self.last_error_class: Optional[str] = None
         # Optional credential refresher: callable() -> (base_url, api_key).
         # Set for backends whose auth rotates (Nous inference JWT). Invoked on
@@ -177,31 +199,41 @@ class BackendPool:
             return None
 
     def get_aggregated_models(self) -> List[Dict[str, str]]:
-        """Union of all backends' models with provenance (owned_by = backend name)."""
+        """Union of all backends' models with provenance (owned_by = backend name).
+
+        Backend list is snapshotted under the lock; remote catalog fetches run
+        OUTSIDE the lock so a slow/absent catalog (8s timeout per backend) can
+        never freeze chat selection, health, or add/clear for other threads.
+        The refreshed catalogs are published back under the lock.
+        """
         with self._lock:
             if self._global_models_cache is not None and time.time() < self._global_models_until:
                 return list(self._global_models_cache)
-            seen: Set[str] = set()
-            result: List[Dict[str, str]] = []
-            # Always advertise the router alias first so it's selectable in the
-            # picker regardless of backend catalog state.
-            result.append({
-                "id": "freemaxxing",
-                "object": "model",
-                "owned_by": "freemaxxing",
-            })
-            seen.add("freemaxxing")
-            for b in self.backends:
-                catalog = self._fetch_models(b)
-                b.set_cached_models(catalog)
-                for mid in catalog:
-                    if mid not in seen:
-                        seen.add(mid)
-                        result.append({"id": mid, "object": "model", "owned_by": b.name})
-            result.sort(key=lambda m: m["id"])
+            backends = list(self.backends)
+
+        seen: Set[str] = set()
+        result: List[Dict[str, str]] = []
+        # Always advertise the router alias first so it's selectable in the
+        # picker regardless of backend catalog state.
+        result.append({
+            "id": "freemaxxing",
+            "object": "model",
+            "owned_by": "freemaxxing",
+        })
+        seen.add("freemaxxing")
+        for b in backends:
+            catalog = self._fetch_models(b)
+            b.set_cached_models(catalog)
+            for mid in catalog:
+                if mid not in seen:
+                    seen.add(mid)
+                    result.append({"id": mid, "object": "model", "owned_by": b.name})
+        result.sort(key=lambda m: m["id"])
+
+        with self._lock:
             self._global_models_cache = result
             self._global_models_until = time.time() + 60.0
-            return list(result)
+        return list(result)
 
     def _fetch_models(self, backend: Backend) -> List[str]:
         url = backend.base_url + "/models"
@@ -212,7 +244,7 @@ class BackendPool:
         if backend.api_key:
             req.add_header("Authorization", f"Bearer {backend.api_key}")
         try:
-            with urllib.request.urlopen(req, timeout=8.0) as resp:
+            with _open_credentialed(req, timeout=8.0) as resp:
                 data = json.loads(resp.read().decode())
                 items = data if isinstance(data, list) else data.get("data", [])
                 return [m["id"] for m in items if isinstance(m, dict) and "id" in m]
@@ -350,11 +382,12 @@ class ChatCompletionsHandler(BaseHTTPRequestHandler):
         last_error: Optional[str] = None
         max_attempts = max(len(pool.backends) * 2, 3)
 
-        while len(tried) < max_attempts:
+        for _ in range(max_attempts):
             backend = pool.next(model)
-            if backend is None or backend.name in tried:
-                self._send_error(503, f"All backends exhausted. Last error: {last_error}")
-                return
+            if backend is None:
+                break
+            if backend.name in tried:
+                continue
             tried.add(backend.name)
             try:
                 response = _forward(backend, body)
@@ -394,11 +427,12 @@ class ChatCompletionsHandler(BaseHTTPRequestHandler):
         last_error: Optional[str] = None
         max_attempts = max(len(pool.backends) * 2, 3)
 
-        while len(tried) < max_attempts:
+        for _ in range(max_attempts):
             backend = pool.next(model)
-            if backend is None or backend.name in tried:
-                self._send_error(503, f"All backends exhausted. Last error: {last_error}")
-                return
+            if backend is None:
+                break
+            if backend.name in tried:
+                continue
             tried.add(backend.name)
             try:
                 resp = _open_stream(backend, body)
@@ -502,7 +536,7 @@ def _open_response(backend: Backend, body: Dict[str, Any]):
             req.add_header("Authorization", f"Bearer {api_key}")
 
         try:
-            return urllib.request.urlopen(req, timeout=120.0)
+            return _open_credentialed(req, timeout=120.0)
         except urllib.error.HTTPError as e:
             # Do NOT read/log the body — it may contain prompt fragments or secrets.
             code = e.code
@@ -534,30 +568,44 @@ def _open_response(backend: Backend, body: Dict[str, Any]):
         # If the backend has a refresher but no key yet (JWT deferred from
         # discovery, when auth was mid-import), resolve it before the first
         # attempt so the request doesn't burn a guaranteed 401 round-trip.
+        # The per-backend lock serializes refresh-and-assign so concurrent
+        # threads cannot interleave a new key with an old base URL; re-check the
+        # key after acquiring so only the first thread performs the refresh.
         if not backend.api_key and backend.refresh is not None:
-            try:
-                new_base, new_key = backend.refresh()
-                if new_key:
-                    backend.base_url = new_base
-                    backend.api_key = new_key
-            except Exception as e:
-                logger.debug("freemaxxing: %s pre-request refresh failed: %s", backend.name, e)
+            with backend.refresh_lock:
+                if not backend.api_key:
+                    try:
+                        new_base, new_key = backend.refresh()
+                        if new_key:
+                            backend.base_url = new_base
+                            backend.api_key = new_key
+                    except Exception as e:
+                        logger.debug("freemaxxing: %s pre-request refresh failed: %s", backend.name, e)
         return _attempt(backend.base_url, backend.api_key)
     except AuthError:
         if backend.refresh is None:
             raise
         # Rotating credential (Nous JWT): re-resolve once and retry before
-        # declaring the backend auth-broken.
-        try:
-            new_base, new_key = backend.refresh()
-            if new_key and new_key != backend.api_key:
-                backend.base_url = new_base
-                backend.api_key = new_key
-                return _attempt(new_base, new_key)
-        except Exception as e:
-            logger.warning(
-                "freemaxxing: %s credential refresh failed: %s", backend.name, e
-            )
+        # declaring the backend auth-broken. Serialized per-backend so the key
+        # and base URL are assigned atomically under concurrency. Only skip the
+        # refresh when another thread actually produced a new key (the pre-lock
+        # value changed); a pre-existing stale/placeholder key still triggers a
+        # refresh here.
+        before = backend.api_key
+        with backend.refresh_lock:
+            if backend.api_key != before:
+                # Another thread refreshed while we waited; retry with the pair.
+                return _attempt(backend.base_url, backend.api_key)
+            try:
+                new_base, new_key = backend.refresh()
+                if new_key and new_key != backend.api_key:
+                    backend.base_url = new_base
+                    backend.api_key = new_key
+                    return _attempt(new_base, new_key)
+            except Exception as e:
+                logger.warning(
+                    "freemaxxing: %s credential refresh failed: %s", backend.name, e
+                )
         raise
 
 

@@ -7245,24 +7245,6 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
         api_key = LMSTUDIO_NOAUTH_PLACEHOLDER
         key_source = key_source or "default"
 
-    # Generic no-auth loopback providers (e.g. a local proxy fronting a pool
-    # of backends): the provider profile declares ``supports_noauth_loopback``
-    # and fronts a local endpoint, so no user key is required. Substitute a
-    # placeholder the same way the lmstudio/actual carve-outs do, so the
-    # "no usable credentials" gate in runtime resolution passes.
-    if not api_key:
-        try:
-            from providers import get_provider_profile as _gpp_noauth
-
-            _noauth_profile = _gpp_noauth(provider_id)
-            if _noauth_profile is not None and getattr(
-                _noauth_profile, "supports_noauth_loopback", False
-            ):
-                api_key = LOCAL_NOAUTH_PLACEHOLDER
-                key_source = key_source or "local-noauth"
-        except Exception:
-            pass
-
     env_url = ""
     if pconfig.base_url_env_var:
         env_url = os.getenv(pconfig.base_url_env_var, "").strip()
@@ -7311,6 +7293,31 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
     if not api_key and provider_id == "actual" and is_actual_local_base_url(base_url):
         api_key = ACTUAL_LOCAL_NOAUTH_PLACEHOLDER
         key_source = key_source or "local-offline"
+
+    # Generic no-auth loopback providers (e.g. a local proxy fronting a pool
+    # of backends): the profile declares ``supports_noauth_loopback`` AND fronts
+    # an actually-local endpoint, so no user key is required. Substitute a
+    # placeholder the same way the lmstudio/actual carve-outs do, so the
+    # "no usable credentials" gate in runtime resolution passes. The local-base
+    # guard is deliberate: a remote URL must never receive a fabricated Bearer
+    # token (would let a remote server harvest a placeholder credential).
+    if (
+        not api_key
+        and base_url
+        and is_actual_local_base_url(base_url)
+        and provider_id not in {"lmstudio", "actual"}
+    ):
+        try:
+            from providers import get_provider_profile as _gpp_noauth
+
+            _noauth_profile = _gpp_noauth(provider_id)
+            if _noauth_profile is not None and getattr(
+                _noauth_profile, "supports_noauth_loopback", False
+            ):
+                api_key = LOCAL_NOAUTH_PLACEHOLDER
+                key_source = key_source or "local-noauth"
+        except Exception:
+            pass
 
     return {
         "provider": provider_id,

@@ -127,11 +127,20 @@ def test_noauth_loopback_provider_resolves_placeholder_key():
     key in ``resolve_api_key_provider_credentials`` so the runtime missing-key
     gate passes — the generic equivalent of the lmstudio/actual carve-outs."""
     import providers
+    from providers import _ALIASES as PROV_ALIASES, _REGISTRY as PROV_REGISTRY
+    from providers import _PROVIDER_LIST_CACHE as PROV_LIST_CACHE
     from providers.base import ProviderProfile
     from hermes_cli.auth import (
         LOCAL_NOAUTH_PLACEHOLDER,
         _extend_provider_registry_from_plugins,
     )
+
+    # Snapshot every global this test mutates so a failure restores the exact
+    # prior state instead of leaking the test provider into other tests.
+    prov_registry_bak = dict(PROV_REGISTRY)
+    prov_aliases_bak = dict(PROV_ALIASES)
+    auth_registry_bak = dict(PROVIDER_REGISTRY)
+    cache_bak = PROV_LIST_CACHE
 
     profile = ProviderProfile(
         name="test-noauth-loopback",
@@ -141,20 +150,30 @@ def test_noauth_loopback_provider_resolves_placeholder_key():
         auth_type="api_key",
         supports_noauth_loopback=True,
     )
-    providers.register_provider(profile)
-    _extend_provider_registry_from_plugins()
+    try:
+        providers.register_provider(profile)
+        _extend_provider_registry_from_plugins()
 
-    assert "test-noauth-loopback" in PROVIDER_REGISTRY
-    pconfig = PROVIDER_REGISTRY["test-noauth-loopback"]
-    assert pconfig.auth_type == "api_key"
-    assert pconfig.inference_base_url == "http://127.0.0.1:11435/v1"
+        assert "test-noauth-loopback" in PROVIDER_REGISTRY
+        pconfig = PROVIDER_REGISTRY["test-noauth-loopback"]
+        assert pconfig.auth_type == "api_key"
+        assert pconfig.inference_base_url == "http://127.0.0.1:11435/v1"
 
-    creds = resolve_api_key_provider_credentials("test-noauth-loopback")
-    assert creds["api_key"] == LOCAL_NOAUTH_PLACEHOLDER
-    assert "127.0.0.1" in creds["base_url"]
+        creds = resolve_api_key_provider_credentials("test-noauth-loopback")
+        assert creds["api_key"] == LOCAL_NOAUTH_PLACEHOLDER
+        assert "127.0.0.1" in creds["base_url"]
 
-    # The alias is registered too, so resolve_provider resolves it.
-    assert resolve_provider("test-noauth-loopback") == "test-noauth-loopback"
+        # The alias is registered too, so resolve_provider resolves it.
+        assert resolve_provider("test-noauth-loopback") == "test-noauth-loopback"
+    finally:
+        # Restore exact prior state — even on assertion failure.
+        PROV_REGISTRY.clear()
+        PROV_REGISTRY.update(prov_registry_bak)
+        PROV_ALIASES.clear()
+        PROV_ALIASES.update(prov_aliases_bak)
+        PROVIDER_REGISTRY.clear()
+        PROVIDER_REGISTRY.update(auth_registry_bak)
+        providers._PROVIDER_LIST_CACHE = cache_bak
 
 
 # =============================================================================

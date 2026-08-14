@@ -370,6 +370,26 @@ class DirectAlias(NamedTuple):
 # Built-in direct aliases (can be extended via config.yaml model_aliases:)
 _BUILTIN_DIRECT_ALIASES: dict[str, DirectAlias] = {}
 
+def _freemaxxing_health_ok(base_url: str) -> bool:
+    """Return True when ``base_url``/healthz responds 200 (a live Freemaxxing
+    proxy). Kept as a module-level helper so the alias/route path can verify the
+    endpoint belongs to the proxy before resolving a route to it, and so tests
+    can patch it without spinning up a real server."""
+    from urllib import request
+
+    health_url = base_url.rstrip("/") + "/healthz"
+    req = request.Request(
+        health_url,
+        headers={"User-Agent": "hermes-cli"},
+        method="GET",
+    )
+    try:
+        with request.urlopen(req, timeout=3.0) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def _ensure_freemaxxing_proxy() -> str:
     """Start the bundled loopback endpoint without selecting a vendor model.
 
@@ -377,6 +397,11 @@ def _ensure_freemaxxing_proxy() -> str:
     ``plugins.model_providers.freemaxxing``. The plugin owns process lifecycle;
     this helper merely ensures its local endpoint is listening before picker or
     model validation probes ``/v1/models``.
+
+    Returns the loopback base URL only after the endpoint is confirmed to be a
+    healthy Freemaxxing proxy (``/healthz`` reachable). If the proxy cannot be
+    started or the port is owned by an unrelated process, this raises so the
+    caller never resolves a route that points at a foreign or dead endpoint.
     """
     from importlib import import_module
 
@@ -385,7 +410,16 @@ def _ensure_freemaxxing_proxy() -> str:
     if get_provider_profile("freemaxxing") is None:
         raise RuntimeError("Freemaxxing provider plugin is not available")
     plugin = import_module("plugins.model_providers.freemaxxing")
-    return plugin.ensure_proxy()
+    base_url = plugin.ensure_proxy()
+
+    # Verify the endpoint actually belongs to a healthy Freemaxxing proxy
+    # before we hand a route to it. A concurrent process that grabbed the same
+    # loopback port would otherwise make us resolve a foreign endpoint.
+    if not _freemaxxing_health_ok(base_url):
+        raise RuntimeError(
+            f"Freemaxxing proxy at {base_url}/healthz did not respond 200"
+        )
+    return base_url
 
 
 # Merged dict (builtins + user config); populated by _load_direct_aliases()
@@ -991,12 +1025,11 @@ def resolve_alias(
 
     # Freemaxxing remains opaque inside Hermes core. Starting the local
     # loopback endpoint is lifecycle setup only; concrete backend/model
-    # selection belongs exclusively to that proxy.
+    # selection belongs exclusively to that proxy. If the proxy cannot be
+    # started or verified healthy, do NOT resolve a successful route — a
+    # foreign process owning the port must never receive our requests.
     if key in {"freemaxxing", "fm", "freemaxxing-auto"}:
-        try:
-            _ensure_freemaxxing_proxy()
-        except Exception as exc:
-            logger.debug("Freemaxxing proxy startup deferred: %s", exc)
+        _ensure_freemaxxing_proxy()
         return ("freemaxxing", "freemaxxing", key)
 
     # Reverse lookup: match by model ID so full names (e.g. "kimi-k2.5",
