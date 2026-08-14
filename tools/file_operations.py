@@ -412,6 +412,41 @@ def _split_tool_diagnostics(output: str) -> tuple[str, str]:
     return '\n'.join(diagnostics), '\n'.join(payload)
 
 
+def _split_files_only_diagnostics(output: str) -> tuple[str, str]:
+    """Separate rg/grep diagnostics from files-only output.
+
+    ``rg --files`` and ``rg -l``/``grep -l`` print exactly one path per
+    line, and a path may legitimately contain whitespace (e.g.
+    ``C:/Users/davep/project/my file.py``). ``_split_tool_diagnostics`` only
+    accepts whitespace-free files-only lines, so a spaced path would be
+    discarded as a diagnostic and a successful search would silently return
+    zero files. This parser instead preserves every line that is not a tool
+    diagnostic verbatim, so arbitrary path text survives.
+
+    Diagnostics are recognized by shape: ``rg: ``/``grep: `` prefixes
+    (``rg: <path>: IO error``, ``rg: error parsing glob '[': ...``),
+    ``error: `` lines, the ``regex parse error:`` header, and indented
+    continuation lines such as the carets under a parse-error block. Paths
+    never begin with whitespace or carry those prefixes, so no real path is
+    misclassified. Blank lines are dropped on both sides.
+    """
+    diagnostics: list[str] = []
+    payload: list[str] = []
+    for line in output.split('\n'):
+        if not line.strip():
+            continue
+        stripped = line.lstrip()
+        if (stripped.startswith("rg: ")
+                or stripped.startswith("grep: ")
+                or stripped.startswith("error: ")
+                or stripped.startswith("regex parse error:")
+                or line[:1].isspace()):
+            diagnostics.append(line)
+        else:
+            payload.append(line)
+    return '\n'.join(diagnostics), '\n'.join(payload)
+
+
 # A real rg/grep output line starts with a path token and is followed by a
 # ``:`` (match/count), a ``-`` (context), or nothing (files_only). Tool
 # diagnostics ("rg: ...", "grep: ...", "error: ...", indented carets) never
@@ -2901,7 +2936,7 @@ class ShellFileOperations(FileOperations):
         )
         result = self._exec(cmd_sorted, timeout=60)
         stdout, limit_reason = _search_stdout_and_limit(result)
-        diagnostics, payload = _split_tool_diagnostics(stdout)
+        diagnostics, payload = _split_files_only_diagnostics(stdout)
         all_files = [f for f in payload.strip().split('\n') if f]
 
         if not all_files and not limit_reason:
@@ -2914,7 +2949,7 @@ class ShellFileOperations(FileOperations):
             )
             result = self._exec(cmd_plain, timeout=60)
             stdout, limit_reason = _search_stdout_and_limit(result)
-            diagnostics, payload = _split_tool_diagnostics(stdout)
+            diagnostics, payload = _split_files_only_diagnostics(stdout)
             all_files = [f for f in payload.strip().split('\n') if f]
             if result.exit_code == 2 and not all_files:
                 error_msg = diagnostics.strip() or result.stdout.strip() or "Search error"
@@ -3021,7 +3056,12 @@ class ShellFileOperations(FileOperations):
         # diagnostic lines ("rg: <file>: <error>", "rg: regex parse error:")
         # are interleaved with match output. Split them out: diagnostics must
         # not be parsed as matches, and on a hard error they ARE the message.
-        diagnostics, payload = _split_tool_diagnostics(stdout)
+        # Files-only output is pure path text, so it uses the files-only
+        # parser that preserves whitespace inside paths.
+        if output_mode == "files_only":
+            diagnostics, payload = _split_files_only_diagnostics(stdout)
+        else:
+            diagnostics, payload = _split_tool_diagnostics(stdout)
 
         # rg exit codes: 0=matches found, 1=no matches, 2=error. rg returns 2
         # even on partial errors (e.g. one unreadable file in a tree that
@@ -3168,8 +3208,12 @@ class ShellFileOperations(FileOperations):
         # _exec merges stderr into stdout, so grep's diagnostic lines
         # ("grep: <file>: <error>") are interleaved with matches. Split them
         # out so they're never parsed as matches and so a hard error has a
-        # clean message.
-        diagnostics, payload = _split_tool_diagnostics(stdout)
+        # clean message. Files-only output is pure path text, so it uses the
+        # files-only parser that preserves whitespace inside paths.
+        if output_mode == "files_only":
+            diagnostics, payload = _split_files_only_diagnostics(stdout)
+        else:
+            diagnostics, payload = _split_tool_diagnostics(stdout)
 
         # grep exit codes: 0=matches found, 1=no matches, 2=error. grep
         # returns 2 on partial errors (e.g. an unreadable file) even when
