@@ -378,7 +378,7 @@ def _discover_freemaxxing_model() -> Optional[tuple[str, str, str]]:
     """Discover the best available free model across free-tier providers at runtime.
     
     Returns (model_id, provider, base_url) for the best free model, or None.
-    Checks providers known to have free models: openrouter, kilo, vercel.
+    Checks providers known to have free models: openrouter, kilo, vercel, nous.
     Prefers models with tool calling + reasoning + large context.
     """
     from agent.models_dev import list_provider_models, get_model_info
@@ -389,6 +389,7 @@ def _discover_freemaxxing_model() -> Optional[tuple[str, str, str]]:
         ("openrouter", "https://openrouter.ai/api/v1"),
         ("kilo", "https://api.kilocode.ai/v1"),
         ("vercel", "https://ai-gateway.vercel.sh/v1"),
+        ("nous", "https://inference-api.nousresearch.com/v1"),
     ]
     
     for provider_id, base_url in free_providers:
@@ -397,6 +398,19 @@ def _discover_freemaxxing_model() -> Optional[tuple[str, str, str]]:
         
         try:
             catalog = list_provider_models(provider_id)
+            
+            # For Nous Portal, also query the live API since it's not in models.dev catalog
+            if provider_id == "nous" and (not catalog or len(catalog) == 0):
+                try:
+                    import requests
+                    r = requests.get(f"{base_url}/models", timeout=10)
+                    if r.status_code == 200:
+                        data = r.json()
+                        # Extract model IDs from Nous Portal response format
+                        catalog = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                except Exception:
+                    pass
+            
             if not catalog:
                 continue
             
