@@ -3435,6 +3435,23 @@ def _prepend_moa_picker_provider(providers: List[dict], current_provider: str = 
         return providers
 
 
+def _prepend_freemaxxing_picker_provider(providers: List[dict], current_provider: str = "") -> List[dict]:
+    """Add the virtual freemaxxing provider row used by interactive model pickers.
+
+    Freemaxxing is a dynamic alias that resolves to the best free model.
+    Added here so gateway pickers (Telegram/Discord) see it alongside MOA.
+    """
+    try:
+        from hermes_cli.inventory import _freemaxxing_provider_row
+
+        freemaxxing_row = _freemaxxing_provider_row(current_provider)
+        if freemaxxing_row is None:
+            return providers
+        return [freemaxxing_row] + [p for p in providers if str(p.get("slug", "")).lower() != "freemaxxing"]
+    except Exception:
+        return providers
+
+
 def list_picker_providers(
     current_provider: str = "",
     current_base_url: str = "",
@@ -3478,6 +3495,7 @@ def list_picker_providers(
     )
     if include_moa:
         providers = _prepend_moa_picker_provider(providers, current_provider=current_provider)
+    providers = _prepend_freemaxxing_picker_provider(providers, current_provider=current_provider)
 
     filtered: List[dict] = []
     for p in providers:
@@ -3494,7 +3512,8 @@ def list_picker_providers(
 
         has_models = bool(p.get("models"))
         is_custom_endpoint = bool(p.get("is_user_defined")) and bool(p.get("api_url"))
-        if not has_models and not is_custom_endpoint:
+        is_virtual_provider = p.get("auth_type") == "virtual"
+        if not has_models and not is_custom_endpoint and not is_virtual_provider:
             continue
         filtered.append(p)
 
