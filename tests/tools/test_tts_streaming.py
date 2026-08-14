@@ -206,7 +206,136 @@ def test_xai_available_uses_oauth_credential_resolver(monkeypatch):
     assert ts.XAIStreamer.available() is False
 
 
-# ── Gemini SSE parsing ────────────────────────────────────────────────────
+# -- xAI WebSocket bridge (protocol fix: websockets>=15 + query-param handshake) --
+
+
+def _fake_xai_server(handler):
+    """Serve ``handler`` on a loopback WS server; return (url, server)."""
+    from websockets.sync.server import serve
+
+    server = serve(handler, "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.socket.getsockname()[1]
+    return f"ws://127.0.0.1:{port}/tts", server
+
+
+def _patch_xai_creds(monkeypatch):
+    import tools.xai_http
+    monkeypatch.setattr(
+        tools.xai_http,
+        "resolve_xai_http_credentials",
+        lambda *a, **k: {"api_key": "test-xai-key"},
+    )
+
+
+def test_xai_streamer_speaks_the_real_wire_protocol(monkeypatch):
+    """Pin the exact wire format verified against the live xAI API: audio
+    params in the URL query string, bearer auth header, text.delta +
+    text.done out, base64 audio.delta in, audio.done terminates."""
+    import base64
+    import json
+
+    pcm1, pcm2 = b"\x01\x00" * 30, b"\x02\x00" * 30
+    seen = {}
+
+    def handler(ws):
+        seen["path"] = ws.request.path
+        seen["auth"] = ws.request.headers.get("Authorization")
+        seen["messages"] = []
+        for raw in ws:
+            msg = json.loads(raw)
+            seen["messages"].append(msg)
+            if msg.get("type") == "text.done":
+                break
+        for chunk in (pcm1, pcm2):
+            ws.send(json.dumps({
+                "type": "audio.delta",
+                "delta": base64.b64encode(chunk).decode(),
+            }))
+        ws.send(json.dumps({"type": "audio.done"}))
+
+    url, server = _fake_xai_server(handler)
+    try:
+        _patch_xai_creds(monkeypatch)
+        streamer = ts.XAIStreamer({}, {"streaming_url": url})
+        assert list(streamer.stream("A sentence.")) == [pcm1, pcm2]
+    finally:
+        server.shutdown()
+
+    assert "voice=eve" in seen["path"]
+    assert "language=en" in seen["path"]
+    assert "codec=pcm" in seen["path"]
+    assert "sample_rate=24000" in seen["path"]
+    assert seen["auth"] == "Bearer test-xai-key"
+    assert [m["type"] for m in seen["messages"]] == ["text.delta", "text.done"]
+    assert seen["messages"][0]["delta"] == "A sentence."
+
+
+def test_xai_streamer_passes_auth_via_additional_headers(monkeypatch):
+    """websockets 15 removed the ``extra_headers`` kwarg: the connect call
+    must carry the bearer token in ``additional_headers`` or every stream()
+    raises TypeError before any network traffic."""
+    import base64
+    import json
+
+    import websockets
+    captured = {}
+    real_connect = websockets.connect
+
+    def spy_connect(url, **kwargs):
+        captured.update(kwargs)
+        return real_connect(url, **kwargs)
+
+    pcm = b"\x03\x00" * 10
+
+    def handler(ws):
+        ws.send(json.dumps({
+            "type": "audio.delta",
+            "delta": base64.b64encode(pcm).decode(),
+        }))
+        ws.send(json.dumps({"type": "audio.done"}))
+
+    url, server = _fake_xai_server(handler)
+    try:
+        _patch_xai_creds(monkeypatch)
+        monkeypatch.setattr("websockets.connect", spy_connect)
+        streamer = ts.XAIStreamer({}, {"streaming_url": url})
+        list(streamer.stream("test."))
+    finally:
+        server.shutdown()
+
+    assert "additional_headers" in captured, (
+        "connect() must use additional_headers= (websockets 15 compat)"
+    )
+    assert "extra_headers" not in captured, (
+        "extra_headers= was removed in websockets 15 — must not be used"
+    )
+    assert captured["additional_headers"] == {"Authorization": "Bearer test-xai-key"}
+
+
+def test_xai_streamer_error_envelope_raises(monkeypatch):
+    """An error envelope from xAI must raise RuntimeError, not be silently
+    swallowed (old code logged + return -> truncated speech played as complete)."""
+    import json
+
+    def handler(ws):
+        for raw in ws:
+            msg = json.loads(raw)
+            if msg.get("type") == "text.done":
+                break
+        ws.send(json.dumps({"type": "error", "message": "voice is disabled"}))
+
+    url, server = _fake_xai_server(handler)
+    try:
+        _patch_xai_creds(monkeypatch)
+        streamer = ts.XAIStreamer({}, {"streaming_url": url})
+        with pytest.raises(RuntimeError, match="voice is disabled"):
+            list(streamer.stream("Hi."))
+    finally:
+        server.shutdown()
+
+
+# -- Gemini SSE parsing --
 
 
 # ── xAI WebSocket bridge ─────────────────────────────────────────────────
