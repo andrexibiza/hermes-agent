@@ -1,0 +1,21 @@
+{
+  "branch": "wr/webhook-revolution-controller",
+  "free_bytes": 3924690993152,
+  "git": "git version 2.53.0.windows.1",
+  "minimum_free_bytes": 21474836480,
+  "pin": "3e203d7ba888950c4d731d3475037f1f4a1dbdd6",
+  "platform": "Windows-10-10.0.26220-SP0",
+  "python": "3.11.15 (main, Jul 18 2026, 17:06:27) [MSC v.1944 64 bit (AMD64)]",
+  "remotes": {
+    "fork": "https://github.com/andrexibiza/hermes-agent.git",
+    "origin": "https://github.com/andrexibiza/hermes-agent.git",
+    "upstream": "https://github.com/NousResearch/hermes-agent.git"
+  },
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\controller",
+  "schema_version": 1,
+  "status": "?? artifacts/webhook-repair/c59e30f14cec93000af8dc5b5dfd84e113361296/task-03/commit.json\n?? artifacts/webhook-repair/c59e30f14cec93000af8dc5b5dfd84e113361296/task-03/push.json\n?? artifacts/webhook-repair/d8d7cc068db8080f33e875355c3cf5d52ca4b7a3/task-01/preflight.json",
+  "task": 1,
+  "timestamp": "2026-08-14T20:39:20Z",
+  "work_root": "D:\\HERMES-TEMP\\webhook-revolution",
+  "worktrees": "worktree D:/src/hermes-agent\nHEAD 642b735dbdbae4f01f5df0b9288d5f67a7e530f4\nbranch refs/heads/main\n\nworktree D:/HERMES-TEMP/webhook-revolution/controller\nHEAD 3e203d7ba888950c4d731d3475037f1f4a1dbdd6\nbranch refs/heads/wr/webhook-revolution-controller\n\nworktree D:/HERMES-TEMP/webhook-revolution/task-04-rest-router\nHEAD 898a3f008259a8620d8d5f6eb2e1bf9e5f2b3179\nbranch refs/heads/wr/task-04-rest-router"
+}
