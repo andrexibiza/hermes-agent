@@ -1,0 +1,116 @@
+{
+  "classifications": [
+    {
+      "class": "effective-config",
+      "disposition": "absorb",
+      "items": [
+        13240,
+        24911,
+        39598,
+        40324
+      ]
+    },
+    {
+      "class": "secret-persistence",
+      "disposition": "adopt",
+      "items": [
+        77471
+      ]
+    },
+    {
+      "class": "intake-idempotency",
+      "disposition": "adopt",
+      "items": [
+        7448,
+        55829
+      ]
+    },
+    {
+      "class": "provider-signatures",
+      "disposition": "adopt",
+      "items": [
+        47451,
+        80327
+      ]
+    },
+    {
+      "class": "profile-session-resume",
+      "disposition": "absorb",
+      "items": [
+        57056,
+        65939,
+        67277,
+        71352,
+        74980
+      ]
+    },
+    {
+      "class": "clarify-approval",
+      "disposition": "absorb",
+      "items": [
+        31565,
+        37284,
+        71571,
+        78296
+      ]
+    },
+    {
+      "class": "listener-lifecycle",
+      "disposition": "wontfix-policy/absorb",
+      "items": [
+        4260,
+        78022
+      ]
+    },
+    {
+      "class": "callback-response",
+      "disposition": "adopt",
+      "items": [
+        4386,
+        73828
+      ]
+    },
+    {
+      "class": "delivery-cancel",
+      "disposition": "absorb",
+      "items": [
+        20201,
+        32403,
+        39999
+      ]
+    },
+    {
+      "class": "model-completion",
+      "disposition": "absorb",
+      "items": [
+        43730,
+        80531
+      ]
+    },
+    {
+      "class": "provider-recipes",
+      "disposition": "absorb",
+      "items": [
+        43575,
+        54693,
+        66893,
+        71968
+      ]
+    },
+    {
+      "class": "source-restrictions",
+      "disposition": "adopt",
+      "items": [
+        18041
+      ]
+    }
+  ],
+  "contract_sha256": "0395d38311e6623f73df257898915003c2400d11456c2ee9c7b23ec64b97058c",
+  "created_at": "2026-08-14T20:32:54Z",
+  "decisions": 10,
+  "epic": 84834,
+  "graph_sha256": "158f3e5ffe5255f3f10f4219aa1caadeee4264c290ce04b1328615fa4fe9fb48",
+  "schema_version": 1,
+  "source_pin": "c59e30f14cec93000af8dc5b5dfd84e113361296",
+  "unresolved_decisions": []
+}
