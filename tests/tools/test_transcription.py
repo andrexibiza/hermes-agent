@@ -385,7 +385,7 @@ class TestHotwordsLocalProvider:
             assert result["success"] is True
             kwargs = mock_model.transcribe.call_args.kwargs
             assert "hotwords" in kwargs
-            # Only "Hermes" and "Nous" survive filtering
+            # Only "Hermes" and "OpenCode" survive filtering
             assert kwargs["hotwords"] == "Hermes, OpenCode"
 
     def test_hotwords_propagate_from_real_config(self, tmp_path, monkeypatch):
