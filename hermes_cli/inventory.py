@@ -204,6 +204,10 @@ def build_models_payload(
     if moa_row is not None:
         rows = [moa_row] + [r for r in rows if str(r.get("slug", "")).lower() != "moa"]
 
+    freemaxxing_row = _freemaxxing_provider_row(ctx.current_provider)
+    if freemaxxing_row is not None:
+        rows = [freemaxxing_row] + [r for r in rows if str(r.get("slug", "")).lower() != "freemaxxing"]
+
     if explicit_only:
         rows = _filter_explicit_provider_rows(rows, ctx)
         # Desktop chat pickers request the explicit subset without the full
@@ -851,6 +855,39 @@ def _moa_provider_row(current_provider: str = "") -> dict | None:
             "authenticated": True,
             "auth_type": "virtual",
             "warning": "Aggregator acts as the selected model; references provide analysis before each call.",
+        }
+    except Exception:
+        return None
+
+
+def _freemaxxing_provider_row(current_provider: str = "") -> dict | None:
+    """Build the virtual ``freemaxxing`` provider row for model pickers.
+
+    Freemaxxing is a dynamic alias that resolves to the best available free
+    model across OpenRouter, Kilo, Nous, etc. at runtime. It appears as a
+    single virtual provider entry — no model sub-selection, the backend
+    dynamically picks the best free model (prefers auto-free routers like
+    openrouter/auto, kilo-auto/free).
+    """
+    try:
+        from hermes_cli.model_switch import _discover_freemaxxing_model
+        
+        best = _discover_freemaxxing_model()
+        if not best:
+            return None
+        
+        model_id, provider_id, base_url = best
+        return {
+            "slug": "freemaxxing",
+            "name": "Freemaxxing (Auto Free Model)",
+            "is_current": (current_provider or "").lower() == "freemaxxing",
+            "is_user_defined": False,
+            "models": [],  # No model sub-selection — backend resolves dynamically
+            "total_models": 1,
+            "source": "virtual",
+            "authenticated": True,
+            "auth_type": "virtual",
+            "warning": "Dynamically resolves to the best free model across OpenRouter, Kilo, Nous, etc. Prefers auto-free routers (openrouter/auto, kilo-auto/free).",
         }
     except Exception:
         return None
