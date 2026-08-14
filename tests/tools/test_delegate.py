@@ -32,6 +32,8 @@ from tools.delegate_tool import (
     _resolve_delegation_credentials,
 )
 
+_TEST_PLUGIN_ID = "test-plugin"
+
 
 def _make_mock_parent(depth=0):
     """Create a mock parent agent with the fields delegate_task expects."""
@@ -139,6 +141,11 @@ class TestChildSystemPrompt(unittest.TestCase):
         self.assertNotIn("CONTEXT", prompt)
 
 class TestStripBlockedTools(unittest.TestCase):
+    def test_subagent_toolset_extension_hook_is_registered(self):
+        from hermes_cli.plugins import VALID_HOOKS
+
+        self.assertIn("subagent_toolsets", VALID_HOOKS)
+
     def test_removes_blocked_toolsets(self):
         result = _strip_blocked_tools(["terminal", "file", "delegation", "clarify", "memory", "code_execution"])
         self.assertEqual(sorted(result), ["code_execution", "file", "terminal"])
@@ -248,6 +255,711 @@ class TestStripBlockedTools(unittest.TestCase):
         self.assertTrue(
             (DELEGATE_BLOCKED_TOOLS - {"delegate_task"}).isdisjoint(names)
         )
+
+    def test_plugin_hook_adds_registered_child_only_toolset_before_agent_build(self):
+        """A plugin capability may add its own toolset to one fresh child.
+
+        The parent does not need that child-only toolset in its long-lived
+        schema.  This is the production shape used by capability-bound blind
+        actors: the goal carries the plugin-issued capability, and the plugin
+        resolves the matching toolset before the child's schemas are built.
+        """
+        parent = _make_mock_parent()
+        parent.session_id = "parent-session"
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+
+        def invoke_hook(name, **kwargs):
+            if name == "subagent_toolsets":
+                self.assertEqual(kwargs["parent_session_id"], "parent-session")
+                self.assertEqual(kwargs["child_goal"], "capability-bound child")
+                self.assertEqual(kwargs["child_role"], "leaf")
+                return [{"add_toolsets": ["blind-actor-protocol"], "_plugin_id": _TEST_PLUGIN_ID}]
+            return []
+
+        with (
+            patch("run_agent.AIAgent") as MockAgent,
+            patch("hermes_cli.lifecycle.invoke_hook", side_effect=invoke_hook),
+            patch(
+                "tools.registry.registry.get_registered_toolset_names",
+                return_value=["blind-actor-protocol"],
+            ),
+            patch(
+                "tools.registry.registry.get_toolset_owner",
+                return_value=_TEST_PLUGIN_ID,
+            ),
+        ):
+            MockAgent.return_value = MagicMock()
+            _build_child_agent(
+                task_index=0,
+                goal="capability-bound child",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role="leaf",
+            )
+
+        _, kwargs = MockAgent.call_args
+        self.assertEqual(kwargs["enabled_toolsets"], ["file", "blind-actor-protocol"])
+        self.assertEqual(parent.enabled_toolsets, ["file"])
+
+    def test_plugin_hook_ignores_malformed_and_unknown_grants(self):
+        """Only well-formed grants naming registered toolsets reach the child."""
+        from agent.delegation_context import delegated_child_eager_toolsets
+
+        parent = _make_mock_parent()
+        parent.session_id = "parent-session"
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+        observed_eager = []
+        observed_enabled = []
+
+        def invoke_hook(name, **kwargs):
+            if name == "subagent_toolsets":
+                return [
+                    None,
+                    {"add_toolsets": "not-a-sequence"},
+                    {"add_toolsets": ["unknown-child-toolset", 42]},
+                    {"add_toolsets": ["registered-child-toolset"], "_plugin_id": _TEST_PLUGIN_ID},
+                ]
+            return []
+
+        def build_agent(**kwargs):
+            observed_eager.append(delegated_child_eager_toolsets())
+            observed_enabled.append(kwargs["enabled_toolsets"])
+            return MagicMock()
+
+        with (
+            patch("run_agent.AIAgent", side_effect=build_agent),
+            patch("hermes_cli.lifecycle.invoke_hook", side_effect=invoke_hook),
+            patch(
+                "tools.registry.registry.get_registered_toolset_names",
+                return_value=["registered-child-toolset"],
+            ),
+            patch(
+                "tools.registry.registry.get_toolset_owner",
+                return_value=_TEST_PLUGIN_ID,
+            ),
+        ):
+            _build_child_agent(
+                task_index=0,
+                goal="malformed grant child",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role="leaf",
+            )
+
+        self.assertEqual(observed_eager, [frozenset({"registered-child-toolset"})])
+        self.assertEqual(observed_enabled, [["file", "registered-child-toolset"]])
+
+    def test_plugin_hook_cannot_grant_builtin_absent_from_parent(self):
+        parent = _make_mock_parent()
+        parent.session_id = "parent-session"
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+
+        with (
+            patch("run_agent.AIAgent", return_value=MagicMock()) as MockAgent,
+            patch("hermes_cli.lifecycle.invoke_hook", return_value=[
+                {"add_toolsets": ["terminal", "hermes-cli"]}
+            ]),
+        ):
+            _build_child_agent(
+                task_index=0,
+                goal="cannot escalate",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role="leaf",
+            )
+
+        enabled = MockAgent.call_args.kwargs["enabled_toolsets"]
+        self.assertEqual(enabled, ["file"])
+
+    def test_plugin_hook_builtin_parent_authorized_remains_allowed(self):
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["file", "terminal"]
+        parent.disabled_toolsets = []
+
+        with (
+            patch("run_agent.AIAgent", return_value=MagicMock()) as MockAgent,
+            patch("hermes_cli.lifecycle.invoke_hook", return_value=[
+                {"add_toolsets": ["terminal", "terminal"]}
+            ]),
+        ):
+            _build_child_agent(
+                task_index=0,
+                goal="preserve authorization",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role="leaf",
+            )
+
+        self.assertEqual(MockAgent.call_args.kwargs["enabled_toolsets"], ["file", "terminal"])
+
+    def test_plugin_hook_grants_are_bounded_and_names_are_length_limited(self):
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+        registered = [f"plugin-grant-{i}" for i in range(16)]
+
+        with (
+            patch("run_agent.AIAgent", return_value=MagicMock()) as MockAgent,
+            patch("hermes_cli.lifecycle.invoke_hook", return_value=[{
+                "add_toolsets": ["x" * 129, *registered]
+            }]),
+            patch(
+                "tools.registry.registry.get_registered_toolset_names",
+                return_value=registered,
+            ),
+        ):
+            _build_child_agent(
+                task_index=0,
+                goal="bounded grants",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role="leaf",
+            )
+
+        enabled = MockAgent.call_args.kwargs["enabled_toolsets"]
+        self.assertEqual(enabled[0], "file")
+        self.assertLessEqual(len(enabled) - 1, 8)
+        self.assertNotIn("x" * 129, enabled)
+
+    def _run_dynamic_grant(self, toolsets, registered, parent=None):
+        parent = parent or _make_mock_parent()
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+        with (
+            patch("run_agent.AIAgent", return_value=MagicMock()) as MockAgent,
+            patch("hermes_cli.lifecycle.invoke_hook", return_value=[
+                {"add_toolsets": list(toolsets), "_plugin_id": _TEST_PLUGIN_ID}
+            ]),
+            patch(
+                "tools.registry.registry.get_registered_toolset_names",
+                return_value=list(registered),
+            ),
+            patch(
+                "tools.registry.registry.get_toolset_owner",
+                side_effect=lambda name: _TEST_PLUGIN_ID if name in registered else None,
+            ),
+        ):
+            _build_child_agent(
+                task_index=0,
+                goal="schema budget test",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role="leaf",
+            )
+            return MockAgent.call_args.kwargs
+
+    def test_dynamic_grant_rejects_toolset_with_33_effective_tools(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-33-tools"
+        names = [f"budget_33_{i}" for i in range(33)]
+        for name in names:
+            registry.register(name=name, toolset=toolset, schema={"name": name}, handler=lambda args, **kwargs: "{}")
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            for name in names:
+                registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_dynamic_grant_rejects_schema_over_65536_bytes(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-large-schema"
+        name = "budget_large_schema"
+        registry.register(
+            name=name, toolset=toolset,
+            schema={"name": name, "description": "x" * 65537},
+            handler=lambda args, **kwargs: "{}",
+        )
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_dynamic_grants_reject_candidate_that_crosses_cumulative_count(self):
+        from tools.registry import registry
+        first, second = "mcp-budget-first", "mcp-budget-second"
+        names = [f"budget_multi_{i}" for i in range(20)] + [f"budget_multi_{i}" for i in range(20, 40)]
+        for i, name in enumerate(names):
+            registry.register(name=name, toolset=first if i < 20 else second, schema={"name": name}, handler=lambda args, **kwargs: "{}")
+        try:
+            kwargs = self._run_dynamic_grant([first, second], [first, second])
+        finally:
+            for name in names:
+                registry.deregister(name)
+        self.assertIn(first, kwargs["enabled_toolsets"])
+        self.assertNotIn(second, kwargs["enabled_toolsets"])
+
+    def test_dynamic_schema_override_expansion_is_counted(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-override"
+        name = "budget_override"
+        registry.register(
+            name=name, toolset=toolset, schema={"name": name},
+            dynamic_schema_overrides=lambda: {"description": "x" * 65537},
+            handler=lambda args, **kwargs: "{}",
+        )
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_dynamic_schema_override_exception_rejects_entire_grant(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-override-error"
+        name = "budget_override_error"
+
+        def broken_override():
+            raise RuntimeError("override unavailable")
+
+        registry.register(
+            name=name,
+            toolset=toolset,
+            schema={"name": name, "description": "static fallback must not leak"},
+            dynamic_schema_overrides=broken_override,
+            handler=lambda args, **kwargs: "{}",
+        )
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_dynamic_schema_override_non_dict_rejects_entire_grant(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-override-nondict"
+        name = "budget_override_nondict"
+        registry.register(
+            name=name,
+            toolset=toolset,
+            schema={"name": name, "description": "static fallback must not leak"},
+            dynamic_schema_overrides=lambda: ["not", "a", "mapping"],
+            handler=lambda args, **kwargs: "{}",
+        )
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_dynamic_schema_budget_accounts_for_collection_framing(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-collection-framing"
+        names = [f"budget_frame_{i:02d}" for i in range(32)]
+        for name in names:
+            registry.register(
+                name=name,
+                toolset=toolset,
+                schema={"name": name, "description": "x" * 1974},
+                handler=lambda args, **kwargs: "{}",
+            )
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            for name in names:
+                registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_dynamic_schema_snapshot_is_used_for_child_construction(self):
+        import model_tools
+        from tools.registry import registry
+
+        toolset = "mcp-budget-snapshot"
+        name = "budget_snapshot"
+        override_calls = []
+
+        def changing_override():
+            override_calls.append(len(override_calls))
+            if len(override_calls) == 1:
+                return {"description": "snapshot schema"}
+            return {"description": "x" * 65537}
+
+        registry.register(
+            name=name,
+            toolset=toolset,
+            schema={"name": name, "description": "static schema"},
+            dynamic_schema_overrides=changing_override,
+            handler=lambda args, **kwargs: "{}",
+        )
+        parent = _make_mock_parent()
+        parent.session_id = "parent-session"
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+
+        class SchemaCapturingAgent:
+            def __init__(self, *, enabled_toolsets=None, disabled_toolsets=None, **kwargs):
+                self.session_id = "child-session"
+                self._session_init_model_config = {}
+                self.tools = model_tools.get_tool_definitions(
+                    enabled_toolsets=enabled_toolsets,
+                    disabled_toolsets=disabled_toolsets,
+                    quiet_mode=True,
+                )
+
+        try:
+            with (
+                patch("run_agent.AIAgent", SchemaCapturingAgent),
+                patch(
+                    "hermes_cli.lifecycle.invoke_hook",
+                    return_value=[{"add_toolsets": [toolset], "_plugin_id": _TEST_PLUGIN_ID}],
+                ),
+                patch(
+                    "tools.registry.registry.get_registered_toolset_names",
+                    return_value=[toolset],
+                ),
+                patch(
+                    "tools.registry.registry.get_toolset_owner",
+                    return_value=_TEST_PLUGIN_ID,
+                ),
+            ):
+                child = _build_child_agent(
+                    task_index=0,
+                    goal="snapshot schema",
+                    context=None,
+                    toolsets=None,
+                    model=None,
+                    max_iterations=10,
+                    parent_agent=parent,
+                    task_count=1,
+                    role="leaf",
+                )
+        finally:
+            registry.deregister(name)
+
+        child_schema = next(
+            item["function"]
+            for item in child.tools
+            if item["function"]["name"] == name
+        )
+        self.assertEqual(child_schema["description"], "snapshot schema")
+        self.assertEqual(override_calls, [0])
+
+    def test_unavailable_tools_do_not_consume_dynamic_schema_budget(self):
+        from tools.registry import registry
+        unavailable, available = "mcp-budget-unavailable", "mcp-budget-available"
+        unavailable_names = [f"budget_unavailable_{i}" for i in range(40)]
+        available_name = "budget_available"
+        for name in unavailable_names:
+            registry.register(name=name, toolset=unavailable, schema={"name": name}, check_fn=lambda: False, handler=lambda args, **kwargs: "{}")
+        registry.register(name=available_name, toolset=available, schema={"name": available_name}, handler=lambda args, **kwargs: "{}")
+        try:
+            kwargs = self._run_dynamic_grant([unavailable, available], [unavailable, available])
+        finally:
+            for name in unavailable_names + [available_name]:
+                registry.deregister(name)
+        self.assertIn(available, kwargs["enabled_toolsets"])
+
+    def test_malformed_schema_serialization_rejects_entire_toolset(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-malformed"
+        name = "budget_malformed"
+        registry.register(name=name, toolset=toolset, schema={"name": name, "bad": {1, 2}}, handler=lambda args, **kwargs: "{}")
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_budget_rejection_does_not_partially_expose_toolset(self):
+        from tools.registry import registry
+        toolset = "mcp-budget-no-partial"
+        names = [f"budget_partial_{i}" for i in range(33)]
+        for name in names:
+            registry.register(name=name, toolset=toolset, schema={"name": name}, handler=lambda args, **kwargs: "{}")
+        try:
+            kwargs = self._run_dynamic_grant([toolset], [toolset])
+        finally:
+            for name in names:
+                registry.deregister(name)
+        self.assertNotIn(toolset, kwargs["enabled_toolsets"])
+
+    def test_dynamic_budget_dedupes_same_tool_name_across_toolsets(self):
+        from tools.registry import registry
+        first, second = "mcp-budget-dedupe-first", "mcp-budget-dedupe-second"
+        names = [f"budget_dedupe_{i}" for i in range(32)]
+        for name in names:
+            registry.register(name=name, toolset=first, schema={"name": name}, handler=lambda args, **kwargs: "{}")
+        # Cross-toolset duplicate registration is intentionally unavailable in
+        # the registry, so exercise dedupe through two grants of one toolset.
+        try:
+            kwargs = self._run_dynamic_grant([first, first], [first, second])
+        finally:
+            for name in names:
+                registry.deregister(name)
+        self.assertIn(first, kwargs["enabled_toolsets"])
+
+    def test_none_enabled_toolsets_derives_parent_tools_before_validated_grants(self):
+        """An all-tools parent derives inherited toolsets from valid names."""
+        from tools.registry import registry
+
+        tool_name = "derived_parent_toolset_test"
+        inherited_toolset = "mcp-derived-parent-toolset-test"
+        registry.register(
+            name=tool_name,
+            toolset=inherited_toolset,
+            schema={
+                "name": tool_name,
+                "description": "Derived parent tool.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            handler=lambda args, **kwargs: "{}",
+        )
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = None
+        parent.valid_tool_names = {tool_name}
+        parent.disabled_toolsets = []
+
+        try:
+            with (
+                patch("run_agent.AIAgent", return_value=MagicMock()) as MockAgent,
+                patch(
+                    "hermes_cli.lifecycle.invoke_hook",
+                    return_value=[
+                        {"add_toolsets": [
+                            "mcp-derived-parent-grant-test",
+                            "not-registered",
+                        ], "_plugin_id": _TEST_PLUGIN_ID}
+                    ],
+                ),
+                patch(
+                    "tools.registry.registry.get_registered_toolset_names",
+                    return_value=["mcp-derived-parent-grant-test"],
+                ),
+                patch(
+                    "tools.registry.registry.get_toolset_owner",
+                    return_value=_TEST_PLUGIN_ID,
+                ),
+            ):
+                _build_child_agent(
+                    task_index=0,
+                    goal="derive inherited tools",
+                    context=None,
+                    toolsets=None,
+                    model=None,
+                    max_iterations=10,
+                    parent_agent=parent,
+                    task_count=1,
+                    role="leaf",
+                )
+                enabled = set(MockAgent.call_args.kwargs["enabled_toolsets"])
+        finally:
+            registry.deregister(tool_name)
+
+        self.assertIn(inherited_toolset, enabled)
+        self.assertIn("mcp-derived-parent-grant-test", enabled)
+        self.assertNotIn("not-registered", enabled)
+
+    def test_eager_context_resets_when_child_construction_raises(self):
+        """A failing AIAgent constructor cannot leak eager toolset context."""
+        from agent.delegation_context import (
+            delegated_child_eager_toolsets,
+            is_delegated_child_context,
+        )
+
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+
+        self.assertEqual(delegated_child_eager_toolsets(), frozenset())
+        with self.assertRaisesRegex(RuntimeError, "construction failed"):
+            with (
+                patch("run_agent.AIAgent", side_effect=RuntimeError("construction failed")),
+                patch("hermes_cli.lifecycle.invoke_hook", return_value=[
+                    {"add_toolsets": ["registered-child-toolset"], "_plugin_id": _TEST_PLUGIN_ID}
+                ]),
+                patch(
+                    "tools.registry.registry.get_registered_toolset_names",
+                    return_value=["registered-child-toolset"],
+                ),
+                patch(
+                    "tools.registry.registry.get_toolset_owner",
+                    return_value=_TEST_PLUGIN_ID,
+                ),
+            ):
+                _build_child_agent(
+                    task_index=0,
+                    goal="failing construction",
+                    context=None,
+                    toolsets=None,
+                    model=None,
+                    max_iterations=10,
+                    parent_agent=parent,
+                    task_count=1,
+                    role="leaf",
+                )
+        self.assertFalse(is_delegated_child_context())
+        self.assertEqual(delegated_child_eager_toolsets(), frozenset())
+
+    def test_child_eager_toolset_context_resets_after_construction(self):
+        from agent.delegation_context import (
+            delegated_child_context,
+            delegated_child_eager_toolsets,
+        )
+
+        self.assertEqual(delegated_child_eager_toolsets(), frozenset())
+        with delegated_child_context(eager_toolsets={"blind-actor-protocol"}):
+            self.assertEqual(
+                delegated_child_eager_toolsets(), frozenset({"blind-actor-protocol"})
+            )
+        self.assertEqual(delegated_child_eager_toolsets(), frozenset())
+
+    def test_plugin_granted_child_tool_is_visible_before_first_model_call(self):
+        import model_tools
+        from tools.registry import registry
+
+        tool_name = "blind_child_capability_test"
+        toolset_name = "mcp-blind-child-capability-test"
+        registry.register(
+            name=tool_name,
+            toolset=toolset_name,
+            schema={
+                "name": tool_name,
+                "description": "Child-only capability test tool.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            plugin_owner=_TEST_PLUGIN_ID,
+            handler=lambda args, **kwargs: "{}",
+        )
+        try:
+            parent = _make_mock_parent()
+            parent.session_id = "parent-session"
+            parent.enabled_toolsets = ["file"]
+            parent.disabled_toolsets = []
+
+            def invoke_hook(name, **kwargs):
+                if name == "subagent_toolsets":
+                    return [{"add_toolsets": [toolset_name], "_plugin_id": _TEST_PLUGIN_ID}]
+                return []
+
+            class SchemaCapturingAgent:
+                def __init__(self, *, enabled_toolsets=None, disabled_toolsets=None, **kwargs):
+                    self.session_id = "child-session"
+                    self._session_init_model_config = {}
+                    self.tools = model_tools.get_tool_definitions(
+                        enabled_toolsets=enabled_toolsets,
+                        disabled_toolsets=disabled_toolsets,
+                        quiet_mode=True,
+                    )
+                    self.valid_tool_names = {
+                        item["function"]["name"] for item in self.tools
+                    }
+
+            with (
+                patch("run_agent.AIAgent", SchemaCapturingAgent),
+                patch("hermes_cli.lifecycle.invoke_hook", side_effect=invoke_hook),
+            ):
+                child = _build_child_agent(
+                    task_index=0,
+                    goal="capability-bound child",
+                    context=None,
+                    toolsets=None,
+                    model=None,
+                    max_iterations=10,
+                    parent_agent=parent,
+                    task_count=1,
+                    role="leaf",
+                )
+
+            self.assertIn(tool_name, child.valid_tool_names)
+        finally:
+            registry.deregister(tool_name)
+
+
+class TestExecutionIdentityBinding(unittest.TestCase):
+    def test_same_name_replacement_after_child_exposure_fails_closed(self):
+        """A charged child schema cannot dispatch a later same-name handler."""
+        import model_tools
+        from agent.delegation_context import delegated_child_context
+        from tools.registry import registry
+
+        tool_name = "bound_child_execution_identity_test"
+        toolset_name = "mcp-bound-child-execution-identity-test"
+        old_calls = []
+        new_calls = []
+
+        def old_handler(args, **kwargs):
+            old_calls.append(args)
+            return json.dumps({"handler": "old"})
+
+        def new_handler(args, **kwargs):
+            new_calls.append(args)
+            return json.dumps({"handler": "new"})
+
+        registry.register(
+            name=tool_name,
+            toolset=toolset_name,
+            schema={
+                "name": tool_name,
+                "description": "Bound child execution identity test.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            handler=old_handler,
+        )
+        try:
+            identity = registry.get_entry(tool_name).execution_identity
+            with delegated_child_context(execution_identities={tool_name: identity}):
+                definitions = model_tools.get_tool_definitions(
+                    enabled_toolsets=[toolset_name],
+                    quiet_mode=True,
+                    skip_tool_search_assembly=True,
+                )
+                self.assertIn(
+                    tool_name,
+                    {item["function"]["name"] for item in definitions},
+                )
+                registry.register(
+                    name=tool_name,
+                    toolset=toolset_name,
+                    schema={
+                        "name": tool_name,
+                        "description": "Replacement handler must not run.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                    handler=new_handler,
+                )
+                result = model_tools.handle_function_call(
+                    function_name=tool_name,
+                    function_args={},
+                    skip_pre_tool_call_hook=True,
+                    skip_tool_request_middleware=True,
+                    skip_tool_execution_middleware=True,
+                    enabled_toolsets=[toolset_name],
+                )
+        finally:
+            registry.deregister(tool_name)
+
+        payload = json.loads(result)
+        self.assertEqual(payload.get("error_type"), "tool_execution_identity_mismatch")
+        self.assertEqual(old_calls, [])
+        self.assertEqual(new_calls, [])
 
 
 class TestDelegateTask(unittest.TestCase):
@@ -1746,6 +2458,60 @@ class TestFallbackModelInheritance(unittest.TestCase):
 
         _, kwargs = MockAgent.call_args
         self.assertIsNone(kwargs["fallback_model"])
+
+
+def test_plugin_cannot_grant_another_plugins_sensitive_toolset():
+    """A plugin-issued grant must be rejected when it names another plugin's toolset."""
+    from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
+    from tools.registry import registry
+
+    manager = PluginManager()
+    plugin_a = PluginContext(
+        PluginManifest(name="plugin-a", key="plugin-a"), manager
+    )
+    plugin_b = PluginContext(
+        PluginManifest(name="plugin-b", key="plugin-b"), manager
+    )
+    toolset = "plugin-b-sensitive"
+    tool_name = "plugin_b_sensitive_tool"
+    plugin_b.register_tool(
+        name=tool_name,
+        toolset=toolset,
+        schema={"name": tool_name, "description": "sensitive"},
+        handler=lambda args, **kwargs: "{}",
+    )
+    assert registry.get_toolset_owner(toolset) == "plugin-b"
+    plugin_a.register_hook(
+        "subagent_toolsets",
+        lambda **kwargs: {"add_toolsets": [toolset]},
+    )
+    assert manager.invoke_hook("subagent_toolsets") == [
+        {"add_toolsets": [toolset], "_plugin_id": "plugin-a"}
+    ]
+    parent = _make_mock_parent()
+    parent.session_id = "parent-session"
+    parent.enabled_toolsets = ["file"]
+    parent.disabled_toolsets = []
+
+    try:
+        with (
+            patch("run_agent.AIAgent", return_value=MagicMock()) as MockAgent,
+            patch("hermes_cli.plugins.get_plugin_manager", return_value=manager),
+        ):
+            _build_child_agent(
+                task_index=0,
+                goal="cannot cross-grant",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role="leaf",
+            )
+        assert toolset not in MockAgent.call_args.kwargs["enabled_toolsets"]
+    finally:
+        registry.deregister(tool_name)
 
 
 if __name__ == "__main__":

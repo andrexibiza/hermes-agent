@@ -774,6 +774,7 @@ def assemble_tool_defs(
     *,
     context_length: Optional[int] = None,
     config: Optional[ToolSearchConfig] = None,
+    eager_toolsets: Optional[Iterable[str]] = None,
 ) -> AssemblyResult:
     """Return the tool-defs list the model should actually see.
 
@@ -795,6 +796,21 @@ def assemble_tool_defs(
                 if (td.get("function") or {}).get("name") not in BRIDGE_TOOL_NAMES]
 
     visible, deferrable = classify_tools(incoming)
+    eager = frozenset(eager_toolsets or ())
+    if eager and deferrable:
+        from tools.registry import registry
+
+        eager_defs = []
+        remaining = []
+        for td in deferrable:
+            name = (td.get("function") or {}).get("name", "")
+            entry = registry.get_entry(name)
+            if entry is not None and entry.toolset in eager:
+                eager_defs.append(td)
+            else:
+                remaining.append(td)
+        visible.extend(eager_defs)
+        deferrable = remaining
     if not deferrable:
         return AssemblyResult(tool_defs=incoming, activated=False)
 

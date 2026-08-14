@@ -1358,6 +1358,172 @@ class TestPluginContext:
             registry.deregister("gated_override_target")
 
 
+# ── TestPluginManifestDeclarations ─────────────────────────────────────────
+
+
+class TestPluginManifestDeclarations:
+    """Manifest declarations constrain the native plugin registration surface."""
+
+    def test_undeclared_subagent_toolsets_hook_is_rejected(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / "hermes_test" / "plugins"
+        _make_plugin_dir(
+            plugins_dir,
+            "undeclared_subagent_hook",
+            manifest_extra={"provides_hooks": ["post_tool_call"]},
+            register_body=(
+                'ctx.register_hook("subagent_toolsets", lambda **kw: '
+                '{"add_toolsets": ["plugin-tools"]})'
+            ),
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+
+        manager = PluginManager()
+        manager.discover_and_load()
+
+        loaded = manager._plugins["undeclared_subagent_hook"]
+        assert loaded.enabled is False
+        assert loaded.error is not None
+        assert "subagent_toolsets" in loaded.error
+        assert "provides_hooks" in loaded.error
+        assert manager.has_hook("subagent_toolsets") is False
+
+    def test_undeclared_tool_is_rejected(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / "hermes_test" / "plugins"
+        _make_plugin_dir(
+            plugins_dir,
+            "undeclared_plugin_tool",
+            manifest_extra={"provides_tools": ["declared_tool"]},
+            register_body=(
+                'ctx.register_tool('
+                'name="undeclared_tool", '
+                'toolset="undeclared_plugin_tool", '
+                'schema={"name": "undeclared_tool", "description": "", '
+                '"parameters": {"type": "object", "properties": {}}}, '
+                'handler=lambda args, **kw: "ok"'
+                ')'
+            ),
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+
+        manager = PluginManager()
+        manager.discover_and_load()
+
+        loaded = manager._plugins["undeclared_plugin_tool"]
+        assert loaded.enabled is False
+        assert loaded.error is not None
+        assert "undeclared_tool" in loaded.error
+        assert "provides_tools" in loaded.error
+        from tools.registry import registry
+
+        assert registry._tools.get("undeclared_tool") is None
+
+    def test_manifest_declaration_drift_is_rejected(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / "hermes_test" / "plugins"
+        _make_plugin_dir(
+            plugins_dir,
+            "drifting_plugin_declaration",
+            manifest_extra={"provides_hooks": ["on_session_end"]},
+            register_body="pass",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+
+        manager = PluginManager()
+        manager.discover_and_load()
+
+        loaded = manager._plugins["drifting_plugin_declaration"]
+        assert loaded.enabled is False
+        assert loaded.error is not None
+        assert "on_session_end" in loaded.error
+        assert "provides_hooks" in loaded.error
+        assert "not registered" in loaded.error
+
+    def test_declared_plugin_surface_loads(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / "hermes_test" / "plugins"
+        _make_plugin_dir(
+            plugins_dir,
+            "declared_plugin_surface",
+            manifest_extra={
+                "provides_tools": ["declared_plugin_tool"],
+                "provides_hooks": ["on_session_end"],
+            },
+            register_body=(
+                'ctx.register_tool('
+                'name="declared_plugin_tool", '
+                'toolset="declared_plugin_surface", '
+                'schema={"name": "declared_plugin_tool", "description": "", '
+                '"parameters": {"type": "object", "properties": {}}}, '
+                'handler=lambda args, **kw: "ok"\n'
+                ')\n'
+                '    ctx.register_hook("on_session_end", lambda **kw: None)'
+            ),
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+
+        manager = PluginManager()
+        manager.discover_and_load()
+
+        loaded = manager._plugins["declared_plugin_surface"]
+        assert loaded.enabled is True
+        assert loaded.error is None
+        assert loaded.tools_registered == ["declared_plugin_tool"]
+        assert loaded.hooks_registered == ["on_session_end"]
+
+    def test_declared_surface_can_be_platform_gated(self, tmp_path, monkeypatch):
+        unsupported_platform = "linux" if sys.platform.startswith("win") else "windows"
+        plugins_dir = tmp_path / "hermes_test" / "plugins"
+        _make_plugin_dir(
+            plugins_dir,
+            "platform_gated_declaration",
+            manifest_extra={
+                "platforms": [unsupported_platform],
+                "provides_tools": ["platform_only_tool"],
+            },
+            register_body="return",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+
+        manager = PluginManager()
+        manager.discover_and_load()
+
+        loaded = manager._plugins["platform_gated_declaration"]
+        assert loaded.enabled is True
+        assert loaded.error is None
+        assert loaded.tools_registered == []
+
+    def test_rejected_surface_rolls_back_prior_registration(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / "hermes_test" / "plugins"
+        _make_plugin_dir(
+            plugins_dir,
+            "partially_declared_plugin",
+            manifest_extra={
+                "provides_tools": ["partial_declared_tool"],
+                "provides_hooks": ["post_tool_call"],
+            },
+            register_body=(
+                'ctx.register_tool('
+                'name="partial_declared_tool", '
+                'toolset="partially_declared_plugin", '
+                'schema={"name": "partial_declared_tool", "description": "", '
+                '"parameters": {"type": "object", "properties": {}}}, '
+                'handler=lambda args, **kw: "ok"'
+                ')\n'
+                '    ctx.register_hook("subagent_toolsets", lambda **kw: {})'
+            ),
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+
+        manager = PluginManager()
+        manager.discover_and_load()
+
+        loaded = manager._plugins["partially_declared_plugin"]
+        assert loaded.enabled is False
+        assert loaded.error is not None
+        from tools.registry import registry
+
+        assert registry._tools.get("partial_declared_tool") is None
+        assert manager.has_hook("subagent_toolsets") is False
+
+
 # ── TestPluginToolVisibility ───────────────────────────────────────────────
 
 

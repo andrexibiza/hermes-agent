@@ -28,6 +28,7 @@ import os
 import threading
 import time
 import weakref
+from types import MappingProxyType
 from concurrent.futures import (
     TimeoutError as FuturesTimeoutError,
 )
@@ -1015,6 +1016,92 @@ _HEARTBEAT_STALE_CYCLES_IDLE = 15  # 15 * 30s = 450s idle between turns → stal
 _HEARTBEAT_STALE_CYCLES_IN_TOOL = 40  # 40 * 30s = 1200s stuck on same tool → stale
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
 
+# Hook grants are deliberately small and bounded before any registry/schema
+# work.  Plugin-owned toolsets may be child-only, but built-ins remain bound to
+# the parent's effective authorization set.
+_MAX_CHILD_TOOLSET_GRANTS = 8
+_MAX_CHILD_TOOLSET_NAME_LENGTH = 128
+_MAX_CHILD_DYNAMIC_EAGER_DEFINITIONS = 32
+_MAX_CHILD_DYNAMIC_EAGER_SCHEMA_BYTES = 65_536
+
+
+def _dynamic_eager_schema_budget(
+    registry,
+    toolset,
+    charged_names,
+    charged_identities=None,
+):
+    """Return the exact effective schemas newly supplied by one toolset.
+
+    The registry is the authority for availability filtering and runtime schema
+    overrides. Serialization is deliberately compact, deterministic, and strict
+    so malformed definitions fail closed without exposing their values.
+    """
+    try:
+        tool_names = {
+            name
+            for name, registered_toolset in registry.get_tool_to_toolset_map().items()
+            if registered_toolset == toolset
+        }
+        identities = {}
+        definitions = registry.get_definitions(
+            tool_names,
+            quiet=True,
+            strict_dynamic_schema=True,
+            execution_identity_snapshot=identities,
+        )
+        new_definitions = {}
+        seen = set(charged_names)
+        for definition in definitions:
+            if not isinstance(definition, dict):
+                raise TypeError("tool definition is not a mapping")
+            function = definition.get("function")
+            if not isinstance(function, dict):
+                raise TypeError("tool definition function is not a mapping")
+            name = function.get("name")
+            if not isinstance(name, str) or not name:
+                raise TypeError("tool definition has no valid name")
+            if name in seen:
+                continue
+            # Validate the exact final OpenAI-format definition, not the raw
+            # registry schema. allow_nan=False keeps non-JSON numbers closed.
+            json.dumps(
+                definition,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            new_definitions[name] = definition
+            if charged_identities is not None:
+                identity = identities.get(name)
+                if identity is None:
+                    raise TypeError("tool definition has no execution identity")
+                charged_identities[name] = identity
+            seen.add(name)
+        return new_definitions
+    except Exception as exc:
+        logger.warning(
+            "dynamic child toolset %r schema budget resolution failed: %s",
+            toolset,
+            type(exc).__name__,
+        )
+        return None
+
+
+def _serialized_schema_collection_bytes(definitions):
+    """Return compact UTF-8 bytes for the complete deterministic collection."""
+    ordered = [definitions[name] for name in sorted(definitions)]
+    return len(
+        json.dumps(
+            ordered,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+
 
 # ---------------------------------------------------------------------------
 # Delegation progress event types
@@ -1558,6 +1645,96 @@ def _build_child_agent(
     else:
         child_toolsets = _strip_blocked_tools(DEFAULT_TOOLSETS)
 
+    granted_toolsets = []
+    charged_dynamic_schemas = {}
+    charged_dynamic_identities = {}
+    # Trusted plugins may grant a child-only toolset after validating the
+    # goal's capability marker.  Resolve this before AIAgent construction so
+    # the child's first model request contains the granted schemas without
+    # mutating the long-lived parent's tool surface.
+    try:
+        from hermes_cli.lifecycle import invoke_hook as _invoke_hook
+        from tools.registry import registry as _tool_registry
+
+        extension_results = _invoke_hook(
+            "subagent_toolsets",
+            parent_session_id=getattr(parent_agent, "session_id", None),
+            child_role=effective_role,
+            child_goal=goal,
+        )
+        registered_toolsets = set(_tool_registry.get_registered_toolset_names())
+        parent_authorized_toolsets = _expand_parent_toolsets(parent_toolsets)
+        static_toolsets = set(TOOLSETS)
+        # A dynamically registered name is a plugin extension and may be
+        # child-only.  Names that are also static/built-in follow the stricter
+        # parent-intersection rule, even if a plugin registered them too.
+        known_toolsets = registered_toolsets | static_toolsets
+        accepted_grants = 0
+        for result in extension_results:
+            if not isinstance(result, dict):
+                continue
+            grant_issuer = result.get("_plugin_id")
+            requested = result.get("add_toolsets")
+            if not isinstance(requested, (list, tuple)):
+                continue
+            for name in requested:
+                if accepted_grants >= _MAX_CHILD_TOOLSET_GRANTS:
+                    break
+                if (
+                    not isinstance(name, str)
+                    or not name
+                    or len(name) > _MAX_CHILD_TOOLSET_NAME_LENGTH
+                    or name in {"all", "*"}
+                    or name not in known_toolsets
+                    or (
+                        name in static_toolsets
+                        and name not in parent_authorized_toolsets
+                    )
+                ):
+                    continue
+                if name in granted_toolsets:
+                    continue
+                if name not in static_toolsets:
+                    # Dynamic toolsets are capabilities of the plugin that
+                    # registered them, not ambient names any hook may grant.
+                    # Missing or mismatched identity fails closed.
+                    if (
+                        not isinstance(grant_issuer, str)
+                        or not grant_issuer
+                        or _tool_registry.get_toolset_owner(name) != grant_issuer
+                    ):
+                        continue
+                    candidate_identities = {}
+                    schema_charge = _dynamic_eager_schema_budget(
+                        _tool_registry,
+                        name,
+                        charged_dynamic_schemas,
+                        candidate_identities,
+                    )
+                    if schema_charge is None:
+                        continue
+                    candidate_schemas = dict(charged_dynamic_schemas)
+                    candidate_schemas.update(schema_charge)
+                    if (
+                        len(candidate_schemas)
+                        > _MAX_CHILD_DYNAMIC_EAGER_DEFINITIONS
+                        or _serialized_schema_collection_bytes(candidate_schemas)
+                        > _MAX_CHILD_DYNAMIC_EAGER_SCHEMA_BYTES
+                    ):
+                        logger.warning(
+                            "dynamic child toolset %r rejected by eager schema budget",
+                            name,
+                        )
+                        continue
+                    charged_dynamic_schemas = candidate_schemas
+                    charged_dynamic_identities.update(candidate_identities)
+                granted_toolsets.append(name)
+                accepted_grants += 1
+                if name not in child_toolsets:
+                    child_toolsets.append(name)
+    except Exception:
+        logger.warning("subagent_toolsets hook invocation failed", exc_info=True)
+
     # Blocked tools also live inside mixed platform bundles (hermes-cli,
     # hermes-telegram, etc.) that _strip_blocked_tools must keep because they
     # carry useful tools too. Pass exact one-tool deny toolsets through to the
@@ -1774,7 +1951,11 @@ def _build_child_agent(
 
     from agent.delegation_context import delegated_child_context
 
-    with delegated_child_context():
+    with delegated_child_context(
+        eager_toolsets=granted_toolsets,
+        schema_snapshot=charged_dynamic_schemas,
+        execution_identities=charged_dynamic_identities,
+    ):
         child = AIAgent(
             base_url=effective_base_url,
             api_key=effective_api_key,
@@ -1822,6 +2003,12 @@ def _build_child_agent(
     child_session_ref["session_id"] = getattr(child, "session_id", "") or ""
     # Set delegation depth so children can't spawn grandchildren
     child._delegate_depth = child_depth
+    child._delegate_execution_identities = MappingProxyType(
+        dict(charged_dynamic_identities)
+    )
+    child._delegate_schema_snapshot = MappingProxyType(
+        dict(charged_dynamic_schemas)
+    )
     # Stash the post-degrade role for introspection (leaf if the
     # kill switch or depth bounded the caller's requested role).
     child._delegate_role = effective_role
@@ -2569,7 +2756,13 @@ def _run_single_child(
             _worker_thread_holder["t"] = threading.current_thread()
             from agent.delegation_context import delegated_child_context
 
-            with delegated_child_context(str(getattr(child, "session_id", "") or "")):
+            with delegated_child_context(
+                str(getattr(child, "session_id", "") or ""),
+                schema_snapshot=getattr(child, "_delegate_schema_snapshot", None),
+                execution_identities=getattr(
+                    child, "_delegate_execution_identities", None
+                ),
+            ):
                 return child.run_conversation(
                     user_message=goal,
                     task_id=child_task_id,

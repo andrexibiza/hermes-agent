@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Set
 
 from hermes_constants import hermes_home_key
 
@@ -201,6 +201,15 @@ def _save_discovery_cache(cache: Dict[str, list]) -> None:
         logger.debug("Could not write tool discovery cache %s: %s", path, e)
 
 
+class ToolExecutionIdentity(NamedTuple):
+    """Immutable identity of the handler bound to an exposed tool schema."""
+
+    owner: str
+    toolset: str
+    generation: int
+    handler_id: int
+
+
 class ToolEntry:
     """Metadata for a single registered tool."""
 
@@ -208,11 +217,13 @@ class ToolEntry:
         "name", "toolset", "schema", "handler", "check_fn",
         "requires_env", "is_async", "description", "emoji",
         "max_result_size_chars", "dynamic_schema_overrides",
+        "execution_identity", "plugin_owner",
     )
 
     def __init__(self, name, toolset, schema, handler, check_fn,
                  requires_env, is_async, description, emoji,
-                 max_result_size_chars=None, dynamic_schema_overrides=None):
+                 max_result_size_chars=None, dynamic_schema_overrides=None,
+                 execution_identity=None, plugin_owner=None):
         self.name = name
         self.toolset = toolset
         self.schema = schema
@@ -223,6 +234,11 @@ class ToolEntry:
         self.description = description
         self.emoji = emoji
         self.max_result_size_chars = max_result_size_chars
+        self.execution_identity = execution_identity
+        # Plugin identity is separate from execution identity: the latter
+        # binds a schema to its handler generation, while this owner binds a
+        # dynamic toolset to the plugin that registered it.
+        self.plugin_owner = plugin_owner
         # Optional zero-arg callable returning a dict of schema overrides
         # applied at get_definitions() time. Use for fields that depend on
         # runtime config (e.g. delegate_task's description must reflect the
@@ -543,6 +559,24 @@ class ToolRegistry:
             if entry.toolset == toolset
         )
 
+    def get_toolset_owner(self, toolset: str) -> Optional[str]:
+        """Return the sole plugin owner of a registered dynamic toolset.
+
+        A toolset is grantable only when every registered tool in it carries
+        the same explicit plugin owner. Built-in and mixed-owner toolsets
+        return ``None`` and therefore remain governed by the parent
+        authorization path instead of becoming plugin capabilities.
+        """
+        owners = {
+            entry.plugin_owner
+            for entry in self._snapshot_entries()
+            if entry.toolset == toolset
+        }
+        if len(owners) != 1:
+            return None
+        owner = owners.pop()
+        return owner if isinstance(owner, str) and owner else None
+
     def register_toolset_alias(self, alias: str, toolset: str) -> None:
         """Register an explicit alias for a canonical toolset name."""
         with self._lock:
@@ -734,6 +768,17 @@ class ToolRegistry:
         except Exception:
             return ""
 
+    @staticmethod
+    def _handler_owner(handler: Callable) -> str:
+        """Return the module that defined a handler for identity binding."""
+        try:
+            module = handler.__globals__.get("__name__", "")  # type: ignore[attr-defined]
+        except AttributeError:
+            module = getattr(handler, "__module__", "")
+        if not isinstance(module, str) or not module:
+            module = getattr(type(handler), "__module__", "")
+        return module if isinstance(module, str) else ""
+
     def register(
         self,
         name: str,
@@ -832,6 +877,7 @@ class ToolRegistry:
                         name, toolset, existing.toolset,
                     )
                     return
+            registration_generation = self._generation + 1
             target[name] = ToolEntry(
                 name=name,
                 toolset=toolset,
@@ -844,6 +890,13 @@ class ToolRegistry:
                 emoji=emoji,
                 max_result_size_chars=max_result_size_chars,
                 dynamic_schema_overrides=dynamic_schema_overrides,
+                execution_identity=ToolExecutionIdentity(
+                    owner=self._handler_owner(handler),
+                    toolset=toolset,
+                    generation=registration_generation,
+                    handler_id=id(handler),
+                ),
+                plugin_owner=owner,
             )
             # Availability is now derived per-tool (_toolset_has_exposable_tools),
             # so this map no longer gates a toolset. It is still consumed by
@@ -853,7 +906,7 @@ class ToolRegistry:
             # write path for that classification.
             if scope is None and check_fn and toolset not in self._toolset_checks:
                 self._toolset_checks[toolset] = check_fn
-            self._generation += 1
+            self._generation = registration_generation
 
     def deregister(self, name: str) -> None:
         """Remove a tool from the registry.
@@ -1015,7 +1068,15 @@ class ToolRegistry:
     # Schema retrieval
     # ------------------------------------------------------------------
 
-    def get_definitions(self, tool_names: Set[str], quiet: bool = False) -> List[dict]:
+    def get_definitions(
+        self,
+        tool_names: Set[str],
+        quiet: bool = False,
+        *,
+        strict_dynamic_schema: bool = False,
+        schema_snapshot: Mapping[str, bytes] | None = None,
+        execution_identity_snapshot: dict[str, ToolExecutionIdentity] | None = None,
+    ) -> List[dict]:
         """Return OpenAI-format tool schemas for the requested tool names.
 
         Only tools whose ``check_fn()`` returns True (or have no check_fn)
@@ -1043,6 +1104,23 @@ class ToolRegistry:
                     if not quiet:
                         logger.debug("Tool %s unavailable (check failed)", name)
                     continue
+            if schema_snapshot and name in schema_snapshot:
+                try:
+                    snapshot_definition = json.loads(schema_snapshot[name].decode("utf-8"))
+                except Exception as exc:
+                    logger.warning(
+                        "child schema snapshot for tool %s could not be decoded: %s",
+                        name,
+                        type(exc).__name__,
+                    )
+                    continue
+                if not isinstance(snapshot_definition, dict):
+                    logger.warning("child schema snapshot for tool %s is not a mapping", name)
+                    continue
+                if execution_identity_snapshot is not None:
+                    execution_identity_snapshot[name] = entry.execution_identity
+                result.append(snapshot_definition)
+                continue
             # Ensure schema always has a "name" field — use entry.name as fallback
             schema_with_name = {**entry.schema, "name": entry.name}
             # Apply runtime-dynamic overrides (e.g. delegate_task description
@@ -1055,12 +1133,18 @@ class ToolRegistry:
                     overrides = entry.dynamic_schema_overrides()
                     if isinstance(overrides, dict):
                         schema_with_name.update(overrides)
+                    elif strict_dynamic_schema:
+                        raise TypeError("dynamic schema override is not a mapping")
                 except Exception as exc:
+                    if strict_dynamic_schema:
+                        raise
                     logger.warning(
                         "dynamic_schema_overrides for tool %s raised %s; "
                         "using static schema",
                         name, exc,
                     )
+            if execution_identity_snapshot is not None:
+                execution_identity_snapshot[name] = entry.execution_identity
             result.append({"type": "function", "function": schema_with_name})
         return result
 
@@ -1105,6 +1189,7 @@ class ToolRegistry:
         args: dict,
         *,
         scope: Optional[str] = None,
+        execution_identity: ToolExecutionIdentity | None = None,
         **kwargs,
     ) -> str | dict:
         """Execute a tool handler by name.
@@ -1118,6 +1203,22 @@ class ToolRegistry:
         entry = self.get_entry(name, scope=scope)
         if not entry:
             return tool_error(f"Unknown tool: {name}")
+        if (
+            execution_identity is not None
+            and (
+                not isinstance(execution_identity, ToolExecutionIdentity)
+                or entry.execution_identity != execution_identity
+            )
+        ):
+            logger.warning(
+                "Tool %s execution identity no longer matches its exposed handler",
+                name,
+            )
+            return tool_error(
+                "Tool execution identity no longer matches the exposed handler",
+                error_type="tool_execution_identity_mismatch",
+                tool=name,
+            )
         try:
             if entry.is_async:
                 from model_tools import _run_async
