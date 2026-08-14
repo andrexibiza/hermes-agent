@@ -210,10 +210,7 @@ def _register() -> None:
         name="freemaxxing",
         aliases=("fm", "freemaxxing"),
         display_name="Freemaxxing",
-        description=(
-            "Zero-new-config multi-provider failover — Nous Portal, OpenRouter, "
-            "HuggingFace. Model-aware pool with seamless failover. Primary or backup."
-        ),
+        description="Freemaxxing (Zero-new-config multi-provider failover pool)",
         signup_url="",
         env_vars=(),
         base_url=base_url,

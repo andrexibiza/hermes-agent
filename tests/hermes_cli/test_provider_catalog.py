@@ -57,13 +57,19 @@ def test_api_key_providers_expose_a_credential_env_var():
     surface at least one env var to write the key into (otherwise the GUI can't
     configure it).
 
-    Exemptions: ``aws_sdk`` (bedrock — uses AWS_REGION/AWS_PROFILE) and the
-    ``custom`` bring-your-own-endpoint pseudo-provider, which is configured
-    inline via the local-endpoint flow rather than a fixed env var.
+    Exemptions: ``aws_sdk`` (bedrock — uses AWS_REGION/AWS_PROFILE), the
+    ``custom`` bring-your-own-endpoint pseudo-provider (configured inline via
+    the local-endpoint flow rather than a fixed env var), and
+    ``supports_noauth_loopback`` providers that front a local endpoint and need
+    no user key at all (e.g. ``freemaxxing``).
     """
     exempt = {"custom"}
     for d in provider_catalog():
-        if d.auth_type == "api_key" and d.slug not in exempt:
+        if (
+            d.auth_type == "api_key"
+            and d.slug not in exempt
+            and not d.supports_noauth_loopback
+        ):
             assert d.api_key_env_vars, f"{d.slug} is api_key but exposes no env var"
 
 

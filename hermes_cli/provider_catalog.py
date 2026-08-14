@@ -66,6 +66,7 @@ class ProviderDescriptor:
     base_url_env_var: str          # base-URL override env var (may be "")
     signup_url: str                # signup / console URL (may be "")
     order: int                     # CANONICAL_PROVIDERS index — mirrors `hermes model`
+    supports_noauth_loopback: bool = False  # fronts a local no-key endpoint (freemaxxing)
 
 
 def tab_for_auth_type(auth_type: str) -> str:
@@ -171,6 +172,9 @@ def provider_catalog() -> list[ProviderDescriptor]:
                 base_url_env_var=base_url_var,
                 signup_url=signup_url,
                 order=order,
+                supports_noauth_loopback=bool(
+                    getattr(prof, "supports_noauth_loopback", False)
+                ),
             )
         )
     return out
