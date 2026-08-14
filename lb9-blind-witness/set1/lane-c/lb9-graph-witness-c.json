@@ -1,0 +1,75 @@
+{
+  "schema": "lb9-blind-witness-c/1",
+  "lane": "set1/lane-c",
+  "verdict": "REQUEST_CHANGES",
+  "witness_mode": "blind-source-only-candidate-validation",
+  "evidence_boundary": {
+    "allowed": [
+      "git show/cat-file of e40f2db1402cb629dedcff57e656dee439bb51c3:agent/context_compressor.py",
+      "pinned repository consumers/tests",
+      "final candidate D:/brain/meta/coding-graph/hermes-agent/context-compressor-lb6/residual-wave1/lb9-graph-validation/lane-a/merged-model.json"
+    ],
+    "forbidden_not_read": ["raw producer artifacts", "producer contracts/merge/gates/tests", "prior receipts/adjudications/arithmetic", "candidate notes/PR bodies/sibling outputs"]
+  },
+  "source": {
+    "repo": "C:/tmp/cc-lb9-graph-c",
+    "pin": "e40f2db1402cb629dedcff57e656dee439bb51c3",
+    "head": "e40f2db1402cb629dedcff57e656dee439bb51c3",
+    "status_porcelain": "",
+    "target": "agent/context_compressor.py",
+    "blob": "bc43bbd5a70cf4fbdd0c8aaf90703d5170eeec40",
+    "sha256": "7226fccd5af703f0b1c6c786c0cb99112f37a1601b2260b20f8c9150427a77cf",
+    "bytes": 273178,
+    "lf_lines": 5381,
+    "ast": {"top_classes": 2, "top_functions": 7, "all_functions": 93, "methods": 76, "duplicate_method_names": ["context_length", "threshold_tokens", "tail_token_budget", "max_summary_tokens"]}
+  },
+  "candidate": {
+    "path": "D:/brain/meta/coding-graph/hermes-agent/context-compressor-lb6/residual-wave1/lb9-graph-validation/lane-a/merged-model.json",
+    "source_identity_matches": true,
+    "nodes": 5321,
+    "unique_node_ids": 5321,
+    "edges": 9722,
+    "components": 71,
+    "component_nodes": 78,
+    "edge_endpoints_total_against_nodes": true,
+    "missing_edge_endpoints": 0,
+    "zero_nodecount_components": 30,
+    "duplicate_component_names": {"source-band": 22},
+    "component_edges_to_declared_components": 0,
+    "component_edges_from_declared_components": 759,
+    "purity_counts": {"impure": 5321},
+    "slice_eligible": {"total": 84, "agreed": 84, "methods": 76, "functions": 7, "classes": 1, "components": 0},
+    "scc_count": 6,
+    "scc_gt_one_count": 3,
+    "null_edge_line_count": 5225,
+    "candidate_sections_missing": ["gates", "verification", "receipts", "state_entanglement", "cycles", "orphans", "eligible_slices", "candidate_boundaries"],
+    "custody_issue": "candidate embeds producer/raw-artifact provenance metadata, which is outside this blind witness evidence boundary"
+  },
+  "gates": [
+    {"id":"G1_source_custody","predicate":"requested pin, HEAD, clean worktree, target blob, raw hash/bytes/LF lines agree","status":"PASS","evidence":"observed HEAD and requested pin equal; clean status; blob bc43...ec40; candidate source identity matches pinned bytes"},
+    {"id":"G2_graph_closure","predicate":"typed graph edges have total endpoints and no invalid ranges","status":"REQUEST_CHANGES","evidence":"edge endpoints are total against candidate nodes, but 2,895 node ranges are null (mostly synthetic components/platform/tests); 2,070 ranges are start=end and 5,225 edges have null line evidence, so source closure is not proven"},
+    {"id":"G3_components","predicate":"component declarations and memberships are closed, non-duplicative, and source-backed","status":"REQUEST_CHANGES","evidence":"71 declarations versus 78 component nodes; 30 zero-node components; 22 duplicate source-band names; 1,833 belongs_to/covers edges have zero targets among declared component IDs"},
+    {"id":"G4_claims","predicate":"claim labels/agreement are independently source-grounded and internally consistent","status":"REQUEST_CHANGES","evidence":"candidate uses A1-E2 producer claim sets/consensus but supplies no independent claim evidence or gate section; source alone cannot establish its consensus counts"},
+    {"id":"G5_purity_state_boundaries","predicate":"purity and module/self state boundaries are explicit and slice claims are safe","status":"REQUEST_CHANGES","evidence":"all 5,321 nodes are marked impure; no state_entanglement section; 84 eligible nodes include the entire 76-method ContextCompressor class surface plus 7 functions and 1 class, with no eligible component ownership"},
+    {"id":"G6_cycles_orphans","predicate":"cycles and orphan closure are enumerated and justified","status":"REQUEST_CHANGES","evidence":"independent graph traversal finds 6 SCCs, including 3 multi-node/self-loop SCC groups; candidate has no cycles/orphans section and component membership leaves closure unproven"},
+    {"id":"G7_eligible_slice_evidence","predicate":"eligible slices have source spans, ownership, consumers, state seams, and no hub-first false positives","status":"REQUEST_CHANGES","evidence":"candidate's 84 eligible nodes are only consensus flags; no candidate_boundaries/eligible_slices/consumer-seam evidence; eligible class surface includes orchestration hub and has no component links"}
+  ],
+  "consumer_evidence": {
+    "pinned_python_files": 3863,
+    "context_compressor_importfrom_references": 145,
+    "ContextCompressor_name_references": 223,
+    "note": "AST census included nested imports and tests; patch-call inventory was not treated as target-specific without namespace resolution"
+  },
+  "required_changes": [
+    "Remove producer/raw-artifact provenance from the blind-validation input or isolate it from the source-only verdict.",
+    "Rebuild endpoint-total graph with explicit typed external/component nodes and valid source ranges or explicit synthetic-range typing.",
+    "Reconcile component declarations, memberships, duplicate source bands, and zero-node entries.",
+    "Provide independently derived claim evidence, state/purity analysis, cycle/orphan report, and eligible-slice consumer/seam receipts.",
+    "Do not authorize extraction from the current candidate."
+  ],
+  "verification": {
+    "canonical_tests": "NOT_RUN_AT_PIN",
+    "structural_checks": "see verify.py; fresh verifier required after final artifact write",
+    "artifact_path": "C:/Users/andre/AppData/Local/hermes/hermes-agent/lb9-blind-witness/set1/lane-c/lb9-graph-witness-c.json"
+  }
+}

@@ -469,6 +469,11 @@ class CLIAgentSetupMixin:
                 pass
         
         try:
+            from hermes_cli.config import load_config as _load_config
+            _cfg = _load_config()
+            _user_provs = _cfg.get('providers', {})
+            _custom_provs = _cfg.get('custom_providers', [])
+
             runtime = runtime_override or {
                 "api_key": self.api_key,
                 "base_url": self.base_url,
@@ -480,6 +485,8 @@ class CLIAgentSetupMixin:
                 "command": self.acp_command,
                 "args": list(self.acp_args or []),
                 "credential_pool": getattr(self, "_credential_pool", None),
+                "user_providers": _user_provs,
+                "custom_providers": _custom_provs,
             }
             effective_model = model_override or self.model
             self.agent = AIAgent(
