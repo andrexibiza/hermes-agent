@@ -222,6 +222,7 @@ The modern path uses `message compose` with flags:
 
 ```bash
 himalaya message compose \
+  --from you@example.com \
   --to you@example.com \
   --subject "Test" \
   --body "Hello from Himalaya v2" \
@@ -232,12 +233,14 @@ For a body from stdin (replaces the removed `template send` subcommand), **omit 
 
 ```bash
 echo "Hello from a piped body" | himalaya message compose \
+  --from you@example.com \
   --to you@example.com \
   --subject "Test" \
   --send
 
 # Or read the body from a file
 himalaya message compose \
+  --from you@example.com \
   --to you@example.com \
   --subject "Test" \
   --body-file ./body.txt \
@@ -260,22 +263,23 @@ himalaya message send --save drafts < message.eml
 
 ```bash
 # Quick reply with new body
-himalaya message reply 42 --body "Got it, thanks." --send
+himalaya message reply 42 --from you@example.com --body "Got it, thanks." --send
 
 # Strict reply (just to the sender): pass --to with the original From address
-himalaya message reply 42 --to sender@example.com --body "Thanks." --send
+himalaya message reply 42 --from you@example.com --to sender@example.com --body "Thanks." --send
 
 # Reply-all: include the original To/Cc recipients with --cc / --to
 himalaya message reply 42 \
+  --from you@example.com \
   --to sender@example.com \
   --cc teammate@example.com \
   --body "Looping everyone in." --send
 
 # Custom quote headline (default is "On {date}, {from} wrote:")
-himalaya message reply 42 --quote-headline "Replying inline:" --body "..." --send
+himalaya message reply 42 --from you@example.com --quote-headline "Replying inline:" --body "..." --send
 
 # Change posting style (top | bottom | inline)
-himalaya message reply 42 --posting-style bottom --body "..." --send
+himalaya message reply 42 --from you@example.com --posting-style bottom --body "..." --send
 ```
 
 > **v2 note.** There are no `--all` / `--quote` boolean flags. Reply-all is "include the original recipients via `--cc`/`--to`"; quoting is the default behavior controlled by `--posting-style` and `--quote-headline`.
@@ -283,7 +287,7 @@ himalaya message reply 42 --posting-style bottom --body "..." --send
 ### Forward
 
 ```bash
-himalaya message forward 42 --to other@example.com --body "FYI" --send
+himalaya message forward 42 --from you@example.com --to other@example.com --body "FYI" --send
 ```
 
 ### Move / copy

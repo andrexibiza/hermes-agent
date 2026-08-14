@@ -161,6 +161,7 @@ Defines a message part.
 
 ```bash
 himalaya message compose \
+  --from you@example.com \
   --to recipient@example.com \
   --subject "Quick note" \
   --body "Hello from himalaya v2." \
@@ -168,6 +169,7 @@ himalaya message compose \
 
 # Multiple recipients, cc, bcc, attachment
 himalaya message compose \
+  --from you@example.com \
   --to alice@example.com --to bob@example.com \
   --cc manager@example.com \
   --attach ~/Documents/report.pdf \
@@ -186,22 +188,23 @@ The compose command also accepts `--from`, `--body-file <PATH>`, and reads the b
 
 ```bash
 # Reply with new body (quotes original by default; --posting-style controls layout)
-himalaya message reply 42 --body "Got it, thanks." --send
+himalaya message reply 42 --from you@example.com --body "Got it, thanks." --send
 
 # Strict reply (just the original sender): pass --to with the original From address
-himalaya message reply 42 --to sender@example.com --body "Thanks." --send
+himalaya message reply 42 --from you@example.com --to sender@example.com --body "Thanks." --send
 
 # Reply-all: include original To/Cc recipients via --cc / --to
 himalaya message reply 42 \
+  --from you@example.com \
   --to sender@example.com \
   --cc teammate@example.com \
   --body "Looping everyone in." --send
 
 # Custom quote headline and posting style
-himalaya message reply 42 --quote-headline "Replying inline:" --posting-style bottom --body "..." --send
+himalaya message reply 42 --from you@example.com --quote-headline "Replying inline:" --posting-style bottom --body "..." --send
 
 # Forward
-himalaya message forward 42 --to other@example.com --body "FYI" --send
+himalaya message forward 42 --from you@example.com --to other@example.com --body "FYI" --send
 ```
 
 > **v2 note.** There are no `--all` / `--quote` boolean flags on `message reply`. Reply-all is "include the original recipients via `--cc` / `--to`"; quoting is the default behavior controlled by `--posting-style` (`top` / `bottom` / `inline`) and `--quote-headline`.
@@ -211,7 +214,7 @@ Run `himalaya message compose --help`, `himalaya message reply --help`, and `him
 ### `message write` is an alias of `message compose`
 
 ```bash
-himalaya message write --to x@y.com --subject "..." --body "..." --send
+himalaya message write --from you@example.com --to x@y.com --subject "..." --body "..." --send
 ```
 
 > **v2 note.** In v2, `himalaya message write` is a `visible_alias` of `message compose` (alongside `new`). It does **not** open an editor — that pre-v1.x behavior is gone. For interactive composition, use an external composer like `mml compose` and pipe into `message send`.

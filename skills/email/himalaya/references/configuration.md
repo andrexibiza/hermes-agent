@@ -157,10 +157,10 @@ imap.server = "imaps://imap.gmail.com:993"
 imap.sasl.plain.username = "you@gmail.com"
 imap.sasl.plain.password.command = "pass show email/gmail-app"
 
-smtp.server = "smtp://smtp.gmail.com:587"
-smtp.starttls = true
+smtp.server = "smtps://smtp.gmail.com:465"
 smtp.sasl.plain.username = "you@gmail.com"
 smtp.sasl.plain.password.command = "pass show email/gmail-app"
+# STARTTLS alternative: smtp.server = "smtp://smtp.gmail.com:587" + smtp.starttls = true
 
 mailbox.alias.inbox  = "INBOX"
 mailbox.alias.sent   = "[Gmail]/Sent Mail"
