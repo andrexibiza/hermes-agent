@@ -244,8 +244,6 @@ def ensure_proxy() -> str:
 
 
 def _register() -> None:
-    _build_pool()
-
     port = _configured_port()
     base_url = _loopback_base_url(port)
 
@@ -277,7 +275,15 @@ def _register() -> None:
         default_aux_model="",
         fallback_models=(_ROUTER_MODEL,),
     )
+    # Register BEFORE building the pool. _build_pool() resolves Nous Portal
+    # credentials, which triggers `from hermes_cli import auth` (a circular
+    # import during discovery). That import runs auth.py's module-level
+    # auto-extension of PROVIDER_REGISTRY; if freemaxxing isn't registered yet,
+    # the extension silently skips it and `resolve_provider("freemaxxing")`
+    # later raises "Unknown provider". Registration first guarantees the
+    # profile is visible to that extension no matter the import order.
     register_provider(profile)
+    _build_pool()
 
     logger.info(
         "freemaxxing: provider registered at %s with %d backends (tiers: %s)",
