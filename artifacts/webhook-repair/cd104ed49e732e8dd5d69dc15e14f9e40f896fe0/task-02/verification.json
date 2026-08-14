@@ -1,0 +1,22 @@
+{
+  "branch": "wr/webhook-revolution-controller",
+  "changed_files": [
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/collisions.json",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/edges.csv",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/edges.json",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/graph-summary.json",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/graph.json",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/graph.sha256",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/issues.json",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/prs.json",
+    "artifacts/webhook-repair/cd104ed49e732e8dd5d69dc15e14f9e40f896fe0/graph/sources.json"
+  ],
+  "head": "5931b0a561d0b009fbe4c56d126074060f973ec0",
+  "head_before_commit": "5931b0a561d0b009fbe4c56d126074060f973ec0",
+  "phase": "verification",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\controller",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 2,
+  "timestamp": "2026-08-14T20:42:34Z"
+}

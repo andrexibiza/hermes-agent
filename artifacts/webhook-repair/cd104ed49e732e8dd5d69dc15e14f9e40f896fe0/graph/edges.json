@@ -1,0 +1,2226 @@
+[
+  {
+    "evidence": "native reference #4386",
+    "from": "issue:73828",
+    "to": "issue:4386",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #13240",
+    "from": "issue:84834",
+    "to": "issue:13240",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #18041",
+    "from": "issue:84834",
+    "to": "issue:18041",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #20201",
+    "from": "issue:84834",
+    "to": "issue:20201",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #24911",
+    "from": "issue:84834",
+    "to": "issue:24911",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #31565",
+    "from": "issue:84834",
+    "to": "issue:31565",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #32403",
+    "from": "issue:84834",
+    "to": "issue:32403",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #37284",
+    "from": "issue:84834",
+    "to": "issue:37284",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #39598",
+    "from": "issue:84834",
+    "to": "issue:39598",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #39999",
+    "from": "issue:84834",
+    "to": "issue:39999",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #40324",
+    "from": "issue:84834",
+    "to": "issue:40324",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #4260",
+    "from": "issue:84834",
+    "to": "issue:4260",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #43575",
+    "from": "issue:84834",
+    "to": "issue:43575",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #43730",
+    "from": "issue:84834",
+    "to": "issue:43730",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #4386",
+    "from": "issue:84834",
+    "to": "issue:4386",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #47451",
+    "from": "issue:84834",
+    "to": "issue:47451",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #54693",
+    "from": "issue:84834",
+    "to": "issue:54693",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #55829",
+    "from": "issue:84834",
+    "to": "issue:55829",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #57056",
+    "from": "issue:84834",
+    "to": "issue:57056",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #65939",
+    "from": "issue:84834",
+    "to": "issue:65939",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #66893",
+    "from": "issue:84834",
+    "to": "issue:66893",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #67277",
+    "from": "issue:84834",
+    "to": "issue:67277",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #71352",
+    "from": "issue:84834",
+    "to": "issue:71352",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #71571",
+    "from": "issue:84834",
+    "to": "issue:71571",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #71968",
+    "from": "issue:84834",
+    "to": "issue:71968",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #73828",
+    "from": "issue:84834",
+    "to": "issue:73828",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #7448",
+    "from": "issue:84834",
+    "to": "issue:7448",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #74980",
+    "from": "issue:84834",
+    "to": "issue:74980",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #77471",
+    "from": "issue:84834",
+    "to": "issue:77471",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #78022",
+    "from": "issue:84834",
+    "to": "issue:78022",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #78296",
+    "from": "issue:84834",
+    "to": "issue:78296",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #80327",
+    "from": "issue:84834",
+    "to": "issue:80327",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #80531",
+    "from": "issue:84834",
+    "to": "issue:80531",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84835",
+    "from": "issue:84834",
+    "to": "pr:84835",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84849",
+    "from": "issue:84834",
+    "to": "pr:84849",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84858",
+    "from": "issue:84834",
+    "to": "pr:84858",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84939",
+    "from": "issue:84834",
+    "to": "pr:84939",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84978",
+    "from": "issue:84834",
+    "to": "pr:84978",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #85002",
+    "from": "issue:84834",
+    "to": "pr:85002",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #85025",
+    "from": "issue:84834",
+    "to": "pr:85025",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #85318",
+    "from": "issue:84834",
+    "to": "pr:85318",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #85523",
+    "from": "issue:84834",
+    "to": "pr:85523",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:84849",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:84858",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:84939",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:84978",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85002",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85025",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85318",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:84835",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84835",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:84835",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:84835",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:84858",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:84939",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:84978",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85002",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85025",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_auth.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_auth_seam.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85318",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:84849",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84849",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:84849",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:84849",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:84939",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:84978",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85002",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85025",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85318",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:84858",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84858",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:84858",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:84858",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:84978",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85002",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85025",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85318",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:84939",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84939",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:84939",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:84939",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "hermes_cli/webhook.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85002",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "hermes_cli/webhook.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85025",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85318",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:84978",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "hermes_cli/webhook.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:84978",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:84978",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:84978",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/webhook.py",
+    "from": "pr:84978",
+    "to": "source:hermes_cli/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/config.py",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "gateway/webhook_config.py",
+      "hermes_cli/config_defaults.py",
+      "hermes_cli/gateway.py",
+      "hermes_cli/setup.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "hermes_cli/webhook.py",
+      "tests/gateway/test_webhook_effective_config.py",
+      "tests/gateway/test_webhook_profile_admission_multiplex_allowlist.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/hermes_cli/test_gateway_setup.py",
+      "tests/hermes_cli/test_webhook_cli.py",
+      "tests/hermes_cli/test_webhook_setup.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85025",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85318",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #13240",
+    "from": "pr:85002",
+    "to": "issue:13240",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #24911",
+    "from": "pr:85002",
+    "to": "issue:24911",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85002",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "tests/hermes_cli/test_webhook_cli.py",
+    "from": "pr:85002",
+    "to": "source:tests/hermes_cli/test_webhook_cli.py",
+    "type": "tests"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "hermes_cli/webhook.py",
+      "tests/hermes_cli/test_webhook_cli.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85002",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/config.py",
+    "from": "pr:85002",
+    "to": "source:gateway/config.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85002",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/config_defaults.py",
+    "from": "pr:85002",
+    "to": "source:hermes_cli/config_defaults.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/gateway.py",
+    "from": "pr:85002",
+    "to": "source:hermes_cli/gateway.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/setup.py",
+    "from": "pr:85002",
+    "to": "source:hermes_cli/setup.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:85002",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/webhook.py",
+    "from": "pr:85002",
+    "to": "source:hermes_cli/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/hermes_cli/test_webhook_cli.py",
+    "from": "pr:85002",
+    "to": "source:tests/hermes_cli/test_webhook_cli.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "native reference #77471",
+    "from": "pr:85025",
+    "to": "issue:77471",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85025",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "tests/hermes_cli/test_webhook_cli.py",
+    "from": "pr:85025",
+    "to": "source:tests/hermes_cli/test_webhook_cli.py",
+    "type": "tests"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "gateway/platforms/webhook_profile_admission.py",
+      "hermes_cli/web_routers/webhooks.py",
+      "hermes_cli/web_server.py",
+      "tests/gateway/test_webhook_profile_admission_seam.py",
+      "tests/test_web_server_webhooks_seam.py"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85318",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "hermes_cli/webhook.py",
+      "tests/hermes_cli/test_webhook_cli.py"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85025",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/config.py",
+    "from": "pr:85025",
+    "to": "source:gateway/config.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85025",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/config_defaults.py",
+    "from": "pr:85025",
+    "to": "source:hermes_cli/config_defaults.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/gateway.py",
+    "from": "pr:85025",
+    "to": "source:hermes_cli/gateway.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/setup.py",
+    "from": "pr:85025",
+    "to": "source:hermes_cli/setup.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:85025",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/webhook.py",
+    "from": "pr:85025",
+    "to": "source:hermes_cli/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/hermes_cli/test_webhook_cli.py",
+    "from": "pr:85025",
+    "to": "source:tests/hermes_cli/test_webhook_cli.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "native reference #47451",
+    "from": "pr:85318",
+    "to": "issue:47451",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #80327",
+    "from": "pr:85318",
+    "to": "issue:80327",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85318",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_adapter.py",
+    "from": "pr:85318",
+    "to": "source:tests/gateway/test_webhook_adapter.py",
+    "type": "tests"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_integration.py",
+    "from": "pr:85318",
+    "to": "source:tests/gateway/test_webhook_integration.py",
+    "type": "tests"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_signature_rate_limit.py",
+    "from": "pr:85318",
+    "to": "source:tests/gateway/test_webhook_signature_rate_limit.py",
+    "type": "tests"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py",
+      "tests/gateway/test_webhook_adapter.py"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85523",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85634",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py",
+      "tests/gateway/test_webhook_integration.py"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85318",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85318",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/web_server.py",
+    "from": "pr:85318",
+    "to": "source:hermes_cli/web_server.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_adapter.py",
+    "from": "pr:85318",
+    "to": "source:tests/gateway/test_webhook_adapter.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_integration.py",
+    "from": "pr:85318",
+    "to": "source:tests/gateway/test_webhook_integration.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_signature_rate_limit.py",
+    "from": "pr:85318",
+    "to": "source:tests/gateway/test_webhook_signature_rate_limit.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "native reference #55829",
+    "from": "pr:85523",
+    "to": "issue:55829",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #7448",
+    "from": "pr:85523",
+    "to": "issue:7448",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84835",
+    "from": "pr:85523",
+    "to": "pr:84835",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84849",
+    "from": "pr:85523",
+    "to": "pr:84849",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84858",
+    "from": "pr:85523",
+    "to": "pr:84858",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84939",
+    "from": "pr:85523",
+    "to": "pr:84939",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84978",
+    "from": "pr:85523",
+    "to": "pr:84978",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #85002",
+    "from": "pr:85523",
+    "to": "pr:85002",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #85025",
+    "from": "pr:85523",
+    "to": "pr:85025",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #85318",
+    "from": "pr:85523",
+    "to": "pr:85318",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_adapter.py",
+    "from": "pr:85523",
+    "to": "source:tests/gateway/test_webhook_adapter.py",
+    "type": "tests"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85523",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85523",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85523",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85523",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85523",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_adapter.py",
+    "from": "pr:85523",
+    "to": "source:tests/gateway/test_webhook_adapter.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85634",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "tests/hermes_cli/test_webhook_cli.py",
+    "from": "pr:85634",
+    "to": "source:tests/hermes_cli/test_webhook_cli.py",
+    "type": "tests"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85636",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85638",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85640",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85645",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85634",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/subcommands/webhook.py",
+    "from": "pr:85634",
+    "to": "source:hermes_cli/subcommands/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "hermes_cli/webhook.py",
+    "from": "pr:85634",
+    "to": "source:hermes_cli/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/hermes_cli/test_webhook_cli.py",
+    "from": "pr:85634",
+    "to": "source:tests/hermes_cli/test_webhook_cli.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85636",
+    "to": "pr:85638",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85636",
+    "to": "pr:85640",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85636",
+    "to": "pr:85644",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85636",
+    "to": "pr:85645",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85636",
+    "to": "pr:85674",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85636",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85636",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85636",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85636",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85638",
+    "to": "pr:85640",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85638",
+    "to": "pr:85645",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85638",
+    "to": "pr:85653",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85638",
+    "to": "pr:85674",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85638",
+    "to": "pr:85675",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "website/docs/user-guide/messaging/webhooks.md",
+    "from": "pr:85638",
+    "to": "source:website/docs/user-guide/messaging/webhooks.md",
+    "type": "documents"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85638",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85638",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": "website/docs/user-guide/messaging/webhooks.md",
+    "from": "pr:85638",
+    "to": "source:website/docs/user-guide/messaging/webhooks.md",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85640",
+    "to": "pr:85645",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85640",
+    "to": "pr:85653",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85640",
+    "to": "pr:85674",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85640",
+    "to": "pr:85675",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85640",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85640",
+    "to": "pr:85644",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85644",
+    "to": "pr:85645",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85644",
+    "to": "pr:85674",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #32403",
+    "from": "pr:85644",
+    "to": "issue:32403",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85644",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_integration.py",
+    "from": "pr:85644",
+    "to": "source:tests/gateway/test_webhook_integration.py",
+    "type": "tests"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85644",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85644",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85644",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/gateway/test_webhook_integration.py",
+    "from": "pr:85644",
+    "to": "source:tests/gateway/test_webhook_integration.py",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com",
+      "gateway/platforms/webhook.py"
+    ],
+    "from": "pr:85645",
+    "to": "pr:85674",
+    "type": "conflicts_with"
+  },
+  {
+    "evidence": "native reference #80531",
+    "from": "pr:85645",
+    "to": "issue:80531",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85645",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85645",
+    "to": "pr:85653",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85645",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85645",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85653",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "tests/agent/test_outbound_webhooks.py",
+    "from": "pr:85653",
+    "to": "source:tests/agent/test_outbound_webhooks.py",
+    "type": "tests"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85653",
+    "to": "pr:85674",
+    "type": "touches"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85653",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "agent/outbound_webhooks.py",
+    "from": "pr:85653",
+    "to": "source:agent/outbound_webhooks.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "tests/agent/test_outbound_webhooks.py",
+    "from": "pr:85653",
+    "to": "source:tests/agent/test_outbound_webhooks.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85674",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": [
+      "contributors/emails/andrexibiza@gmail.com"
+    ],
+    "from": "pr:85674",
+    "to": "pr:85675",
+    "type": "touches"
+  },
+  {
+    "evidence": "gateway/platforms/webhook.py",
+    "from": "pr:85674",
+    "to": "source:gateway/platforms/webhook.py",
+    "type": "touches"
+  },
+  {
+    "evidence": "native reference #4386",
+    "from": "pr:85675",
+    "to": "issue:4386",
+    "type": "native_backlink"
+  },
+  {
+    "evidence": "native reference #84834",
+    "from": "pr:85675",
+    "to": "issue:84834",
+    "type": "native_backlink"
+  }
+]
