@@ -199,41 +199,33 @@ class BackendPool:
             return None
 
     def get_aggregated_models(self) -> List[Dict[str, str]]:
-        """Union of all backends' models with provenance (owned_by = backend name).
+        """Expose exactly the freemaxxing router alias to pickers.
+
+        The external /v1/models surface advertises a single model so a picker
+        shows exactly one entry, never the hundreds of backend models. The
+        internal (free-only) routing catalog is refreshed here so the alias can
+        resolve a concrete free model at forward time.
 
         Backend list is snapshotted under the lock; remote catalog fetches run
         OUTSIDE the lock so a slow/absent catalog (8s timeout per backend) can
         never freeze chat selection, health, or add/clear for other threads.
-        The refreshed catalogs are published back under the lock.
         """
         with self._lock:
-            if self._global_models_cache is not None and time.time() < self._global_models_until:
-                return list(self._global_models_cache)
             backends = list(self.backends)
 
-        seen: Set[str] = set()
-        result: List[Dict[str, str]] = []
-        # Always advertise the router alias first so it's selectable in the
-        # picker regardless of backend catalog state.
-        result.append({
+        # Refresh each backend's free-only catalog for routing. Fetches run
+        # outside the lock; results are published back per-backend.
+        for b in backends:
+            try:
+                b.set_cached_models(self._fetch_models(b))
+            except Exception as e:
+                logger.debug("freemaxxing: catalog refresh failed for %s: %s", b.name, e)
+
+        return [{
             "id": "freemaxxing",
             "object": "model",
             "owned_by": "freemaxxing",
-        })
-        seen.add("freemaxxing")
-        for b in backends:
-            catalog = self._fetch_models(b)
-            b.set_cached_models(catalog)
-            for mid in catalog:
-                if mid not in seen:
-                    seen.add(mid)
-                    result.append({"id": mid, "object": "model", "owned_by": b.name})
-        result.sort(key=lambda m: m["id"])
-
-        with self._lock:
-            self._global_models_cache = result
-            self._global_models_until = time.time() + 60.0
-        return list(result)
+        }]
 
     def _fetch_models(self, backend: Backend) -> List[str]:
         url = backend.base_url + "/models"
@@ -247,7 +239,14 @@ class BackendPool:
             with _open_credentialed(req, timeout=8.0) as resp:
                 data = json.loads(resp.read().decode())
                 items = data if isinstance(data, list) else data.get("data", [])
-                return [m["id"] for m in items if isinstance(m, dict) and "id" in m]
+                # FREE-ONLY INVARIANT: the routing catalog must never contain a
+                # paid model, or _resolve_auto_model can forward the router
+                # alias to a billable upstream. A model is free only when its
+                # id carries the provider free-tier marker (":free").
+                return [
+                    m["id"] for m in items
+                    if isinstance(m, dict) and "id" in m and ":free" in m["id"].lower()
+                ]
         except Exception as e:
             logger.debug("freemaxxing: model fetch failed for %s: %s", backend.name, e)
             return []
@@ -522,6 +521,15 @@ def _open_response(backend: Backend, body: Dict[str, Any]):
             if _real:
                 _out = dict(body)
                 _out["model"] = _real
+            else:
+                # No free model resolved on this backend. NEVER forward the raw
+                # "freemaxxing" alias upstream: the upstream's own default may be
+                # a paid model, which would violate the free-only invariant.
+                # Skip this backend so the request fails over to a cheaper tier
+                # (or 503s when every tier is exhausted).
+                raise ModelNotFoundError(
+                    f"backend {backend.name} has no free model in catalog"
+                )
         req = urllib.request.Request(
             url,
             data=json.dumps(_out).encode("utf-8"),

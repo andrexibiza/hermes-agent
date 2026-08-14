@@ -41,7 +41,9 @@ class MockBackend:
 
     def __init__(self, *, models=None, status_code=200, body=None,
                  retry_after=None, stream_chunks=None):
-        self.models = models or ["test-model"]
+        # Free-tier model ids by default so the free-only catalog filter keeps
+        # them routable (a paid model id is intentionally dropped by the proxy).
+        self.models = models or ["test-model:free"]
         self.status_code = status_code
         self.body = body or self._default_body()
         self.retry_after = retry_after
@@ -311,13 +313,13 @@ def test_401_triggers_refresh_and_retry():
 
 def test_model_affinity_prefers_advertising_backend():
     proxy, port = _setup()
-    b1 = MockBackend(models=["other-model"])
-    b2 = MockBackend(models=["test-model"])
+    b1 = MockBackend(models=["other-model:free"])
+    b2 = MockBackend(models=["test-model:free"])
     _add(b1, "b1", 0)
     _add(b2, "b2", 0)
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models").read()
-        with _post(port, model="test-model") as resp:
+        with _post(port, model="test-model:free") as resp:
             resp.read()
         assert b2.request_count == 1
         assert b1.request_count == 0
@@ -342,19 +344,29 @@ def test_round_robin_among_capable_backends():
         _teardown(proxy, [b1, b2])
 
 
-def test_catalog_aggregation_and_provenance():
+def test_picker_surface_is_single_model_and_catalog_free_only():
+    """/v1/models advertises exactly the freemaxxing router alias, and the
+    internal routing catalog only ever contains free-tier models."""
     proxy, port = _setup()
-    b1 = MockBackend(models=["model-a"])
-    b2 = MockBackend(models=["model-b"])
+    b1 = MockBackend(models=["model-a:free"])
+    b2 = MockBackend(models=["model-b:free", "paid-model-big"])
     _add(b1, "b1", 0)
     _add(b2, "b2", 0)
     try:
         data = json.loads(urllib.request.urlopen(
             f"http://127.0.0.1:{port}/v1/models", timeout=10.0
         ).read().decode())
-        ids = {m["id"]: m["owned_by"] for m in data["data"]}
-        assert ids["model-a"] == "b1"
-        assert ids["model-b"] == "b2"
+        ids = [m["id"] for m in data["data"]]
+        # The picker sees exactly one entry: the opaque router alias.
+        assert ids == ["freemaxxing"]
+
+        # The internal routing catalog is free-only: paid ids are dropped.
+        all_cached = []
+        for b in pool.backends:
+            all_cached.extend(b.get_cached_models())
+        assert "model-a:free" in all_cached
+        assert "model-b:free" in all_cached
+        assert "paid-model-big" not in all_cached
     finally:
         _teardown(proxy, [b1, b2])
 
