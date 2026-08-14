@@ -17,6 +17,7 @@ from hermes_constants import get_hermes_home
 from hermes_state_common import (
     DEFERRED_INDEX_SQL,
     FTS_CJK_STALE_KEY,
+    FTS_INTEGRITY_ENGINE_KEY,
     FTS_STALE_KEY,
     FTS_SQL,
     FTS_STORAGE_VERSION,
@@ -37,6 +38,26 @@ logger = logging.getLogger("hermes_state")
 # Cache for schema_read_probe_statements() — parsing SCHEMA_SQL spins up an
 # in-memory SQLite database, so derive the statements once per process.
 _READ_PROBE_STATEMENTS: Optional[tuple] = None
+
+# Per-table legacy DDL + trigger group for the drop-recreate fallback in
+# _rebuild_legacy_fts_indexes: a malformed inverted index can fail even the
+# plain ``DELETE FROM <table>`` the backfill starts with (#86027). Dropping
+# a virtual table leaves its sync triggers on ``messages`` dangling, so the
+# triggers go first; the DDL re-creates table AND triggers (IF NOT EXISTS).
+_LEGACY_FTS_TABLES = {
+    "messages_fts": (
+        ("messages_fts_insert", "messages_fts_delete", "messages_fts_update"),
+        LEGACY_FTS_SQL,
+    ),
+    "messages_fts_trigram": (
+        (
+            "messages_fts_trigram_insert",
+            "messages_fts_trigram_delete",
+            "messages_fts_trigram_update",
+        ),
+        LEGACY_FTS_TRIGRAM_SQL,
+    ),
+}
 
 
 def schema_read_probe_statements() -> tuple:
@@ -307,27 +328,52 @@ class SessionSchemaMixin:
         earlier no-FTS5 runtime. Inline tables have no external-content
         'rebuild' source, so we DELETE + reinsert the concatenated content
         the legacy triggers produced. Never touches the v23 shape.
+
+        A DELETE that fails with DatabaseError (the #86027 malformed-index
+        class: the index was written by a different SQLite engine) falls
+        back to dropping and recreating the virtual table from its legacy
+        DDL before backfilling, so the repair never fails the open.
         """
-        cursor.execute("DELETE FROM messages_fts")
-        cursor.execute(
-            "INSERT INTO messages_fts(rowid, content) "
+        backfill_sql = (
+            "INSERT INTO {table}(rowid, content) "
             "SELECT id, "
             "COALESCE(content, '') || ' ' || "
             "COALESCE(tool_name, '') || ' ' || "
             "COALESCE(tool_calls, '') "
             "FROM messages"
         )
-        if not include_trigram:
-            return
-        cursor.execute("DELETE FROM messages_fts_trigram")
-        cursor.execute(
-            "INSERT INTO messages_fts_trigram(rowid, content) "
-            "SELECT id, "
-            "COALESCE(content, '') || ' ' || "
-            "COALESCE(tool_name, '') || ' ' || "
-            "COALESCE(tool_calls, '') "
-            "FROM messages"
-        )
+        tables = ("messages_fts",)
+        if include_trigram:
+            tables += ("messages_fts_trigram",)
+        for table in tables:
+            triggers, ddl = _LEGACY_FTS_TABLES[table]
+            try:
+                cursor.execute(f"DELETE FROM {table}")
+            except sqlite3.DatabaseError as exc:
+                logger.warning(
+                    "Cannot clear legacy FTS index %s with DELETE (%s); "
+                    "dropping and recreating it instead",
+                    table,
+                    exc,
+                )
+                try:
+                    for trigger in triggers:
+                        cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+                    cursor.execute(f"DROP TABLE IF EXISTS {table}")
+                    cursor.executescript(ddl)
+                    # Backfill inside the same guard: a failure here (e.g.
+                    # messages itself unreadable) must not escape and fail
+                    # the open — this method is a best-effort repair path.
+                    cursor.execute(backfill_sql.format(table=table))
+                except sqlite3.Error as fallback_exc:
+                    logger.error(
+                        "Could not recreate legacy FTS index %s (%s); run "
+                        "`hermes sessions repair` to rebuild it",
+                        table,
+                        fallback_exc,
+                    )
+                continue
+            cursor.execute(backfill_sql.format(table=table))
 
     def _fts_table_probe(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[bool]:
         try:
@@ -345,6 +391,99 @@ class SessionSchemaMixin:
             if "no such table" in str(exc).lower():
                 return False
             raise
+
+    def _verify_fts_engine_integrity(self, cursor: sqlite3.Cursor) -> None:
+        """Re-verify FTS5 index integrity once per SQLite engine version.
+
+        An index written by one SQLite engine can be silently unreadable by
+        another (#86027: the trigram tokenizer changed how content with an
+        embedded NUL is tokenized, so MATCH and the sync triggers keep
+        working while ``DELETE FROM`` and the FTS5 'integrity-check' command
+        fail with "malformed inverted index"). With triggers intact nothing
+        else on the open path notices, so the DB silently carries a broken
+        derived index across the upgrade.
+
+        Gated by the state_meta key ``fts_integrity_engine``: when it holds
+        the running ``sqlite3.sqlite_version`` the sweep already passed on
+        this engine and costs a single meta read. Otherwise every EXISTING
+        FTS table gets one 'integrity-check'; a failure is repaired in place
+        with the 'rebuild' command (full re-tokenization from the stored
+        content) and re-verified. A repair that cannot be verified logs the
+        manual escape hatch and leaves the marker unstamped so the next open
+        retries. Never raises: this hardens derived indexes only and must
+        not fail opening the canonical store.
+        """
+        if self.read_only:
+            return
+        try:
+            row = cursor.execute(
+                "SELECT value FROM state_meta WHERE key = ? LIMIT 1",
+                (FTS_INTEGRITY_ENGINE_KEY,),
+            ).fetchone()
+            if row is not None:
+                stamped = row["value"] if isinstance(row, sqlite3.Row) else row[0]
+                if stamped == sqlite3.sqlite_version:
+                    return
+
+            capability_missing = False
+            verified = True
+            for table in ("messages_fts", "messages_fts_trigram", "messages_fts_cjk"):
+                status = self._fts_table_probe(cursor, table)
+                if status is not True:
+                    if status is None:
+                        # An incapable host (e.g. no trigram tokenizer) must
+                        # not stamp the engine marker on behalf of the
+                        # capable host that may have written these indexes.
+                        capability_missing = True
+                    continue
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {table}({table}) VALUES('integrity-check')"
+                    )
+                except sqlite3.DatabaseError as exc:
+                    try:
+                        cursor.execute(
+                            f"INSERT INTO {table}({table}) VALUES('rebuild')"
+                        )
+                        cursor.execute(
+                            f"INSERT INTO {table}({table}) VALUES('integrity-check')"
+                        )
+                    except sqlite3.DatabaseError as repair_exc:
+                        verified = False
+                        logger.error(
+                            "FTS index %s in %s failed integrity verification "
+                            "under SQLite %s and could not be repaired "
+                            "automatically (%s); run `hermes sessions repair` "
+                            "to rebuild it",
+                            table,
+                            self.db_path,
+                            sqlite3.sqlite_version,
+                            repair_exc,
+                        )
+                        continue
+                    logger.warning(
+                        "Rebuilt FTS index %s in %s: the stored inverted "
+                        "index was not verifiable under SQLite %s (%s)",
+                        table,
+                        self.db_path,
+                        sqlite3.sqlite_version,
+                        exc,
+                    )
+            if capability_missing or not verified:
+                return
+            self.set_meta(
+                FTS_INTEGRITY_ENGINE_KEY,
+                sqlite3.sqlite_version,
+                cursor=cursor,
+            )
+        except sqlite3.Error as exc:
+            # The gate is best-effort hardening: an unexpected engine error
+            # degrades to "unchecked this open", never to a failed open.
+            logger.warning(
+                "FTS engine integrity gate skipped for %s: %s",
+                self.db_path,
+                exc,
+            )
 
     def _recover_stale_fts(self, cursor: sqlite3.Cursor, *, legacy: bool) -> bool:
         """Atomically rebuild stale base/trigram indexes and resume syncing."""
@@ -1244,6 +1383,11 @@ class SessionSchemaMixin:
             # AFTER UPDATE OF variants. IF NOT EXISTS cannot rewrite them.
             if getattr(self, "_fts_enabled", False):
                 self._migrate_broad_fts_update_triggers(cursor)
+
+            # One FTS integrity sweep per SQLite engine version (#86027):
+            # verify every existing index, 'rebuild'-repair any another
+            # engine left unreadable, then stamp the engine marker.
+            self._verify_fts_engine_integrity(cursor)
 
         self._conn.commit()
 
