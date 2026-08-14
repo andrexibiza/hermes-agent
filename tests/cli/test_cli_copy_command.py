@@ -121,7 +121,8 @@ def test_copy_falls_back_to_osc52_when_native_tools_fail():
     cli_obj._write_osc52_clipboard = MagicMock()
 
     with patch("hermes_cli.clipboard.is_remote_shell_session", return_value=False), \
-         patch("hermes_cli.clipboard.write_clipboard_text", return_value=False):
+         patch("hermes_cli.clipboard.write_clipboard_text", return_value=False) as mock_copy:
         cli_obj.process_command("/copy")
 
+    mock_copy.assert_called_once_with("svaret")
     cli_obj._write_osc52_clipboard.assert_called_once_with("svaret")
