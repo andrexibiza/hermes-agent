@@ -418,26 +418,26 @@ def _discover_freemaxxing_model() -> Optional[tuple[str, str, str]]:
             # Find free models
             free_models = [m for m in catalog if ':free' in m.lower()]
             
-            # Also look for auto-free routers (e.g., openrouter/auto, kilo-auto/free)
-            auto_free_models = [m for m in catalog if 'auto' in m.lower() and ('free' in m.lower() or provider_id in ['openrouter', 'kilo'])]
+            # Explicitly include openrouter/free (the free tier router) if present
+            free_router_models = [m for m in catalog if m == 'openrouter/free']
             
-            # Combine free models and auto-free routers, prioritizing auto-free routers
+            # Combine free models and free router, prioritizing the router
             candidate_models = []
             
-            # Auto-free routers get highest priority (they dynamically route to best free)
-            for m in auto_free_models:
-                candidate_models.append((m, True))  # True = is_auto_router
+            # Free router gets highest priority (it routes to best available free model)
+            for m in free_router_models:
+                candidate_models.append((m, True))  # True = is_free_router
             
             # Then regular free models
             for m in free_models:
-                if m not in auto_free_models:
+                if m not in free_router_models:
                     candidate_models.append((m, False))
             
             if not candidate_models:
                 continue
             
-            # Score models: auto-free routers first, then tools+reasoning, then larger context, then prefer known-good families
-            def score_model(model_id: str, is_auto_router: bool) -> tuple:
+            # Score models: free router first, then tools+reasoning, then larger context, then prefer known-good families
+            def score_model(model_id: str, is_free_router: bool) -> tuple:
                 # Check capabilities via models.dev
                 try:
                     info = get_model_info(provider_id, model_id)
@@ -475,11 +475,11 @@ def _discover_freemaxxing_model() -> Optional[tuple[str, str, str]]:
                 # Capability score: tools+reasoning > tools > reasoning > base
                 capability_score = (has_tools and has_reasoning, has_tools, has_reasoning)
                 
-                # Auto-free router gets highest priority (dynamically routes to best free)
-                auto_bonus = 1000 if is_auto_router else 0
+                # Free router gets highest priority (routes to best available free model)
+                free_router_bonus = 1000 if is_free_router else 0
                 
                 # Return tuple for sorting (higher = better)
-                return (auto_bonus, capability_score, family_bonus, ctx, model_id)
+                return (free_router_bonus, capability_score, family_bonus, ctx, model_id)
             
             # Sort candidates
             candidate_models.sort(key=lambda x: score_model(x[0], x[1]), reverse=True)
