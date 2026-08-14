@@ -129,8 +129,15 @@ class TestResolveBackendType:
         # Stale env var is replaced by the config value.
         assert config["docker_image"] == "python:3.12-slim"
 
-    def test_config_bridge_failure_raises_when_backend_is_docker(self, monkeypatch):
+    def test_config_bridge_failure_raises_when_backend_is_docker(self, monkeypatch, tmp_path):
         """When config bridge fails and config intends Docker, fail closed."""
+        # Isolate from any inherited config.yaml: the bridge-failure tests
+        # must exercise the mocked paths, not the real (possibly malformed)
+        # config file that _probe_config_unreadable() would read.
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
         monkeypatch.setenv("TERMINAL_ENV", "local")
         monkeypatch.setenv("TERMINAL_DOCKER_IMAGE", "stale-image")
 
@@ -147,8 +154,12 @@ class TestResolveBackendType:
         with pytest.raises(RuntimeError, match="Refusing to downgrade"):
             _tt_mod._get_env_config()
 
-    def test_config_bridge_failure_allows_local_when_backend_is_local(self, monkeypatch):
+    def test_config_bridge_failure_allows_local_when_backend_is_local(self, monkeypatch, tmp_path):
         """When config bridge fails but config intends local, it is safe to proceed."""
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
         monkeypatch.setenv("TERMINAL_ENV", "local")
 
         monkeypatch.setattr(
@@ -162,8 +173,12 @@ class TestResolveBackendType:
         config = _tt_mod._get_env_config()
         assert config["env_type"] == "local"
 
-    def test_config_bridge_failure_preserves_explicit_termin_env(self, monkeypatch):
+    def test_config_bridge_failure_preserves_explicit_termin_env(self, monkeypatch, tmp_path):
         """When bridge fails but TERMINAL_ENV=docker was explicitly set, keep it."""
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         monkeypatch.setenv("TERMINAL_DOCKER_IMAGE", "my-image")
 
@@ -251,13 +266,11 @@ class TestResolveBackendType:
 
 
 class TestProbeConfigUnreadableShapes:
-    """_probe_config_unreadable() must reject empty / non-mapping / invalid configs."""
+    """_probe_config_unreadable() must reject malformed / non-mapping configs."""
 
     @pytest.mark.parametrize(
         "raw",
         [
-            "",                       # empty document
-            "# comment only\n",        # comment-only document
             "[]\n",                   # list root
             "- a\n- b\n",             # list root with items
             "just a string\n",        # scalar root
@@ -265,7 +278,7 @@ class TestProbeConfigUnreadableShapes:
         ],
     )
     def test_present_but_invalid_shape_is_unreadable(self, monkeypatch, tmp_path, raw):
-        """A present config that is empty/list/scalar cannot carry a backend."""
+        """A present config with a list/scalar root cannot carry a backend."""
         hermes_home = tmp_path / "hermes_home"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text(raw, encoding="utf-8")
@@ -273,6 +286,24 @@ class TestProbeConfigUnreadableShapes:
         monkeypatch.setenv("TERMINAL_ENV", "local")
 
         assert _tt_mod._probe_config_unreadable() is True
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",                       # empty document
+            "# comment only\n",       # comment-only document
+            "\n\n",                   # blank lines only
+        ],
+    )
+    def test_empty_document_is_readable(self, monkeypatch, tmp_path, raw):
+        """An empty/comment-only document carries no backend — like an absent file."""
+        hermes_home = tmp_path / "hermes_home"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(raw, encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert _tt_mod._probe_config_unreadable() is False
 
     def test_non_mapping_terminal_section_is_unreadable(self, monkeypatch, tmp_path):
         hermes_home = tmp_path / "hermes_home"

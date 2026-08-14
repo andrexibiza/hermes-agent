@@ -214,7 +214,13 @@ def _uses_container_paths(task_id: str = "default") -> bool:
         container_backends = _CONTAINER_BACKENDS
     except Exception:
         container_backends = _CONTAINER_PATH_BACKENDS_FALLBACK
-    return _terminal_env_type_for_task(task_id) in container_backends
+    env_type = _terminal_env_type_for_task(task_id)
+    if env_type == "unknown":
+        # Config bridge failed / backend unconfirmed — fail closed by
+        # treating paths as sandbox-relative so host paths are never
+        # dereferenced (an isolated backend must not leak host paths).
+        return True
+    return env_type in container_backends
 
 
 def _normalize_without_host_deref(path: str | Path | PurePosixPath) -> PurePosixPath:

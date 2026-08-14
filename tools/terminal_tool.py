@@ -1325,9 +1325,10 @@ def _docker_session_isolation_enabled() -> bool:
     ``container_persistent: true`` the documented ONE-long-lived-container
     contract is unchanged.
     """
-    if _resolve_backend_type() != "docker":
+    snapshot = _terminal_env_snapshot()
+    if _resolve_backend_type(snapshot) != "docker":
         return False
-    return _terminal_env_snapshot().get("TERMINAL_CONTAINER_PERSISTENT", "true").lower() not in {"true", "1", "yes"}
+    return snapshot.get("TERMINAL_CONTAINER_PERSISTENT", "true").lower() not in {"true", "1", "yes"}
 
 
 _ISOLATION_OVERRIDE_KEYS = frozenset({
@@ -1564,6 +1565,13 @@ def _terminal_env_snapshot() -> Dict[str, str]:
         for key in list(env.keys()):
             if key.startswith("TERMINAL_") and key != "TERMINAL_ENV":
                 env.pop(key, None)
+        # Worker-scoped spawn overrides survive a bridge failure: they are
+        # explicit process settings (e.g. kanban _default_spawn), not
+        # config-derived backend state, so they are restored just like on
+        # the success path below.
+        for key in ("TERMINAL_TIMEOUT", "TERMINAL_LIFETIME_SECONDS"):
+            if key in orig:
+                env[key] = orig[key]
         env["_config_bridge_failed"] = "1"
         if config_unreadable:
             env["_config_unreadable"] = "1"
@@ -1577,6 +1585,10 @@ def _terminal_env_snapshot() -> Dict[str, str]:
         for key in list(env.keys()):
             if key.startswith("TERMINAL_") and key != "TERMINAL_ENV":
                 env.pop(key, None)
+        # Same worker-override preservation as the raise path above.
+        for key in ("TERMINAL_TIMEOUT", "TERMINAL_LIFETIME_SECONDS"):
+            if key in orig:
+                env[key] = orig[key]
         env["_config_bridge_failed"] = "1"
         env["_config_unreadable"] = "1"
         return env
@@ -1596,12 +1608,14 @@ def _probe_config_unreadable() -> bool:
 
     ``read_raw_config()`` normalizes "file absent", "empty document", a
     non-mapping root (list/scalar), and "parse failure" all to ``{}``.  This
-    helper distinguishes a safe absent config from a present-but-corrupt one:
-    a config that exists but cannot be trusted — unparseable, an empty or
-    non-mapping document, a non-mapping ``terminal`` section, or an
+    helper distinguishes a safe absent/empty config from a present-but-corrupt
+    one: a config that exists but cannot be trusted — unparseable, a list or
+    scalar document, a non-mapping ``terminal`` section, or an
     unrecognized ``terminal.backend`` — is a security risk (it may carry
     ``terminal.backend: docker``) and must fail closed rather than silently
-    downgrading an isolated backend to host-local execution.
+    downgrading an isolated backend to host-local execution.  An empty or
+    comment-only document carries no ``terminal.backend``, so it is treated
+    like an absent config.
     """
     try:
         from hermes_cli.config import get_config_path, fast_safe_load
@@ -1614,8 +1628,11 @@ def _probe_config_unreadable() -> bool:
     except Exception:
         return True
 
-    # A present document that is empty, a list, or a scalar cannot carry a
-    # trustworthy terminal.backend — treat it as unreadable.
+    # An empty document carries no terminal.backend, so it is equivalent to an
+    # absent config (a benign common state — e.g. a fresh install). A list or
+    # scalar root means the file is malformed and cannot be trusted.
+    if data is None:
+        return False
     if not isinstance(data, dict):
         return True
 
@@ -1633,7 +1650,11 @@ def _probe_config_unreadable() -> bool:
 def _resolve_backend_type(env: Optional[Dict[str, str]] = None) -> str:
     """Return the terminal backend type after bridging config.yaml."""
     source = _terminal_env_snapshot() if env is None else env
-    env_val = source.get("TERMINAL_ENV")
+    # Normalize exactly like _probe_config_unreadable validates: a config
+    # value like "Docker" or " docker" passes validation but would silently
+    # take host-local branches in every lowercase-literal consumer below
+    # unless we apply the same strip/lower here.
+    env_val = (source.get("TERMINAL_ENV") or "").strip().lower()
     if env_val:
         return env_val
     return "local"

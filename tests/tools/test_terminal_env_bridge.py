@@ -18,13 +18,9 @@ from hermes_constants import get_hermes_home
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     """Each test starts with clean TERMINAL_* env."""
-    for name in (
-        "TERMINAL_ENV",
-        "TERMINAL_CWD",
-        "TERMINAL_DOCKER_IMAGE",
-        "TERMINAL_SSH_HOST",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    for name in tuple(os.environ):
+        if name.startswith("TERMINAL_"):
+            monkeypatch.delenv(name, raising=False)
     yield
 
 
@@ -146,8 +142,14 @@ def test_snapshot_is_fresh_per_call(monkeypatch):
     assert first == second
 
 
-def test_bridge_config_failure_does_not_crash(monkeypatch):
+def test_bridge_config_failure_does_not_crash(monkeypatch, tmp_path):
     import hermes_cli.config as config_mod
+
+    # Isolate from any inherited config.yaml so the failure path under test is
+    # the mocked bridge, not ambient config state.
+    hermes_home = tmp_path / "hermes_home"
+    hermes_home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     monkeypatch.setattr(
         config_mod,
@@ -156,6 +158,10 @@ def test_bridge_config_failure_does_not_crash(monkeypatch):
     )
     monkeypatch.setenv("TERMINAL_ENV", "ssh")
     monkeypatch.setenv("TERMINAL_SSH_HOST", "example.test")
+    # Explicit worker-scoped spawn overrides must survive the bridge failure
+    # (they are process settings, not config-derived backend state).
+    monkeypatch.setenv("TERMINAL_TIMEOUT", "600")
+    monkeypatch.setenv("TERMINAL_LIFETIME_SECONDS", "900")
 
     config = terminal_tool._get_env_config()
 
@@ -164,6 +170,9 @@ def test_bridge_config_failure_does_not_crash(monkeypatch):
     # values are never trusted.
     assert config["env_type"] == "ssh"
     assert config["ssh_host"] == ""
+    # Worker overrides are preserved even when the bridge fails.
+    assert config["timeout"] == 600
+    assert config["lifetime_seconds"] == 900
 
 
 def test_worker_timeout_override_survives_bridge(monkeypatch):

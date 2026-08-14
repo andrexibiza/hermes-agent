@@ -196,7 +196,7 @@ def _build_probe_line() -> str:
     # Python state isn't where the agent's tools run.
     from tools.terminal_tool import resolve_terminal_backend
     backend = resolve_terminal_backend()
-    if backend in _REMOTE_BACKENDS:
+    if backend in _REMOTE_BACKENDS or backend == "unknown":
         return ""
 
     py3_ver = _python_version_of("python3")
