@@ -6265,6 +6265,52 @@ class TurnRunner:
         }
 
 
+def _quick_command_placeholder_in_quotes(command: str) -> bool:
+    """Return True if a `{args}` placeholder sits inside shell quotes.
+
+    Quick command templates are handed to a shell. When the `{args}`
+    placeholder is written inside quotes, shlex.quote() of the substituted
+    value cannot protect the command:
+
+    - Inside double quotes the shell still expands ``$(...)``, backticks, and
+      ``$var``, so a quoted placeholder is a command-injection sink.
+    - Inside single quotes the single-quote characters shlex.quote() emits
+      would terminate the quoted region and re-open shell interpretation.
+
+    Templates containing such a placeholder are rejected before the shell is
+    invoked; only unquoted placeholders get the shlex.quote() treatment.
+    """
+    in_single = False
+    in_double = False
+    escaped = False
+    i = 0
+    n = len(command)
+    while i < n:
+        ch = command[i]
+        if in_double:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_double = False
+            elif ch == "{":
+                if command.startswith("{args}", i):
+                    return True
+        elif in_single:
+            if ch == "'":
+                in_single = False
+            elif ch == "{":
+                if command.startswith("{args}", i):
+                    return True
+        else:
+            if ch == "'":
+                in_single = True
+            elif ch == '"':
+                in_double = True
+        i += 1
+    return False
+
 
 class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, GatewaySlashCommandsMixin):
     """
@@ -16655,6 +16701,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             # shell, so the user-supplied text must be quoted — an
                             # unquoted substitution would make every quick command
                             # an injection point for anyone allowed to invoke it.
+                            # shlex.quote() only protects an *unquoted* placeholder:
+                            # inside double quotes the shell still expands `$(...)`
+                            # and backticks, and inside single quotes the quote
+                            # characters shlex.quote() emits would terminate the
+                            # quoted region. Templates that put `{args}` inside
+                            # quotes are therefore rejected rather than executed.
+                            if _quick_command_placeholder_in_quotes(exec_cmd):
+                                return (
+                                    f"Quick command '/{command}' puts {{args}} inside "
+                                    "shell quotes — remove the quotes so arguments "
+                                    "can be shell-quoted safely."
+                                )
                             user_args = (event.get_command_args() or "").strip()
                             exec_cmd = exec_cmd.replace(
                                 "{args}", shlex.quote(user_args) if user_args else ""

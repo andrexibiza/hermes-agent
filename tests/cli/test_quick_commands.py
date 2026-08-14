@@ -206,14 +206,51 @@ class TestGatewayQuickCommands:
 
     @pytest.mark.asyncio
     async def test_exec_command_without_args_leaves_no_placeholder(self):
-        """An unused `{args}` must not leak the literal placeholder."""
+        """An unused `{args}` must not leak the literal placeholder.
+
+        Fixed arguments on both sides of the placeholder distinguish removal
+        (template becomes ``printf '[%s]' before  after`` → ``[before][after]``)
+        from substitution with an empty shell argument (``before '' after``,
+        which printf renders as an extra ``[]``).
+        """
         from gateway.run import GatewayRunner
         runner = GatewayRunner.__new__(GatewayRunner)
-        runner.config = {"quick_commands": {"note": {"type": "exec", "command": "printf [%s] {args}"}}}
+        runner.config = {"quick_commands": {"note": {"type": "exec", "command": "printf '[%s]' before {args} after"}}}
         runner._running_agents = {}
         runner._pending_messages = {}
         runner._is_user_authorized = MagicMock(return_value=True)
 
         event = self._make_event("note", "")
         result = await runner._handle_message(event)
-        assert result == "[]"
+        assert result == "[before][after]"
+
+    @pytest.mark.asyncio
+    async def test_exec_command_rejects_args_inside_double_quotes(self):
+        """`{args}` inside double quotes is rejected — shlex.quote() cannot
+        stop command substitution (`$(...)`) inside double quotes."""
+        from gateway.run import GatewayRunner
+        runner = GatewayRunner.__new__(GatewayRunner)
+        runner.config = {"quick_commands": {"note": {"type": "exec", "command": "printf '%s' \"{args}\""}}}
+        runner._running_agents = {}
+        runner._pending_messages = {}
+        runner._is_user_authorized = MagicMock(return_value=True)
+
+        event = self._make_event("note", "$(printf PWNED)")
+        result = await runner._handle_message(event)
+        assert "shell quotes" in result
+        assert "PWNED" not in result
+
+    @pytest.mark.asyncio
+    async def test_exec_command_rejects_args_inside_single_quotes(self):
+        """`{args}` inside single quotes is rejected — shlex.quote()'s own
+        single quotes would terminate the quoted region."""
+        from gateway.run import GatewayRunner
+        runner = GatewayRunner.__new__(GatewayRunner)
+        runner.config = {"quick_commands": {"note": {"type": "exec", "command": "printf '%s' '{args}'"}}}
+        runner._running_agents = {}
+        runner._pending_messages = {}
+        runner._is_user_authorized = MagicMock(return_value=True)
+
+        event = self._make_event("note", "x y")
+        result = await runner._handle_message(event)
+        assert "shell quotes" in result
