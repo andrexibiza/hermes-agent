@@ -1,17 +1,11 @@
 """Acceptance tests: engine-version-gated FTS5 integrity self-repair (#86027).
 
 Red-team acceptance suite, written ONLY from the behavior spec (design doc),
-never from the implementation. Final landing directory: ``tests/state/``
-(same repo-root-relative import depth as the existing state tests).
+never from the implementation.
 
 Run (from the repo root)::
 
-    PYTHONPATH=. python -m pytest <this file> -q --import-mode=importlib
-
-``--import-mode=importlib`` is required because the mandated staging filename
-``<name>.acceptance.test.py`` is not importable under pytest's default
-prepend mode; when landing in ``tests/state/`` either keep the flag or strip
-the ``.acceptance`` infix from the filename.
+    PYTHONPATH=. python -m pytest tests/state/test_fts_engine_integrity_gate_acceptance.py -q
 
 Spec under test (summary):
   1. state_meta ``fts_integrity_engine`` == sqlite3.sqlite_version → zero
