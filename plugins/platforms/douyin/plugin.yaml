@@ -1,0 +1,8 @@
+name: douyin-platform
+label: Douyin
+kind: platform
+version: 1.0.0
+description: >
+  Douyin (Chinese TikTok) Open Platform gateway adapter for Hermes Agent.
+  Receives webhook events and supports scene-aware content publishing.
+author: Hermes Agent contributors
