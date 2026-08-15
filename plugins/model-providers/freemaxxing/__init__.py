@@ -118,6 +118,7 @@ def _add_nous_portal_backend() -> None:
             api_key=api_key,
             tier=0,
             refresh=_resolve_nous_credentials,
+            default_model="deepseek/deepseek-v4-flash-0731",
         )
     )
     if api_key:
@@ -244,21 +245,25 @@ def ensure_proxy() -> str:
 
 
 def _register() -> None:
+    # Local loopback does not need a real key. Seed a placeholder so Hermes
+    # credential checks and PROVIDER_REGISTRY auto-extend both succeed.
+    os.environ.setdefault("FREEMAXXING_API_KEY", "local")
+
     port = _configured_port()
     base_url = _loopback_base_url(port)
 
-    # Existing primary/fallback configurations must be live at process startup.
-    # New selections start the same endpoint from the picker/alias path.
-    if _is_freemaxxing_selected():
-        try:
-            base_url = ensure_proxy()
-        except Exception as exc:
-            logger.warning(
-                "freemaxxing: could not bind stable port %d (%s). "
-                "Set FREEMAXXING_PORT to an unused port.",
-                port,
-                exc,
-            )
+    # Always bind the stable loopback. Hermes persists this base_url even
+    # when freemaxxing is only a fallback or is selected later; skipping
+    # spawn left 127.0.0.1:11435 dead after the last restart.
+    try:
+        base_url = ensure_proxy()
+    except Exception as exc:
+        logger.warning(
+            "freemaxxing: could not bind stable port %d (%s). "
+            "Set FREEMAXXING_PORT to an unused port.",
+            port,
+            exc,
+        )
 
     profile = ProviderProfile(
         name="freemaxxing",
@@ -266,7 +271,10 @@ def _register() -> None:
         display_name="Freemaxxing",
         description="Freemaxxing (Zero-new-config multi-provider failover pool)",
         signup_url="",
-        env_vars=(),
+        # Non-empty env_vars are required for hermes_cli.auth to auto-extend
+        # PROVIDER_REGISTRY. Empty tuple left the proxy running while
+        # `hermes --provider freemaxxing` raised Unknown provider.
+        env_vars=("FREEMAXXING_API_KEY",),
         base_url=base_url,
         auth_type="api_key",
         api_mode="chat_completions",

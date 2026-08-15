@@ -239,17 +239,30 @@ class BackendPool:
             with _open_credentialed(req, timeout=8.0) as resp:
                 data = json.loads(resp.read().decode())
                 items = data if isinstance(data, list) else data.get("data", [])
-                # FREE-ONLY INVARIANT: the routing catalog must never contain a
-                # paid model, or _resolve_auto_model can forward the router
-                # alias to a billable upstream. A model is free only when its
-                # id carries the provider free-tier marker (":free").
                 return [
-                    m["id"] for m in items
-                    if isinstance(m, dict) and "id" in m and ":free" in m["id"].lower()
+                    m["id"]
+                    for m in items
+                    if isinstance(m, dict)
+                    and "id" in m
+                    and _accept_catalog_id(backend, str(m["id"]))
                 ]
         except Exception as e:
             logger.debug("freemaxxing: model fetch failed for %s: %s", backend.name, e)
             return []
+
+    def exhaustion_detail(self) -> str:
+        """Human reason for a 503 when no backend can be selected."""
+        with self._lock:
+            if not self.backends:
+                return "no backends configured"
+            cooling = [
+                f"{b.name}({b.last_error_class or 'cooldown'})"
+                for b in self.backends
+                if not b.is_available()
+            ]
+            if len(cooling) == len(self.backends):
+                return "all backends on cooldown: " + ", ".join(cooling)
+            return "no eligible backend"
 
     def health(self) -> Dict[str, Any]:
         with self._lock:
@@ -265,19 +278,51 @@ pool = BackendPool()
 # and get substituted with the selected backend's default_model at forward time.
 _ROUTER_MODELS = {"freemaxxing", "fm", "freemaxxing-auto"}
 
+# Preferred Nous/auto picks. OpenRouter's ":free" suffix is NOT a Nous
+# convention — preferring it sent traffic to hanging poolside/tencent free
+# IDs while deepseek-v4-flash-0731 sat unused in the same catalog.
+_PREFERRED_AUTO_MODELS = (
+    "deepseek/deepseek-v4-flash-0731",
+    "deepseek-v4-flash-0731",
+    "deepseek/deepseek-v4-flash",
+    "deepseek-v4-flash",
+)
+
 
 def _is_router_model(model: str) -> bool:
     return (model or "").strip().lower() in _ROUTER_MODELS
 
 
+def _backend_kind(backend: Backend) -> str:
+    return (backend.name or "").strip().lower()
+
+
+def _accept_catalog_id(backend: Backend, model_id: str) -> bool:
+    """Decide whether a catalog id is eligible for routing on this backend.
+
+    OpenRouter bills anything without ``:free``. Nous Portal and HuggingFace
+    already entitlement-filter their /models list for the caller's account,
+    so applying the OpenRouter suffix there empties (or poisons) the catalog.
+    Mock/unknown backends keep their full list so unit tests stay honest.
+    """
+    if not model_id:
+        return False
+    mid = model_id.lower()
+    if mid.endswith(":batch") or mid.startswith("~"):
+        return False
+    kind = _backend_kind(backend)
+    if kind == "openrouter" or kind.startswith("openrouter"):
+        return ":free" in mid
+    return True
+
+
 def _resolve_auto_model(backend: Backend) -> str:
     """Pick the best concrete model for the freemaxxing router alias.
 
-    Prefers a live model from the backend's catalog (free-tier / flash first).
-    When the catalog is cold, fetch it lazily. Returns "" when nothing is
-    known — the caller then forwards the alias unchanged so the upstream's own
-    auto behavior (if any) applies. No hardcoded vendor model ids live here:
-    "freemaxxing" means auto.
+    Order: backend.default_model if present in catalog, then the known-good
+    flash IDs, then remaining catalog entries (flash/mini before the rest).
+    Empty catalog falls back to backend.default_model so Nous still works
+    when /models is slow or filtered.
     """
     cached = backend.get_cached_models()
     if not cached:
@@ -287,15 +332,32 @@ def _resolve_auto_model(backend: Backend) -> str:
         except Exception as e:
             logger.debug("freemaxxing: auto-model fetch failed for %s: %s", backend.name, e)
             cached = []
+
+    cached_by_lower = {m.lower(): m for m in cached}
+
+    preferred: List[str] = []
+    if backend.default_model:
+        preferred.append(backend.default_model)
+    preferred.extend(_PREFERRED_AUTO_MODELS)
+    for candidate in preferred:
+        hit = cached_by_lower.get(candidate.lower())
+        if hit:
+            return hit
+
     if cached:
-        _low = [m for m in cached if ":free" in m.lower()]
-        _small = [m for m in cached if any(
-            k in m.lower() for k in ("flash", "mini", "nano", "small", "lite")
-        )]
-        for candidate in (_low + _small + cached):
-            if candidate.lower() in _ROUTER_MODELS or candidate.lower().endswith(":batch"):
+        _small = [
+            m
+            for m in cached
+            if any(k in m.lower() for k in ("flash", "mini", "nano", "small", "lite"))
+        ]
+        for candidate in _small + cached:
+            low = candidate.lower()
+            if low in _ROUTER_MODELS or low.endswith(":batch") or low.startswith("~"):
                 continue
             return candidate
+
+    if backend.default_model:
+        return backend.default_model
     return ""
 
 # ── Handler ──────────────────────────────────────────────────────────────────
@@ -419,7 +481,7 @@ class ChatCompletionsHandler(BaseHTTPRequestHandler):
                 last_error = f"{backend.name} failed"
                 logger.warning("freemaxxing: %s", last_error)
 
-        self._send_error(503, f"All backends exhausted. Last error: {last_error}")
+        self._send_error(503, _exhausted_message(last_error))
 
     def _handle_streaming(self, body: Dict[str, Any], model: str) -> None:
         tried: Set[str] = set()
@@ -482,7 +544,12 @@ class ChatCompletionsHandler(BaseHTTPRequestHandler):
                     pass
             return
 
-        self._send_error(503, f"All backends exhausted. Last error: {last_error}")
+        self._send_error(503, _exhausted_message(last_error))
+
+
+def _exhausted_message(last_error: Optional[str]) -> str:
+    detail = last_error or pool.exhaustion_detail()
+    return f"All backends exhausted. Last error: {detail}"
 
 
 def _forward(backend: Backend, body: Dict[str, Any]) -> Dict[str, Any]:

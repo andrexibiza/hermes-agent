@@ -25,6 +25,12 @@ The pool is **model-aware**: a request for a given model only reaches backends
 that advertise it. If none advertise it (or the catalog is unknown), it
 round-robins across all available backends.
 
+Catalog policy is per-backend. OpenRouter only routes `:free` ids. Nous Portal
+and HuggingFace use the account-filtered `/models` list — they do **not** use
+the `:free` suffix. Auto (`model=freemaxxing`) prefers
+`deepseek/deepseek-v4-flash-0731` on Nous instead of hanging OpenRouter-style
+free IDs.
+
 The `freemaxxing` model ID remains opaque inside Hermes core. Hermes never
 rewrites it to a concrete vendor/provider; the local proxy is the single
 routing authority and substitutes a concrete model only when forwarding.

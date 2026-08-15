@@ -33,7 +33,15 @@ _PLUGIN_DIR = os.path.join(_REPO_ROOT, "plugins", "model-providers", "freemaxxin
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
 
-from proxy import Backend, pool, spawn_proxy, stop_proxy  # noqa: E402
+from proxy import (  # noqa: E402
+    Backend,
+    _accept_catalog_id,
+    _exhausted_message,
+    _resolve_auto_model,
+    pool,
+    spawn_proxy,
+    stop_proxy,
+)
 
 
 class MockBackend:
@@ -345,13 +353,18 @@ def test_round_robin_among_capable_backends():
 
 
 def test_picker_surface_is_single_model_and_catalog_free_only():
-    """/v1/models advertises exactly the freemaxxing router alias, and the
-    internal routing catalog only ever contains free-tier models."""
+    """/v1/models advertises exactly the freemaxxing router alias.
+
+    :free is an OpenRouter billing suffix, not a universal catalog filter.
+    Mock/unknown backends keep their full list; OpenRouter drops paid ids.
+    """
     proxy, port = _setup()
     b1 = MockBackend(models=["model-a:free"])
     b2 = MockBackend(models=["model-b:free", "paid-model-big"])
+    or_backend = MockBackend(models=["qwen/qwen3:free", "paid-model-big"])
     _add(b1, "b1", 0)
     _add(b2, "b2", 0)
+    _add(or_backend, "openrouter", 1)
     try:
         data = json.loads(urllib.request.urlopen(
             f"http://127.0.0.1:{port}/v1/models", timeout=10.0
@@ -360,15 +373,21 @@ def test_picker_surface_is_single_model_and_catalog_free_only():
         # The picker sees exactly one entry: the opaque router alias.
         assert ids == ["freemaxxing"]
 
-        # The internal routing catalog is free-only: paid ids are dropped.
-        all_cached = []
+        mock_cached = []
+        or_cached = []
         for b in pool.backends:
-            all_cached.extend(b.get_cached_models())
-        assert "model-a:free" in all_cached
-        assert "model-b:free" in all_cached
-        assert "paid-model-big" not in all_cached
+            cached = b.get_cached_models()
+            if b.name == "openrouter":
+                or_cached.extend(cached)
+            else:
+                mock_cached.extend(cached)
+        assert "model-a:free" in mock_cached
+        assert "model-b:free" in mock_cached
+        assert "paid-model-big" in mock_cached
+        assert "qwen/qwen3:free" in or_cached
+        assert "paid-model-big" not in or_cached
     finally:
-        _teardown(proxy, [b1, b2])
+        _teardown(proxy, [b1, b2, or_backend])
 
 
 def test_cooldown_expiry():
@@ -532,3 +551,51 @@ def test_healthz_endpoint():
         assert data["backends"][0]["available"] is True
     finally:
         _teardown(proxy, [b1])
+
+
+def test_openrouter_catalog_requires_free_suffix():
+    or_backend = Backend(name="openrouter", base_url="http://127.0.0.1")
+    nous = Backend(name="nous-portal", base_url="http://127.0.0.1")
+    assert _accept_catalog_id(or_backend, "qwen/qwen3:free") is True
+    assert _accept_catalog_id(or_backend, "deepseek/deepseek-v4-flash-0731") is False
+    assert _accept_catalog_id(nous, "deepseek/deepseek-v4-flash-0731") is True
+    assert _accept_catalog_id(nous, "~deepseek/deepseek-v4-flash-latest") is False
+    assert _accept_catalog_id(nous, "google/gemini-3.7-flash:batch") is False
+
+
+def test_resolve_auto_prefers_flash_over_free_suffix():
+    backend = Backend(
+        name="nous-portal",
+        base_url="http://127.0.0.1",
+        default_model="deepseek/deepseek-v4-flash-0731",
+    )
+    backend.set_cached_models([
+        "poolside/laguna-s-2.1:free",
+        "tencent/hy3:free",
+        "deepseek/deepseek-v4-flash-0731",
+        "x-ai/grok-4.6",
+    ])
+    assert _resolve_auto_model(backend) == "deepseek/deepseek-v4-flash-0731"
+
+
+def test_resolve_auto_uses_default_when_catalog_empty():
+    backend = Backend(
+        name="nous-portal",
+        base_url="http://127.0.0.1:9",
+        default_model="deepseek/deepseek-v4-flash-0731",
+    )
+    assert _resolve_auto_model(backend) == "deepseek/deepseek-v4-flash-0731"
+
+
+def test_exhausted_message_names_cooldown_instead_of_none():
+    pool.clear()
+    dead = Backend(name="nous-portal", base_url="http://127.0.0.1")
+    dead.record_failure(retry_after=30.0, error_class="transient")
+    pool.add(dead)
+    try:
+        msg = _exhausted_message(None)
+        assert "None" not in msg
+        assert "cooldown" in msg
+        assert "nous-portal" in msg
+    finally:
+        pool.clear()
