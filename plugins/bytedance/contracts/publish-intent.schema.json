@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Publish Intent",
+  "description": "Immutable publish intent record stored in the approval ledger",
+  "type": "object",
+  "required": [
+    "intent_id", "profile", "provider", "account_alias",
+    "actor_id", "payload_json", "payload_sha256",
+    "state", "created_at", "expires_at"
+  ],
+  "properties": {
+    "intent_id": {
+      "type": "string",
+      "description": "Deterministic identifier for this intent"
+    },
+    "profile": {
+      "type": "string",
+      "description": "Hermes profile under which the intent was created"
+    },
+    "provider": {
+      "type": "string",
+      "enum": ["tiktok_business", "tiktok_creator", "douyin"],
+      "description": "Provider namespace"
+    },
+    "account_alias": {
+      "type": "string",
+      "description": "Local account alias"
+    },
+    "actor_id": {
+      "type": "string",
+      "description": "The user who prepared the intent"
+    },
+    "payload_json": {
+      "type": "string",
+      "description": "Canonical JSON serialization of the original payload (all keys, null if empty)"
+    },
+    "payload_sha256": {
+      "type": "string",
+      "description": "SHA-256 of the canonical payload — tampering invalidates the intent"
+    },
+    "preview_json": {
+      "type": "string",
+      "description": "Human-readable preview (may include redacted content)"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["DRAFT", "VALIDATED", "AWAITING_APPROVAL", "APPROVED", "COMMITTING", "SUBMITTED", "PUBLISHED", "FAILED", "REJECTED", "EXPIRED"],
+      "description": "State machine state"
+    },
+    "created_at": {
+      "type": "number",
+      "description": "Unix timestamp of creation"
+    },
+    "expires_at": {
+      "type": "number",
+      "description": "Unix timestamp of expiry"
+    },
+    "approved_at": {
+      "type": ["number", "null"],
+      "description": "When approved (null if not approved)"
+    },
+    "committed_at": {
+      "type": ["number", "null"],
+      "description": "When committed (null if not committed)"
+    },
+    "provider_job_id": {
+      "type": ["string", "null"],
+      "description": "Provider-side job/publish ID after submission"
+    },
+    "provider_status": {
+      "type": ["string", "null"],
+      "description": "Provider-side status after submission"
+    },
+    "last_error": {
+      "type": ["string", "null"],
+      "description": "Error message if the intent failed"
+    }
+  },
+  "additionalProperties": false
+}

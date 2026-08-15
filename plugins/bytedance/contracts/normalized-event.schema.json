@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Normalized Event",
+  "description": "Canonical event shape emitted by all bytedance webhook ingress shells",
+  "type": "object",
+  "required": ["provider", "event_id", "event_type", "conversation_id", "sender_id", "message_type", "payload", "received_at", "raw_sha256"],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["tiktok_business", "douyin"],
+      "description": "The provider that emitted this event"
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Globally unique event identifier (composite idempotency key)"
+    },
+    "event_type": {
+      "type": "string",
+      "description": "Normalized event type (message, im_receive_msg, im_enter_direct_msg, etc.)"
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "Provider conversation identifier"
+    },
+    "sender_id": {
+      "type": "string",
+      "description": "Provider sender identifier"
+    },
+    "message_type": {
+      "type": "string",
+      "description": "Normalized message type (text, image, video, etc.)"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Original provider payload (redacted)",
+      "additionalProperties": true
+    },
+    "received_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event was received by the ingress"
+    },
+    "raw_sha256": {
+      "type": "string",
+      "description": "SHA-256 of the original raw webhook body"
+    }
+  },
+  "additionalProperties": false
+}

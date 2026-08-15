@@ -1,0 +1,9 @@
+name: bytedance-shared
+label: ByteDance Shared
+kind: standalone
+version: 1.0.0
+description: >
+  Shared infrastructure for ByteDance (TikTok/Douyin) platform plugins:
+  bounded HTTP client, SQLite state store, webhook ingress, token broker,
+  rate limiting, observability, media broker, and immutable approval ledger.
+author: Hermes Agent contributors
