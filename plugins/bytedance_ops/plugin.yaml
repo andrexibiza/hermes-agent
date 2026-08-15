@@ -1,0 +1,8 @@
+name: bytedance-ops
+label: ByteDance Operations
+kind: tools
+version: 1.0.0
+description: >
+  TikTok Organic, TikTok Creator, TikTok Business Messaging admin, and
+  Douyin content operations tools for Hermes Agent.
+author: Hermes Agent contributors
