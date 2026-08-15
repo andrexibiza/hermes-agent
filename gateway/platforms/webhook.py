@@ -30,6 +30,17 @@ Security:
   - Set secret to "INSECURE_NO_AUTH" to skip validation (testing only)
 """
 
+from gateway.platforms.webhook_delivery_results import (
+    CompletionOnce,
+    run_fanout,
+)
+
+from gateway.platforms.webhook_callback_transport import (
+    CallbackSecurityError,
+    callback_envelope,
+    deliver_signed_callback,
+)
+
 import asyncio
 import base64
 import binascii
@@ -240,6 +251,7 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
         self._route_processor = WebhookRouteProcessor(
             script_timeout_seconds=self._script_timeout_seconds
         )
+        self._webhook_completion_once = CompletionOnce()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -350,6 +362,83 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
         self._mark_disconnected()
         logger.info("[webhook] Disconnected")
 
+    # WEBHOOK_REVOLUTION_TASK13_FANOUT_V2
+    def _normalize_deliveries(self, route_config: dict, payload: dict) -> list[dict]:
+        """Normalize canonical and legacy delivery shapes into target records."""
+        raw = route_config.get("deliveries")
+        if not isinstance(raw, list) or not raw:
+            raw = [{
+                "target": route_config.get("deliver", "log"),
+                "deliver_extra": route_config.get("deliver_extra", {}),
+            }]
+        normalized: list[dict] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            target = str(item.get("target") or item.get("deliver") or "log")
+            extra = item.get("deliver_extra")
+            if not isinstance(extra, dict):
+                extra = item.get("extra")
+            if not isinstance(extra, dict):
+                extra = {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"target", "deliver", "deliver_extra", "extra"}
+                }
+            normalized.append({
+                "deliver": target,
+                "deliver_extra": self._render_delivery_extra(extra, payload),
+            })
+        return normalized or [{"deliver": "log", "deliver_extra": {}}]
+
+    @staticmethod
+    def _normalize_delivery_record(delivery: dict) -> list[dict]:
+        raw = delivery.get("deliveries")
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        return [{
+            "deliver": delivery.get("deliver", "log"),
+            "deliver_extra": delivery.get("deliver_extra", {}),
+        }]
+
+    async def _deliver_one_target(self, content: str, target: dict) -> SendResult:
+        deliver_type = str(target.get("deliver") or "log")
+        if deliver_type == "log":
+            logger.info("[webhook] fan-out log target: %s", content[:200])
+            return SendResult(success=True)
+        if deliver_type == "github_comment":
+            return await self._deliver_github_comment(content, target)
+        known = deliver_type in _BUILTIN_DELIVER_PLATFORMS
+        if not known:
+            try:
+                from gateway.platform_registry import platform_registry
+                known = platform_registry.is_registered(deliver_type)
+            except Exception:
+                known = False
+        if not known:
+            return SendResult(
+                success=False,
+                error=f"Unknown deliver type: {deliver_type}",
+            )
+        return await self._deliver_cross_platform(deliver_type, content, target)
+
+    async def _deliver_targets(self, content: str, targets: list[dict]) -> SendResult:
+        if len(targets) == 1:
+            return await self._deliver_one_target(content, targets[0])
+        calls = []
+        for index, target in enumerate(targets):
+            name = str(target.get("deliver") or f"target-{index}")
+            calls.append((name, lambda target=target: self._deliver_one_target(content, target)))
+        result = await run_fanout(calls)
+        failures = [
+            f"{item.target}: {item.error or 'delivery failed'}"
+            for item in result.failures
+        ]
+        return SendResult(
+            success=result.any_success,
+            error="; ".join(failures) if failures and not result.any_success else None,
+        )
+
     async def send(
         self,
         chat_id: str,
@@ -357,49 +446,16 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        """Deliver the agent's response to the configured destination.
-
-        chat_id is ``webhook:{route}:{delivery_id}``.  The delivery info
-        stored during webhook receipt is read with ``.get()`` (not popped)
-        so that interim status messages emitted before the final response
-        — fallback-model notifications, context-pressure warnings, etc. —
-        do not consume the entry and silently downgrade the final response
-        to the ``log`` deliver type.  TTL cleanup happens on POST.
-        """
+        """Deliver to every configured target; isolate failures per target."""
         if _is_webhook_silence_response(content):
             logger.info(
-                "[webhook] Response for %s is a silence marker — not delivering", chat_id
+                "[webhook] Response for %s is a silence marker — not delivering",
+                chat_id,
             )
             return SendResult(success=True)
-
         delivery = self._delivery_info.get(chat_id, {})
-        deliver_type = delivery.get("deliver", "log")
-
-        if deliver_type == "log":
-            logger.info("[webhook] Response for %s: %s", chat_id, content[:200])
-            return SendResult(success=True)
-
-        if deliver_type == "github_comment":
-            return await self._deliver_github_comment(content, delivery)
-
-        # Cross-platform delivery — any platform with a gateway adapter.
-        # Check both built-in names and plugin-registered platforms.
-        _is_known_platform = deliver_type in _BUILTIN_DELIVER_PLATFORMS
-        if not _is_known_platform:
-            try:
-                from gateway.platform_registry import platform_registry
-                _is_known_platform = platform_registry.is_registered(deliver_type)
-            except Exception:
-                pass
-        if self.gateway_runner and _is_known_platform:
-            return await self._deliver_cross_platform(
-                deliver_type, content, delivery
-            )
-
-        logger.warning("[webhook] Unknown deliver type: %s", deliver_type)
-        return SendResult(
-            success=False, error=f"Unknown deliver type: {deliver_type}"
-        )
+        targets = self._normalize_delivery_record(delivery)
+        return await self._deliver_targets(content, targets)
 
     def _prune_delivery_info(self, now: float) -> None:
         """Drop delivery_info entries older than the idempotency TTL.
@@ -798,17 +854,14 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
         # rate limiting, idempotency, and template rendering as agent mode.
         if route_config.get("deliver_only"):
             delivery = {
-                "deliver": route_config.get("deliver", "log"),
-                "deliver_extra": self._render_delivery_extra(
-                    route_config.get("deliver_extra", {}), payload
-                ),
+                "deliveries": self._normalize_deliveries(route_config, payload),
                 "payload": payload,
             }
             logger.info(
                 "[webhook] direct-deliver event=%s route=%s target=%s msg_len=%d delivery=%s",
                 event_type,
                 route_name,
-                delivery["deliver"],
+                ",".join(item["deliver"] for item in delivery["deliveries"]),
                 len(prompt),
                 delivery_id,
             )
@@ -830,7 +883,7 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
                     {
                         "status": "delivered",
                         "route": route_name,
-                        "target": delivery["deliver"],
+                        "targets": [item["deliver"] for item in delivery["deliveries"]],
                         "delivery_id": delivery_id,
                     },
                     status=200,
@@ -840,7 +893,7 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
             logger.warning(
                 "[webhook] direct-deliver target rejected route=%s target=%s error=%s",
                 route_name,
-                delivery["deliver"],
+                ",".join(item["deliver"] for item in delivery["deliveries"]),
                 result.error,
             )
             return web.json_response(
@@ -856,10 +909,12 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
         # for this chat_id (interim status messages and the final response),
         # so we do NOT pop on send.  TTL-based cleanup keeps the dict bounded.
         deliver_config = {
-            "deliver": route_config.get("deliver", "log"),
-            "deliver_extra": self._render_delivery_extra(
-                route_config.get("deliver_extra", {}), payload
-            ),
+            "deliveries": self._normalize_deliveries(route_config, payload),
+            "completion_script": route_config.get("completion_script"),
+            "callback": route_config.get("callback"),
+            "profile": profile or "default",
+            "route": route_name,
+            "execution_id": delivery_id,
         }
         self._delivery_info[session_chat_id] = deliver_config
         self._delivery_info_created[session_chat_id] = now
@@ -913,28 +968,140 @@ class WebhookAdapter(WebhookDeliveryMixin, WebhookProfileAdmissionMixin, BasePla
         )
 
     async def on_processing_complete(
-        self, event: "MessageEvent", outcome: Any
+        self,
+        event: "MessageEvent",
+        outcome: Any,
     ) -> None:
-        """Close the per-delivery webhook session once its run finishes.
+        """Close one-shot sessions and finalize every completion surface once."""
+        try:
+            await self._end_webhook_session(event, event.source.chat_id)
+        except Exception:
+            # Session cleanup must never suppress completion scripts or callbacks.
+            logger.exception(
+                "[webhook] session close failed before finalization for %s",
+                event.source.chat_id,
+            )
+        try:
+            await self._finalize_webhook_delivery(event.source.chat_id, outcome)
+        finally:
+            # Task 12 owns interactive approval notifiers.  Keep this optional so
+            # Task 13 remains independently applicable, while the consolidated lane
+            # cannot leak a notifier after its real processing task terminates.
+            cleanup = getattr(self, "_cleanup_webhook_interaction_bridge", None)
+            metadata = getattr(event, "metadata", None)
+            approval_key = (
+                str(metadata.get("webhook_approval_key") or "")
+                if isinstance(metadata, dict)
+                else ""
+            )
+            if callable(cleanup):
+                cleanup(approval_key)
 
-        A webhook delivery is one-shot: the ``delivery_id`` is baked into the
-        session key, so the session will never receive a second turn.  Mirror
-        the cron completion path (``cron/scheduler.py`` →
-        ``end_session(..., "cron_complete")``) by marking the session ended
-        when the run completes.  Without this, webhook sessions keep
-        ``ended_at`` NULL forever; ``SessionDB.prune_sessions`` only reaps
-        rows with ``ended_at`` set, so unclosed webhook sessions accumulate
-        unbounded and drive state.db bloat (the ghost-session leak).
+    # WEBHOOK_REVOLUTION_TASK13_FINALIZATION_V2
+    @staticmethod
+    def _callback_secret(reference: object) -> str:
+        if not isinstance(reference, str) or not reference.strip():
+            return ""
+        try:
+            from agent.secret_scope import get_secret
+            return str(get_secret(reference.strip(), "") or "")
+        except Exception:
+            return ""
 
-        This hook is the one seam that runs at the TRUE end of the run:
-        ``BasePlatformAdapter._process_message_background`` fires it after the
-        message handler returns, on the success, failure, and cancellation
-        paths alike — so error runs are reaped too.  (``handle_message`` is
-        fire-and-forget; wrapping IT closes before the run even starts.)
-        ``end_session()`` is first-reason-wins and no-ops on an already-ended
-        row, so this never clobbers a ``compression``/``agent_close`` reason.
-        """
-        await self._end_webhook_session(event, event.source.chat_id)
+    @staticmethod
+    def _safe_completion_text(value: object, byte_cap: int = 4000) -> str | None:
+        if value is None:
+            return None
+        text = str(value)
+        try:
+            from agent.redact import redact_sensitive_text
+            text = redact_sensitive_text(text, force=True)
+        except Exception:
+            pass
+        raw = text.encode("utf-8")
+        return raw[: max(0, int(byte_cap))].decode("utf-8", errors="ignore")
+
+    async def _run_completion_script(self, session_chat_id: str, outcome: Any) -> None:
+        delivery = self._delivery_info.get(session_chat_id, {})
+        script = delivery.get("completion_script")
+        if not script:
+            return
+        envelope = {
+            "schema_version": 1,
+            "execution_id": delivery.get("execution_id") or session_chat_id,
+            "profile": delivery.get("profile") or "default",
+            "route": delivery.get("route") or "",
+            "outcome": self._safe_completion_text(outcome),
+        }
+        keep, _ = await asyncio.to_thread(
+            self._route_processor.run_route_script,
+            script,
+            envelope,
+        )
+        if not keep:
+            logger.warning(
+                "[webhook] completion_script returned non-success for %s",
+                session_chat_id,
+            )
+
+    async def _run_completion_callback(self, session_chat_id: str, outcome: Any) -> None:
+        delivery = self._delivery_info.get(session_chat_id, {})
+        callback = delivery.get("callback")
+        if not isinstance(callback, dict):
+            return
+        url = callback.get("url")
+        secret_ref = callback.get("secret_ref")
+        secret = self._callback_secret(secret_ref)
+        if not isinstance(url, str) or not url or not secret:
+            raise CallbackSecurityError(
+                "callback requires url and a resolvable secret_ref"
+            )
+        failed = isinstance(outcome, BaseException)
+        error = self._safe_completion_text(outcome) if failed else None
+        output = None if failed else self._safe_completion_text(outcome)
+        envelope = callback_envelope(
+            execution_id=str(delivery.get("execution_id") or session_chat_id),
+            profile=str(delivery.get("profile") or "default"),
+            route=str(delivery.get("route") or ""),
+            state="failed" if failed else "completed",
+            output=output,
+            error=error,
+        )
+        await deliver_signed_callback(
+            url=url,
+            envelope=envelope,
+            secret=secret,
+            timeout=float(callback.get("timeout", 10.0)),
+            max_attempts=int(callback.get("max_attempts", 3)),
+            # Route-authored callback config can never weaken SSRF policy.
+            allow_private=False,
+        )
+
+    async def _finalize_webhook_delivery(self, session_chat_id: str, outcome: Any) -> None:
+        async def script_action() -> None:
+            try:
+                await self._run_completion_script(session_chat_id, outcome)
+            except Exception:
+                logger.exception(
+                    "[webhook] completion_script failed for %s", session_chat_id
+                )
+
+        async def callback_action() -> None:
+            try:
+                await self._run_completion_callback(session_chat_id, outcome)
+            except Exception:
+                logger.exception(
+                    "[webhook] completion callback failed for %s", session_chat_id
+                )
+
+        await self._webhook_completion_once.run(
+            session_chat_id + ":completion_script",
+            script_action,
+        )
+        await self._webhook_completion_once.run(
+            session_chat_id + ":callback",
+            callback_action,
+        )
 
     async def _end_webhook_session(
         self, event: "MessageEvent", session_chat_id: str

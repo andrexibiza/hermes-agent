@@ -1,0 +1,21 @@
+{
+  "branch": "wr/task-13-delivery-callbacks",
+  "changed_files": [
+    "gateway/platforms/webhook.py",
+    "gateway/platforms/webhook_callback_transport.py",
+    "gateway/platforms/webhook_delivery.py",
+    "gateway/platforms/webhook_delivery_results.py",
+    "tests/gateway/test_webhook_callbacks.py",
+    "tests/gateway/test_webhook_completion_script.py",
+    "tests/gateway/test_webhook_delivery_integration.py",
+    "tests/gateway/test_webhook_fanout.py"
+  ],
+  "head": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+  "head_before_commit": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+  "phase": "verification",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\task-13-delivery-callbacks",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 13,
+  "timestamp": "2026-08-15T15:38:40Z"
+}

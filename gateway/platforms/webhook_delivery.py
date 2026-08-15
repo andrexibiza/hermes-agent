@@ -13,33 +13,9 @@ logger = logging.getLogger(__name__)
 class WebhookDeliveryMixin:
     """Deliver webhook responses to direct and cross-platform targets."""
 
-    async def _direct_deliver(
-        self, content: str, delivery: dict
-    ) -> SendResult:
-        """Deliver *content* directly without invoking the agent.
-
-        Used by ``deliver_only`` routes: the rendered template becomes the
-        literal message body, and we dispatch to the same delivery helpers
-        that the agent-mode ``send()`` flow uses.  All target types that
-        work in agent mode work here — Telegram, Discord, Slack, GitHub
-        PR comments, etc.
-        """
-        deliver_type = delivery.get("deliver", "log")
-
-        if deliver_type == "log":
-            # Shouldn't reach here — startup validation rejects deliver_only
-            # with deliver=log — but guard defensively.
-            logger.info("[webhook] direct-deliver log-only: %s", content[:200])
-            return SendResult(success=True)
-
-        if deliver_type == "github_comment":
-            return await self._deliver_github_comment(content, delivery)
-
-        # Fall through to the cross-platform dispatcher, which validates the
-        # target name and routes via the gateway runner.
-        return await self._deliver_cross_platform(
-            deliver_type, content, delivery
-        )
+    async def _direct_deliver(self, content: str, delivery: dict) -> SendResult:
+        targets = self._normalize_delivery_record(delivery)
+        return await self._deliver_targets(content, targets)
 
     async def _deliver_github_comment(
         self, content: str, delivery: dict

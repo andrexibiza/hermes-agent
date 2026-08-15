@@ -1,0 +1,73 @@
+[
+  {
+    "after": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+    "base": "1d3d021282098261ce2ad224a76d97d89b16188c",
+    "before": "165c889e5b4277b56dadd42949a4112c1e6175a6",
+    "branch": "campaign/webhook-delivery-extraction",
+    "commits_applied": [
+      "148db0abdd1aea28821747809fa2cb0794e1ad8c",
+      "d6b539853f084cd837775bbdc751fa09c74662ba",
+      "76e5e0090696d429977a68c2d81560e8d55bcd95",
+      "6b25d17561aaca5ed5dde4eed776eb4b3096bced",
+      "7f533edef7fc0ec8e1666280b37db2a3f24b3680",
+      "4ea172831afcb817b78b9e100a447e490188862f",
+      "3f9a1df9024fe9601ecc3ff226808512880d92fd",
+      "4594059f0c7f3b54281623f93389086355e6f058"
+    ],
+    "commits_considered": [
+      "148db0abdd1aea28821747809fa2cb0794e1ad8c",
+      "d6b539853f084cd837775bbdc751fa09c74662ba",
+      "76e5e0090696d429977a68c2d81560e8d55bcd95",
+      "6b25d17561aaca5ed5dde4eed776eb4b3096bced",
+      "7f533edef7fc0ec8e1666280b37db2a3f24b3680",
+      "4ea172831afcb817b78b9e100a447e490188862f",
+      "3f9a1df9024fe9601ecc3ff226808512880d92fd",
+      "4594059f0c7f3b54281623f93389086355e6f058"
+    ],
+    "expected_head": "4594059f0c7f3b54281623f93389086355e6f058",
+    "pr": 84939,
+    "source_only": false
+  },
+  {
+    "after": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+    "base": "2ae96939f53b0cc0aa82868fc9a44702f3dd6c09",
+    "before": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+    "branch": "campaign/webhook-delivery-callbacks",
+    "commits_applied": [],
+    "commits_considered": [
+      "fa1dac353de8be5583ad8008ca906d6185d7a8f9",
+      "8faa4e8a13d0323dd8cd934bce0c743c507afc5c"
+    ],
+    "expected_head": "8faa4e8a13d0323dd8cd934bce0c743c507afc5c",
+    "pr": 85644,
+    "source_only": true
+  },
+  {
+    "after": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+    "base": "2ae96939f53b0cc0aa82868fc9a44702f3dd6c09",
+    "before": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+    "branch": "campaign/webhook-completion-scripts",
+    "commits_applied": [],
+    "commits_considered": [
+      "63567cd41696418e923eea9ad661c61fa7a73333",
+      "a31221ed15ee735ae42a2ab4eeee2789030be701"
+    ],
+    "expected_head": "a31221ed15ee735ae42a2ab4eeee2789030be701",
+    "pr": 85645,
+    "source_only": true
+  },
+  {
+    "after": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+    "base": "2ae96939f53b0cc0aa82868fc9a44702f3dd6c09",
+    "before": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+    "branch": "campaign/webhook-callbacks",
+    "commits_applied": [],
+    "commits_considered": [
+      "bc282d22d1df9f4b2df9bed1f88899dce54a778a",
+      "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643"
+    ],
+    "expected_head": "fe3b43ba9e26fe7af5ed0e184b2c678859aa7643",
+    "pr": 85675,
+    "source_only": true
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "branch": "wr/task-13-delivery-callbacks",
+  "expected_head": null,
+  "head": "e42c8629271067fc873f78dbf550055cd2dcdca2",
+  "mode": "integration",
+  "phase": "preflight",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\task-13-delivery-callbacks",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 13,
+  "task_title": "Fan-out, callbacks, and completion hooks",
+  "timestamp": "2026-08-15T15:36:56Z"
+}
