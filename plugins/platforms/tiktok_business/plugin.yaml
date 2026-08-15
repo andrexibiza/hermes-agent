@@ -1,0 +1,8 @@
+name: tiktok-business-platform
+label: TikTok Business
+kind: platform
+version: 1.0.0
+description: >
+  TikTok Business Messaging API gateway adapter for Hermes Agent.
+  Receives webhook events from TikTok and supports outbound messaging.
+author: Hermes Agent contributors
