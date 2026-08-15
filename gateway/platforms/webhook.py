@@ -261,6 +261,20 @@ class WebhookAdapter(WebhookAuthMixin, WebhookProfileAdmissionMixin, BasePlatfor
                         f"real target (telegram, discord, slack, github_comment, etc.)."
                     )
 
+            # Upgrade safety: routes without an explicit signature_mode now
+            # validate with the generic_v2 default instead of header-driven
+            # inference (see webhook_auth). Surface that once at startup so
+            # existing configs that relied on auto-detection get a loud nudge
+            # to pin their provider scheme, not a silent 403 on first POST.
+            if not route.get("signature_mode"):
+                logger.warning(
+                    "[webhook] Route '%s' has no explicit signature_mode; "
+                    "defaulting to 'generic_v2'. Providers with header-based "
+                    "signatures (GitHub X-Hub-Signature-256, GitLab token, "
+                    "Svix) must pin signature_mode to their scheme.",
+                    name,
+                )
+
         # client_max_size makes aiohttp enforce the cap on every read path,
         # including Transfer-Encoding: chunked bodies that carry no
         # Content-Length and would otherwise bypass the header check below.

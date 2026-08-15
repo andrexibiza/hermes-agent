@@ -41,8 +41,6 @@ SIGNATURE_MODES = frozenset(
 )
 
 
-
-
 def _header(request: "web.Request", name: str) -> str:
     return (
         request.headers.get(name, "")
@@ -169,7 +167,7 @@ class WebhookAuthMixin:
         msg_id: str,
         timestamp: str,
         signature_header: str,
-        tolerance_seconds: int = 300,
+        tolerance_seconds: int = DEFAULT_REPLAY_TOLERANCE_SECONDS,
     ) -> bool:
         """Validate Svix-compatible signatures used by AgentMail webhooks."""
         if not (msg_id and timestamp and signature_header and secret):

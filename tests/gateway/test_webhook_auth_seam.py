@@ -56,3 +56,44 @@ def test_original_adapter_class_patch_affects_instances(monkeypatch):
         b"body",
         "secret",
     )
+
+
+def test_connect_warns_when_route_lacks_explicit_signature_mode(caplog, monkeypatch):
+    """Upgrade safety: real connect() warns for routes without signature_mode."""
+    adapter = WebhookAdapter(
+        PlatformConfig(
+            enabled=True,
+            extra={
+                "host": "127.0.0.1",
+                "port": 0,
+                "routes": {
+                    "implicit": {"secret": "test-secret"},
+                    "explicit": {
+                        "secret": "test-secret",
+                        "signature_mode": "github",
+                    },
+                },
+            },
+        )
+    )
+
+    async def fake_site_start(self):
+        return None
+
+    monkeypatch.setattr(
+        "gateway.platforms.webhook.web.TCPSite.start", fake_site_start
+    )
+    monkeypatch.setattr(adapter, "_mark_connected", lambda: None)
+
+    import asyncio
+
+    with caplog.at_level("WARNING", logger="gateway.platforms.webhook"):
+        asyncio.get_event_loop().run_until_complete(adapter.connect())
+
+    records = [
+        r
+        for r in caplog.records
+        if "has no explicit signature_mode" in r.getMessage()
+    ]
+    assert len(records) == 1
+    assert "implicit" in records[0].getMessage()
