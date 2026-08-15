@@ -16,6 +16,12 @@ from pathlib import Path
 
 from tools.environments.base import BaseEnvironment, _pipe_stdin
 from hermes_cli._subprocess_compat import windows_hide_flags
+from tools.child_process_env_policy import (
+    DEFAULT_EXECUTABLE_ALLOWLIST,
+    OPERATOR_COMPATIBILITY_KEYS,
+    filter_child_env as _central_filter_child_env,
+    minimal_child_env as build_minimal_subprocess_env,
+)
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -454,63 +460,50 @@ def _inject_session_context_env(env: dict) -> None:
 
 
 def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:
-    """Filter Hermes-managed secrets from a subprocess environment."""
+    """Filter child environments through the #83565 central boundary."""
     try:
         from tools.env_passthrough import (
-            is_env_passthrough as _is_passthrough,
+            get_all_passthrough,
             resolve_passthrough_value as _resolve_passthrough_value,
         )
+        passthrough = tuple(get_all_passthrough())
     except Exception:
-        _is_passthrough = lambda _: False  # noqa: E731
-        _resolve_passthrough_value = lambda _name, fallback: fallback  # noqa: E731
-
-    sanitized: dict[str, str] = {}
-
-    for key, value in (base_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            continue
-        if _is_hermes_internal_secret(key):
-            continue
-        passthrough = _is_passthrough(key)
-        if key in _HERMES_PROVIDER_ENV_BLOCKLIST and not passthrough:
-            continue
-        resolved = _resolve_passthrough_value(key, value) if passthrough else value
-        if resolved is not None:
-            sanitized[key] = resolved
-
-    for key, value in (extra_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = key[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            if _is_hermes_internal_secret(real_key):
-                continue
-            sanitized[real_key] = value
-        elif _is_hermes_internal_secret(key):
-            continue
-        else:
-            passthrough = _is_passthrough(key)
-            if key in _HERMES_PROVIDER_ENV_BLOCKLIST and not passthrough:
-                continue
-            resolved = _resolve_passthrough_value(key, value) if passthrough else value
-            if resolved is not None:
-                sanitized[key] = resolved
-
+        passthrough = ()
+        _resolve_passthrough_value = lambda _name, fallback: fallback
+    try:
+        from hermes_cli.env_loader import (
+            _SECRET_SOURCE_VALUES_BY_HOME,
+            get_secret_source_values,
+        )
+        from hermes_constants import get_hermes_home
+        active_values = get_secret_source_values(get_hermes_home())
+        # Include all already-hydrated homes: a default profile's secret may
+        # still be resident in process-global os.environ while a secondary
+        # profile is active.  The active passthrough resolver can explicitly
+        # restore only the target profile's scoped value when authorized.
+        applied = tuple(active_values.values()) + tuple(
+            value
+            for snapshot in _SECRET_SOURCE_VALUES_BY_HOME.values()
+            for value in snapshot.values()
+        )
+    except Exception:
+        applied = ()
+    sanitized = _central_filter_child_env(
+        base_env or {},
+        provider_blocklist=_HERMES_PROVIDER_ENV_BLOCKLIST,
+        applied_secret_values=applied,
+        passthrough=passthrough,
+        passthrough_resolver=_resolve_passthrough_value,
+        extra=extra_env,
+    )
     _inject_context_hermes_home(sanitized)
-
     from hermes_constants import apply_subprocess_home_env
     apply_subprocess_home_env(sanitized)
-
-    # Same cross-session leak guard as _make_run_env, for the background/PTY
-    # spawn path (process_registry.spawn_local builds env via this function).
     _inject_session_context_env(sanitized)
-
-    for _marker in _ACTIVE_VENV_MARKER_VARS:
-        sanitized.pop(_marker, None)
-
+    for marker in _ACTIVE_VENV_MARKER_VARS:
+        sanitized.pop(marker, None)
     _apply_windows_msys_bash_env_defaults(sanitized)
-
-    sanitized = _scrub_delegated_child_kanban_env(sanitized)
-
-    return sanitized
+    return _scrub_delegated_child_kanban_env(sanitized)
 
 
 def _scrub_delegated_child_kanban_env(env: dict[str, str]) -> dict[str, str]:
@@ -572,88 +565,40 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
 
 
 def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
-    """Build a sanitized environment dict for a spawned subprocess.
-
-    Centralized helper for the **non-terminal** spawn surface (browser,
-    ACP/CLI executors, computer-use driver, dep-ensure, TUI Node host,
-    detached gateway).  Use this instead of copying ``os.environ`` directly
-    so strip-by-default is the uniform policy across every spawn site, with a
-    single source of truth (``_HERMES_PROVIDER_ENV_BLOCKLIST``).  The terminal
-    / execute_code path keeps using :func:`_sanitize_subprocess_env`, which is
-    skill-aware (``env_passthrough``); this helper is for spawns that have no
-    skill-passthrough concept.
-
-    Two-tier stripping:
-
-    * **Tier 1 (always):** ``_ALWAYS_STRIP_KEYS`` — gateway bot tokens, GitHub
-      auth, and remote-compute secrets are removed regardless of
-      ``inherit_credentials``.  No child Hermes spawns legitimately needs them.
-    * **Tier 2 (conditional):** the rest of ``_HERMES_PROVIDER_ENV_BLOCKLIST``
-      (LLM provider API keys, tool secrets) is removed unless the caller passes
-      ``inherit_credentials=True``.
-
-    Pass ``inherit_credentials=True`` **only** when the child legitimately
-    needs LLM provider credentials — a user-blessed ``claude`` / ``codex`` /
-    ``gemini`` CLI executor, or the TUI Node host that makes model calls.  The
-    flag is grep-able for audit: ``grep -rn 'inherit_credentials=True'`` lists
-    every spawn site that still receives provider credentials.
-
-    Callers that need a *specific* non-provider secret (e.g. the browser worker
-    needs ``BROWSERBASE_API_KEY`` / ``FIRECRAWL_API_KEY``) should call with
-    ``inherit_credentials=False`` and copy just those keys back from
-    ``os.environ`` into the returned dict.
-    """
-    env = os.environ.copy()
-
-    # Tier 1 — always strip.
-    for key in _ALWAYS_STRIP_KEYS:
-        env.pop(key, None)
-    # Internal routing hints and Hermes-internal dynamic secrets
-    # (``AUXILIARY_<TASK>_API_KEY`` / ``_BASE_URL`` side-LLM credentials,
-    # ``GATEWAY_RELAY_*`` relay-auth material) must never reach a child,
-    # regardless of ``inherit_credentials`` — a model-driving CLI has no
-    # legitimate use for them. See :func:`_is_hermes_internal_secret`.
-    for key in list(env):
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            env.pop(key, None)
-        elif _is_hermes_internal_secret(key):
-            env.pop(key, None)
-
-    if not inherit_credentials:
-        # Tier 2 — strip provider/tool credentials unless explicitly inherited.
-        for key in _HERMES_PROVIDER_ENV_BLOCKLIST:
-            env.pop(key, None)
-
-    # Windows UTF-8 safety for spawned processes (#31420).
+    """Build a sanitized non-terminal child environment."""
+    try:
+        from hermes_cli.env_loader import (
+            _SECRET_SOURCE_VALUES_BY_HOME,
+            get_secret_source_values,
+        )
+        from hermes_constants import get_hermes_home
+        active_values = get_secret_source_values(get_hermes_home())
+        # Include all already-hydrated homes: a default profile's secret may
+        # still be resident in process-global os.environ while a secondary
+        # profile is active.  The active passthrough resolver can explicitly
+        # restore only the target profile's scoped value when authorized.
+        applied = tuple(active_values.values()) + tuple(
+            value
+            for snapshot in _SECRET_SOURCE_VALUES_BY_HOME.values()
+            for value in snapshot.values()
+        )
+    except Exception:
+        applied = ()
+    env = _central_filter_child_env(
+        os.environ,
+        provider_blocklist=_HERMES_PROVIDER_ENV_BLOCKLIST,
+        applied_secret_values=applied,
+        inherit_provider_credentials=inherit_credentials,
+    )
     env.setdefault("PYTHONUTF8", "1")
-
     _inject_context_hermes_home(env)
     from hermes_constants import apply_subprocess_home_env
     apply_subprocess_home_env(env)
-
-    # Active-venv markers must not clobber another project's environment.
-    for _marker in _ACTIVE_VENV_MARKER_VARS:
-        env.pop(_marker, None)
-
+    for marker in _ACTIVE_VENV_MARKER_VARS:
+        env.pop(marker, None)
     _apply_windows_msys_bash_env_defaults(env)
-
-    # Cross-session leak guard, same as the terminal spawn paths: this helper
-    # copies os.environ, whose HERMES_SESSION_* mirror is a last-writer-wins
-    # global under a concurrent multi-session host. A caller that re-binds the
-    # session identity explicitly (slash_worker/ACP via --session-key argv) is
-    # unaffected — bound ContextVars win here — but a caller that spawns without
-    # re-binding (e.g. tui_gateway cli.exec) would otherwise inherit a FOREIGN
-    # session's identity. Strip _UNSET session vars when engaged so that can't
-    # happen; single uniform policy across every spawn surface.
     _inject_session_context_env(env)
-
-    # Non-terminal subprocess helpers (browser, lazy-deps, TUI/ACP hosts, etc.)
-    # also need the delegate_task child lineage marker.  Otherwise a child
-    # context that later imports Kanban DB code in the spawned process would
-    # still see the parent's HERMES_HOME but lose the DB mutation guard.
-    env = _scrub_delegated_child_kanban_env(env)
-
-    return env
+    return _scrub_delegated_child_kanban_env(env)
 
 
 def build_subprocess_env(
@@ -848,7 +793,7 @@ def _mandatory_aslr_enabled() -> "bool | None":
             text=True, encoding="utf-8", errors="replace",
             timeout=10,
             creationflags=windows_hide_flags(),
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
         if result.returncode != 0:
             return None
         value = (result.stdout or "").strip().upper()
@@ -914,7 +859,7 @@ def _bash_starts(bash: str) -> bool:
             text=True, encoding="utf-8", errors="replace",
             timeout=15,
             creationflags=windows_hide_flags() if _IS_WINDOWS else 0,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
         ok = result.returncode == 0
         if not ok:
             combined = f"{result.stdout or ''}{result.stderr or ''}"
@@ -1266,66 +1211,55 @@ def _path_env_key(run_env: dict) -> str | None:
 
 
 def _make_run_env(env: dict) -> dict:
-    """Build a run environment with a sane PATH and provider-var stripping."""
+    """Build terminal env through the central boundary, preserving passthrough."""
     try:
         from tools.env_passthrough import (
-            is_env_passthrough as _is_passthrough,
+            get_all_passthrough,
             resolve_passthrough_value as _resolve_passthrough_value,
         )
+        passthrough = tuple(get_all_passthrough())
     except Exception:
-        _is_passthrough = lambda _: False  # noqa: E731
-        _resolve_passthrough_value = lambda _name, fallback: fallback  # noqa: E731
-
-    merged = dict(os.environ | env)
-    run_env = {}
-    for k, v in merged.items():
-        if k.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = k[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            if _is_hermes_internal_secret(real_key):
-                continue
-            run_env[real_key] = v
-        elif _is_hermes_internal_secret(k):
-            continue
-        else:
-            passthrough = _is_passthrough(k)
-            if k in _HERMES_PROVIDER_ENV_BLOCKLIST and not passthrough:
-                continue
-            value = _resolve_passthrough_value(k, v) if passthrough else v
-            if value is not None:
-                run_env[k] = value
+        passthrough = ()
+        _resolve_passthrough_value = lambda _name, fallback: fallback
+    try:
+        from hermes_cli.env_loader import (
+            _SECRET_SOURCE_VALUES_BY_HOME,
+            get_secret_source_values,
+        )
+        from hermes_constants import get_hermes_home
+        active_values = get_secret_source_values(get_hermes_home())
+        # Include all already-hydrated homes: a default profile's secret may
+        # still be resident in process-global os.environ while a secondary
+        # profile is active.  The active passthrough resolver can explicitly
+        # restore only the target profile's scoped value when authorized.
+        applied = tuple(active_values.values()) + tuple(
+            value
+            for snapshot in _SECRET_SOURCE_VALUES_BY_HOME.values()
+            for value in snapshot.values()
+        )
+    except Exception:
+        applied = ()
+    run_env = _central_filter_child_env(
+        dict(os.environ | env),
+        provider_blocklist=_HERMES_PROVIDER_ENV_BLOCKLIST,
+        applied_secret_values=applied,
+        passthrough=passthrough,
+        passthrough_resolver=_resolve_passthrough_value,
+        compatibility_keep=OPERATOR_COMPATIBILITY_KEYS,
+    )
     path_key = _path_env_key(run_env)
     if path_key is not None:
         new_path = _append_missing_sane_path_entries(run_env.get(path_key, ""))
-        # On Windows, ensure Git Bash's coreutils dirs (…\usr\bin etc.) are on
-        # PATH.  A non-login ``bash -c`` fallback (used when ``bash -l`` is
-        # broken) never sources /etc/profile, so without this cat/mktemp/mv and
-        # friends are missing and every write_file/terminal call fails (empty
-        # error / exit 127).  No-op off Windows and when a login snapshot is
-        # healthy (the snapshot re-exports the full PATH inside the shell).
         new_path = _prepend_git_bash_dirs(new_path)
-        # Ensure the hermes install dir is reachable so plugins can shell out
-        # to bare ``hermes`` via the terminal tool even when the gateway was
-        # launched without it on PATH (systemd, service managers, cron, etc.).
         run_env[path_key] = _prepend_hermes_bin_dir(new_path)
-
     _inject_context_hermes_home(run_env)
-
     from hermes_constants import apply_subprocess_home_env
     apply_subprocess_home_env(run_env)
-
-    # Bridge ContextVar-based session vars into the subprocess env (with the
-    # cross-session leak guard — strips _UNSET vars when a concurrent host is
-    # engaged so a sibling session's os.environ mirror can't leak in).
     _inject_session_context_env(run_env)
-
-    for _marker in _ACTIVE_VENV_MARKER_VARS:
-        run_env.pop(_marker, None)
-
+    for marker in _ACTIVE_VENV_MARKER_VARS:
+        run_env.pop(marker, None)
     _apply_windows_msys_bash_env_defaults(run_env)
-
-    run_env = _scrub_delegated_child_kanban_env(run_env)
-
-    return run_env
+    return _scrub_delegated_child_kanban_env(run_env)
 
 
 def _read_terminal_shell_init_config() -> tuple[list[str], bool]:

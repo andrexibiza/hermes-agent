@@ -1,0 +1,111 @@
+{
+  "schema": "hermes.issue-83565.packet-apply.v2",
+  "packet_pin": "50d98fc1f3d49d7a7b522eaa7f4553cd864a0218",
+  "applied_to": "c83061ba3d0e5467fca62c45e59bcfb38cfe5e3d",
+  "changes": [
+    {
+      "path": "tools\\child_process_env_policy.py",
+      "action": "write",
+      "detail": "central credential-boundary policy"
+    },
+    {
+      "path": "tools/environments/local.py",
+      "action": "replace-functions",
+      "detail": "three subprocess env factories routed through central policy"
+    },
+    {
+      "path": "tools/environments/base.py",
+      "action": "replace-function",
+      "detail": "shared remote-backend Popen boundary sanitizes by default"
+    },
+    {
+      "path": "tools/code_execution_tool.py",
+      "action": "replace-function",
+      "detail": "execute_code scrub uses the central hard-deny policy while retaining its allowlist"
+    },
+    {
+      "path": "apps\\desktop\\electron\\scrub-child-env.ts",
+      "action": "create",
+      "detail": "Electron child-env credential policy"
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-runner.ts",
+      "action": "desktop-scrub",
+      "detail": "2 process.env child constructions hardened"
+    },
+    {
+      "path": "apps/desktop/electron/main.ts",
+      "action": "desktop-scrub",
+      "detail": "10 process.env child constructions hardened"
+    },
+    {
+      "path": "scripts/security/verify_child_process_env_boundary.py",
+      "action": "write",
+      "detail": "campaign enforcement artifact"
+    },
+    {
+      "path": "tests/security/test_child_process_env_sink_ledger.py",
+      "action": "write",
+      "detail": "campaign enforcement artifact"
+    },
+    {
+      "path": "tests/tools/test_child_process_credential_inheritance_policy.py",
+      "action": "write",
+      "detail": "campaign enforcement artifact"
+    },
+    {
+      "path": "docs/security/issue-83565-child-process-credential-boundary.md",
+      "action": "write",
+      "detail": "campaign enforcement artifact"
+    }
+  ],
+  "git_diff_check": "pass",
+  "sink_ledger": {
+    "schema": "hermes.issue-83565.sink-ledger.v2",
+    "status": "pass",
+    "checked_count": 24,
+    "checked": [
+      "tools/environments/base.py",
+      "tools/environments/local.py",
+      "tools/environments/singularity.py",
+      "tools/environments/docker.py",
+      "agent/lsp/client.py",
+      "agent/lsp/install.py",
+      "tui_gateway/host_supervisor.py",
+      "tui_gateway/methods_tools.py",
+      "tui_gateway/server.py",
+      "hermes_cli/kanban_db.py",
+      "tools/checkpoint_manager.py",
+      "tools/code_execution_tool.py",
+      "plugins/platforms/whatsapp/adapter.py",
+      "agent/secret_sources/bitwarden.py",
+      "agent/secret_sources/onepassword.py",
+      "hermes_cli/secrets_cli.py",
+      "hermes_cli/onepassword_secrets_cli.py",
+      "plugins/platforms/raft/adapter.py",
+      "plugins/google_meet/meet_bot.py",
+      "plugins/google_meet/process_manager.py",
+      "plugins/memory/byterover/__init__.py",
+      "plugins/platforms/buzz/adapter.py",
+      "plugins/platforms/photon/adapter.py",
+      "agent/secret_sources/command.py"
+    ],
+    "findings": []
+  },
+  "focused_tests": [
+    {
+      "command": [
+        "C:\\Users\\andre\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/security/test_child_process_env_sink_ledger.py",
+        "tests/tools/test_child_process_credential_inheritance_policy.py"
+      ],
+      "returncode": 0,
+      "stdout": "...                                                                      [100%]\n3 passed in 4.25s\n",
+      "stderr": ""
+    }
+  ],
+  "patch_sha256": "71ad236c181310752a42d80a7f6aca81da5e4e444c1b3508d8e6b6dfc5f87aba"
+}

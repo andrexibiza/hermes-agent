@@ -56,6 +56,7 @@ from agent.secret_sources._cache import (
 )
 from agent.secret_sources.base import ErrorKind, SecretSource
 from agent.secret_sources.base import get_source_environment
+from tools.child_process_env_policy import DEFAULT_EXECUTABLE_ALLOWLIST, minimal_child_env as build_minimal_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,7 @@ def _run_op_read(
             encoding="utf-8",
             errors="replace",
             timeout=_OP_RUN_TIMEOUT,
-        )
+        stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"op read timed out after {_OP_RUN_TIMEOUT}s for {reference!r}"

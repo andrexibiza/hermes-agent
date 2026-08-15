@@ -206,22 +206,8 @@ _WINDOWS_ESSENTIAL_ENV_VARS = frozenset({
 
 
 def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
-    """Produce the scrubbed child-process env for execute_code.
-
-    Rules (order matters):
-      1. Passthrough vars (skill- or config-declared) pass through the active
-         profile secret scope; an absent scoped value is omitted and an
-         unscoped multiplex read fails closed.
-      2. Secret-substring names (KEY/TOKEN/DSN/WEBHOOK/etc.) are blocked.
-      3. Names matching a safe prefix pass.
-      4. Operational HERMES_* vars (_HERMES_CHILD_ALLOWED) pass by exact name.
-      5. On Windows, a small OS-essential allowlist passes by exact name
-         — without these the child can't even create a socket or spawn a
-         subprocess.
-
-    Extracted into a helper so tests can exercise the logic without
-    spawning a subprocess.
-    """
+    """Produce execute_code's allowlisted env through the #83565 hard-deny policy."""
+    from tools.child_process_env_policy import classify as _classify_child_env
     resolve_passthrough_value = None
     if is_passthrough is None:
         try:
@@ -230,33 +216,41 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
                 resolve_passthrough_value,
             )
         except Exception:
-            _ep = lambda _: False  # noqa: E731
-            resolve_passthrough_value = lambda _name, _fallback: None  # noqa: E731
+            _ep = lambda _: False
+            resolve_passthrough_value = lambda _name, _fallback: None
         is_passthrough = _ep
     else:
         try:
             from tools.env_passthrough import resolve_passthrough_value
         except Exception:
-            resolve_passthrough_value = lambda _name, _fallback: None  # noqa: E731
+            resolve_passthrough_value = lambda _name, _fallback: None
     if is_windows is None:
         is_windows = _IS_WINDOWS
-
+    try:
+        from hermes_cli.env_loader import _SECRET_SOURCE_VALUES_BY_HOME
+        applied = tuple(
+            value
+            for snapshot in _SECRET_SOURCE_VALUES_BY_HOME.values()
+            for value in snapshot.values()
+        )
+    except Exception:
+        applied = ()
     scrubbed = {}
-    # Non-secret HERMES_* vars dropped by the tightened allowlist (#27303). The
-    # broad "HERMES_" prefix used to pass these through; now only the
-    # operational set does. The drop is intentional (those vars can carry
-    # config like HERMES_KANBAN_DB / HERMES_BASE_URL), but a sandbox script
-    # that imports a repo module reading one at import time would otherwise see
-    # it silently unset. Surface the drop once so the behavior change is
-    # diagnosable and points at the env_passthrough opt-in escape hatch.
-    _dropped_hermes = []
+    dropped_hermes = []
     for k, v in source_env.items():
-        if is_passthrough(k):
-            resolved = resolve_passthrough_value(k, v)
-            if resolved is not None:
-                scrubbed[k] = resolved
+        passthrough = bool(is_passthrough(k))
+        decision = _classify_child_env(
+            k,
+            v,
+            applied_secret_values=applied,
+            passthrough=(k,) if passthrough else (),
+        )
+        if not decision.allowed:
             continue
-        if any(s in k.upper() for s in _SECRET_SUBSTRINGS):
+        if passthrough:
+            resolved = resolve_passthrough_value(decision.destination, v)
+            if resolved is not None:
+                scrubbed[decision.destination] = str(resolved)
             continue
         if any(k.startswith(p) for p in _SAFE_ENV_PREFIXES):
             scrubbed[k] = v
@@ -268,30 +262,18 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
             scrubbed[k] = v
             continue
         if k.startswith("HERMES_"):
-            # Non-secret (secrets were already dropped above) and not in any
-            # allowlist — a deliberately-dropped HERMES_* var.
-            _dropped_hermes.append(k)
-    if _dropped_hermes:
+            dropped_hermes.append(k)
+    if dropped_hermes:
         logger.debug(
-            "execute_code: dropped %d non-allowlisted HERMES_* var(s) from the "
-            "sandbox child env (%s). This is intentional hardening (#27303); if "
-            "a sandbox script legitimately needs one, declare it via "
-            "env_passthrough in the skill/config so it passes by explicit opt-in.",
-            len(_dropped_hermes),
-            ", ".join(sorted(_dropped_hermes)),
+            "execute_code: dropped %d non-allowlisted HERMES_* var(s) (%s)",
+            len(dropped_hermes),
+            ", ".join(sorted(dropped_hermes)),
         )
-
-    # delegate_task children are marked with a ContextVar, not os.environ, while
-    # the execute_code sandbox crosses a process boundary. Bridge that context
-    # into the child env and strip dispatcher-owned Kanban variables after the
-    # normal secret/passthrough scrub so an explicit passthrough cannot re-grant
-    # a delegated child the parent's board mutation capability.
     try:
         from agent.delegation_context import (
             is_delegated_child_process_context,
             scrub_kanban_env,
         )
-
         if is_delegated_child_process_context():
             scrubbed = scrub_kanban_env(scrubbed)
     except Exception:

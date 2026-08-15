@@ -21,6 +21,23 @@ from tools.environments.base import (
     _popen_bash,
     _save_json_store,
 )
+from tools.environments.local import hermes_subprocess_env
+
+_REGISTRY_AUTH_ENV_VARS = (
+    "APPTAINER_DOCKER_USERNAME", "APPTAINER_DOCKER_PASSWORD",
+    "SINGULARITY_DOCKER_USERNAME", "SINGULARITY_DOCKER_PASSWORD",
+    "DOCKER_USERNAME", "DOCKER_PASSWORD",
+)
+
+def _singularity_child_env(*, include_registry_auth: bool = False) -> dict[str, str]:
+    env = hermes_subprocess_env(inherit_credentials=False)
+    if include_registry_auth:
+        for key in _REGISTRY_AUTH_ENV_VARS:
+            value = os.environ.get(key)
+            if value is not None:
+                env[key] = value
+    return env
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +64,7 @@ def _ensure_singularity_available() -> str:
         result = subprocess.run(
             [exe, "version"], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
             stdin=subprocess.DEVNULL,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except FileNotFoundError:
         raise RuntimeError(
             f"Singularity backend selected but '{exe}' could not be executed."
@@ -223,7 +240,7 @@ class SingularityEnvironment(BaseEnvironment):
         cmd.extend([str(self.image), self.instance_id])
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120, stdin=subprocess.DEVNULL)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120, stdin=subprocess.DEVNULL, env=hermes_subprocess_env(inherit_credentials=False))
             if result.returncode != 0:
                 raise RuntimeError(f"Failed to start instance: {result.stderr}")
             self._instance_started = True
@@ -256,7 +273,7 @@ class SingularityEnvironment(BaseEnvironment):
                     [self.executable, "instance", "stop", self.instance_id],
                     capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
                     stdin=subprocess.DEVNULL,
-                )
+                env=hermes_subprocess_env(inherit_credentials=False))
                 logger.info("Singularity instance %s stopped", self.instance_id)
             except Exception as e:
                 logger.warning("Failed to stop Singularity instance %s: %s", self.instance_id, e)

@@ -5,6 +5,7 @@ are rebound onto server.py's globals at install time — see method_ctx.py.
 """
 
 from .method_ctx import HandlerRegistry
+from tools.environments.local import hermes_subprocess_env
 
 _registry = HandlerRegistry()
 method = _registry.method
@@ -2455,7 +2456,7 @@ def _(rid, params: dict) -> dict:
             encoding="utf-8", errors="replace",
             stdin=subprocess.DEVNULL,
             creationflags=windows_hide_flags(),
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
         return _ok(
             rid,
             {

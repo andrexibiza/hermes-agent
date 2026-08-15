@@ -110,6 +110,7 @@ import { readDirForIpc } from './fs-read-dir'
 import { probeGatewayWebSocket } from './gateway-ws-probe'
 import { scanGitRepos } from './git-repo-scan'
 import {
+import { scrubDesktopChildEnv83565 } from './scrub-child-env'
   fileDiffVsHead,
   repoStatus,
   reviewCommit,
@@ -2006,7 +2007,7 @@ function backendSupportsServe(backend) {
       // and its timeout-only retry instead of a thinner local bound.
       execProbeSync(backend.command, [...prefix, 'serve', '--help'], {
         cwd: backend.root || undefined,
-        env: { ...process.env, HERMES_HOME, ...(backend.env || {}) },
+        env: { ...scrubDesktopChildEnv83565(process.env), HERMES_HOME, ...(backend.env || {}) },
         timeout: PROBE_TIMEOUT_MS,
         stdio: 'ignore',
         // `.cmd`/`.bat` shim backends carry shell: true in their descriptor
@@ -2478,7 +2479,7 @@ function runGit(args, options: any = {}): Promise<{ code: number; stdout: string
       IS_WINDOWS ? ['-c', 'windows.appendAtomically=false', ...args] : args,
       hiddenWindowsChildOptions({
         cwd: options.cwd,
-        env: { ...process.env, ...((options.env || {}) as any), GIT_TERMINAL_PROMPT: '0' },
+        env: { ...scrubDesktopChildEnv83565(process.env), ...((options.env || {}) as any), GIT_TERMINAL_PROMPT: '0' },
         stdio: ['ignore', 'pipe', 'pipe']
       })
     )
@@ -3181,7 +3182,7 @@ async function applyUpdates(opts = {}) {
       child = spawnUpdaterProcess(wrapped.command, wrapped.args, {
         cwd: HERMES_HOME,
         env: {
-          ...process.env,
+          ...scrubDesktopChildEnv83565(process.env),
           HERMES_HOME,
           PATH: pathWithHermesManagedNode(venvBin)
         },
@@ -3207,7 +3208,7 @@ async function applyUpdates(opts = {}) {
       child = spawnUpdaterProcess(updater, updaterArgs, {
         cwd: HERMES_HOME,
         env: {
-          ...process.env,
+          ...scrubDesktopChildEnv83565(process.env),
           HERMES_HOME,
           PATH: pathWithHermesManagedNode(venvBin)
         },
@@ -3315,7 +3316,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
   const child = spawnUpdaterProcess(updater, updaterArgs, {
     cwd: HERMES_HOME,
     env: {
-      ...process.env,
+      ...scrubDesktopChildEnv83565(process.env),
       HERMES_HOME,
       PATH: pathWithHermesManagedNode(venvBin)
     },
@@ -3528,7 +3529,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
   const child = spawnUpdaterProcess(handoff.command, args, {
     cwd: HERMES_HOME,
     env: {
-      ...process.env,
+      ...scrubDesktopChildEnv83565(process.env),
       HERMES_HOME,
       PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
     },
@@ -8291,7 +8292,7 @@ async function spawnPoolBackend(profile, entry) {
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
       env: {
-        ...process.env,
+        ...scrubDesktopChildEnv83565(process.env),
         HERMES_HOME,
         ...backend.env,
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
@@ -8584,7 +8585,7 @@ async function startHermes() {
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
         env: {
-          ...process.env,
+          ...scrubDesktopChildEnv83565(process.env),
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
           // this pin, Python falls back to ~/.hermes on every platform — fine on
@@ -11744,7 +11745,7 @@ function safeTerminalCwd(cwd) {
 }
 
 function terminalShellEnv() {
-  const env = { ...process.env }
+  const env = { ...scrubDesktopChildEnv83565(process.env) }
 
   // Electron is commonly launched through `npm run dev`; do not leak npm's
   // managed prefix into a user's interactive shell (nvm/proto warn loudly).
@@ -12319,7 +12320,7 @@ async function getUninstallSummary() {
         ['-m', 'hermes_cli.main', 'uninstall', '--gui-summary'],
         hiddenWindowsChildOptions({
           cwd: agentRoot,
-          env: { ...process.env, HERMES_HOME, NO_COLOR: '1' },
+          env: { ...scrubDesktopChildEnv83565(process.env), HERMES_HOME, NO_COLOR: '1' },
           stdio: ['ignore', 'pipe', 'ignore']
         })
       )

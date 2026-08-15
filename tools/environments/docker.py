@@ -27,6 +27,7 @@ from tools.environments.local import (
     _HERMES_PROVIDER_ENV_BLOCKLIST,
     _is_hermes_internal_secret,
 )
+from tools.environments.local import hermes_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +189,7 @@ def reap_orphan_containers(
             [docker, "ps", "-a", *filters, "--format", "{{.ID}}"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15, check=False,
             stdin=subprocess.DEVNULL,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.debug("orphan reaper docker ps failed: %s", e)
         return 0
@@ -222,7 +223,7 @@ def reap_orphan_containers(
                 [docker, "rm", "-f", cid],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
                 stdin=subprocess.DEVNULL,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
             if result.returncode == 0:
                 removed += 1
                 logger.info(
@@ -252,7 +253,7 @@ def _container_finished_at(docker_exe: str, container_id: str):
             [docker_exe, "inspect", "--format", "{{.State.FinishedAt}}", container_id],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10, check=False,
             stdin=subprocess.DEVNULL,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.debug("orphan reaper docker inspect %s failed: %s", container_id[:12], e)
         return None
@@ -668,7 +669,7 @@ def _image_uses_init_entrypoint(docker_exe: str, image: str) -> bool:
             text=True, encoding='utf-8', errors='replace',
             timeout=15,
             stdin=subprocess.DEVNULL,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except (subprocess.SubprocessError, OSError) as e:
         logger.debug("Docker: could not inspect entrypoint for %s: %s", image, e)
         return False
@@ -751,7 +752,7 @@ def _cgroup_limits_available(image: str) -> bool:
             text=True, encoding='utf-8', errors='replace',
             timeout=60,
             stdin=subprocess.DEVNULL,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
         _cgroup_limits_ok = result.returncode == 0
         if not _cgroup_limits_ok:
             logger.warning(
@@ -798,7 +799,7 @@ def _ensure_docker_available() -> None:
             text=True, encoding='utf-8', errors='replace',
             timeout=5,
             stdin=subprocess.DEVNULL,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except FileNotFoundError:
         logger.error(
             "Docker backend selected but the resolved docker executable '%s' could "
@@ -1440,7 +1441,7 @@ class DockerEnvironment(BaseEnvironment):
                             timeout=30,
                             check=False,
                             stdin=subprocess.DEVNULL,
-                        )
+                        env=hermes_subprocess_env(inherit_credentials=False))
                     except (subprocess.TimeoutExpired, OSError) as e:
                         logger.warning("Failed to remove mismatched container %s: %s", container_id[:12], e)
                     existing = None
@@ -1456,7 +1457,7 @@ class DockerEnvironment(BaseEnvironment):
                             timeout=30,
                             check=True,
                             stdin=subprocess.DEVNULL,
-                        )
+                        env=hermes_subprocess_env(inherit_credentials=False))
                     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                         logger.warning(
                             "Failed to start existing container %s (state=%s): "
@@ -1495,7 +1496,7 @@ class DockerEnvironment(BaseEnvironment):
                     timeout=120,  # image pull may take a while
                     check=True,
                     stdin=subprocess.DEVNULL,
-                )
+                env=hermes_subprocess_env(inherit_credentials=False))
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 # Docker may create the container object before `docker run`
                 # fails to start it (e.g. exit code 125 when the daemon isn't
@@ -1512,7 +1513,7 @@ class DockerEnvironment(BaseEnvironment):
                     [self._docker_exe, "rm", "-f", container_name],
                     capture_output=True, timeout=10,
                     stdin=subprocess.DEVNULL,
-                )
+                env=hermes_subprocess_env(inherit_credentials=False))
                 raise
             self._container_id = result.stdout.strip()
             logger.info("Started container %s (%s)", container_name, self._container_id[:12])
@@ -1676,7 +1677,7 @@ class DockerEnvironment(BaseEnvironment):
                         [self._docker_exe, "start", cid],
                         capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30, check=True,
                         stdin=subprocess.DEVNULL,
-                    )
+                    env=hermes_subprocess_env(inherit_credentials=False))
                     self._container_id = cid
                     logger.info("Recovery: restarted container %s", cid[:12])
                 except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -1707,7 +1708,7 @@ class DockerEnvironment(BaseEnvironment):
                 result = subprocess.run(
                     run_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120, check=True,
                     stdin=subprocess.DEVNULL,
-                )
+                env=hermes_subprocess_env(inherit_credentials=False))
                 self._container_id = result.stdout.strip()
                 self._container_name = new_name
                 logger.info(
@@ -1762,7 +1763,7 @@ class DockerEnvironment(BaseEnvironment):
                 [docker, "info", "--format", "{{.Driver}}"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
                 stdin=subprocess.DEVNULL,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
             driver = result.stdout.strip().lower()
             if driver != "overlay2":
                 _storage_opt_ok = False
@@ -1773,14 +1774,14 @@ class DockerEnvironment(BaseEnvironment):
                 [docker, "create", "--storage-opt", "size=1m", "hello-world"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15,
                 stdin=subprocess.DEVNULL,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
             if probe.returncode == 0:
                 # Clean up the created container
                 container_id = probe.stdout.strip()
                 if container_id:
                     subprocess.run([docker, "rm", container_id],
                                    capture_output=True, timeout=5,
-                                   stdin=subprocess.DEVNULL)
+                                   stdin=subprocess.DEVNULL, env=hermes_subprocess_env(inherit_credentials=False))
                 _storage_opt_ok = True
             else:
                 _storage_opt_ok = False
@@ -1810,7 +1811,7 @@ class DockerEnvironment(BaseEnvironment):
                 timeout=10,
                 check=False,
                 stdin=subprocess.DEVNULL,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.debug("docker inspect NetworkMode failed: %s", e)
             return None
@@ -1870,7 +1871,7 @@ class DockerEnvironment(BaseEnvironment):
                 timeout=10,
                 check=False,
                 stdin=subprocess.DEVNULL,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.debug("docker ps probe failed: %s — will start a fresh container", e)
             return None
@@ -2001,7 +2002,7 @@ class DockerEnvironment(BaseEnvironment):
                         [docker_exe, "stop", "-t", "10", container_id],
                         capture_output=True, timeout=30,
                         stdin=subprocess.DEVNULL,
-                    )
+                    env=hermes_subprocess_env(inherit_credentials=False))
                 except (subprocess.TimeoutExpired, OSError) as e:
                     logger.warning("docker stop %s timed out / failed: %s", log_id, e)
             if should_remove:
@@ -2010,7 +2011,7 @@ class DockerEnvironment(BaseEnvironment):
                         [docker_exe, "rm", "-f", container_id],
                         capture_output=True, timeout=30,
                         stdin=subprocess.DEVNULL,
-                    )
+                    env=hermes_subprocess_env(inherit_credentials=False))
                 except (subprocess.TimeoutExpired, OSError) as e:
                     logger.warning("docker rm -f %s failed: %s", log_id, e)
 

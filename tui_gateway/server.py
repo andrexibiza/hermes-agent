@@ -50,6 +50,7 @@ from tui_gateway.transport import (
     current_transport,
     reset_transport,
 )
+from tools.environments.local import hermes_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -6978,7 +6979,7 @@ def _enrich_with_attached_images(user_text: str, image_paths: list[str]) -> str:
         hint = f"[You can examine it with vision_analyze using image_url: {p}]"
         try:
             r = _json.loads(
-                asyncio.run(vision_analyze_tool(image_url=str(p), user_prompt=prompt))
+                asyncio.run(vision_analyze_tool(image_url=str(p), user_prompt=prompt), env=hermes_subprocess_env(inherit_credentials=False))
             )
             desc = r.get("analysis", "") if r.get("success") else None
             parts.append(
@@ -12672,7 +12673,7 @@ def _list_repo_files(root: str) -> list[str]:
             check=False,
             stdin=subprocess.DEVNULL,
             creationflags=_creationflags,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
         if top_result.returncode == 0:
             top = top_result.stdout.decode("utf-8", "replace").strip()
             list_result = subprocess.run(
@@ -12691,7 +12692,7 @@ def _list_repo_files(root: str) -> list[str]:
                 check=False,
                 stdin=subprocess.DEVNULL,
                 creationflags=_creationflags,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
             if list_result.returncode == 0:
                 for p in list_result.stdout.decode("utf-8", "replace").split("\0"):
                     if not p:

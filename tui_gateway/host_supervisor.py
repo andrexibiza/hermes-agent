@@ -24,6 +24,7 @@ from typing import Any
 
 from hermes_constants import get_hermes_home
 from tools.environments.local import hermes_subprocess_env
+from tools.environments.local import hermes_subprocess_env
 
 logger = logging.getLogger(__name__)
 _Thread = threading.Thread
@@ -316,7 +317,7 @@ class HostSupervisor:
         self._hello_event.clear()
         self._hello = {}
         env = hermes_subprocess_env(inherit_credentials=True)
-        env.update(os.environ)
+        None  # #83565: ambient env remerge removed
         if self.env:
             env.update(self.env)
         env["HERMES_COMPUTE_HOST_HEARTBEAT_SECS"] = str(self.heartbeat_secs)

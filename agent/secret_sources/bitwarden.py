@@ -59,6 +59,7 @@ from agent.secret_sources._cache import (
 )
 from agent.secret_sources.base import ErrorKind, SecretSource
 from agent.secret_sources.base import get_source_environment
+from tools.child_process_env_policy import DEFAULT_EXECUTABLE_ALLOWLIST, minimal_child_env as build_minimal_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ def _platform_asset_name() -> str:
                 text=True, encoding='utf-8', errors='replace',
                 timeout=2,
                 stdin=subprocess.DEVNULL,
-            )
+            env=build_minimal_subprocess_env(allow=DEFAULT_EXECUTABLE_ALLOWLIST))
             if "musl" in (res.stdout + res.stderr).lower():
                 libc = "musl"
         except (OSError, subprocess.TimeoutExpired):

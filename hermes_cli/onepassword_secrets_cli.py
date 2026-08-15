@@ -34,6 +34,7 @@ from hermes_cli.config import (
     save_env_value,
 )
 from hermes_cli.secret_prompt import masked_secret_prompt
+from tools.child_process_env_policy import DEFAULT_EXECUTABLE_ALLOWLIST, minimal_child_env as build_minimal_subprocess_env
 
 _DEFAULT_TOKEN_ENV = "OP_SERVICE_ACCOUNT_TOKEN"
 _DOCS_URL = "https://developer.1password.com/docs/cli/get-started/"
@@ -490,7 +491,7 @@ def _op_version(binary: Path) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=5,
-        )
+        env=build_minimal_subprocess_env(allow=DEFAULT_EXECUTABLE_ALLOWLIST), stdin=subprocess.DEVNULL)
         if res.returncode == 0:
             return (res.stdout or res.stderr).strip().splitlines()[0]
     except (OSError, subprocess.TimeoutExpired):
@@ -521,7 +522,7 @@ def _op_whoami(
         res = subprocess.run(
             cmd, env=env, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10
-        )
+        , stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if res.returncode != 0:

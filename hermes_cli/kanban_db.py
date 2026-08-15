@@ -91,6 +91,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from hermes_cli.sqlite_util import add_column_if_missing as _add_column_if_missing
 from toolsets import get_toolset_names
+from tools.environments.local import hermes_subprocess_env
 
 _log = logging.getLogger(__name__)
 
@@ -5962,12 +5963,12 @@ def _cleanup_worker_tmux(conn: sqlite3.Connection, task_id: str) -> None:
         out = subprocess.run(
             ["tmux", "list-panes", "-t", session, "-F", "#{pane_dead}"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
         if out.stdout.strip() == "1":
             subprocess.run(
                 ["tmux", "kill-session", "-t", session],
                 capture_output=True, timeout=5,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
             _log.debug("Killed stale tmux session: %s", session)
     except Exception:
         pass  # best-effort — never block completion
@@ -7480,7 +7481,7 @@ def _git_toplevel(path: Path) -> Optional[Path]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except Exception:
         return None
     if result.returncode != 0:
@@ -7502,7 +7503,7 @@ def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except Exception:
         return False
     return result.returncode == 0
@@ -7516,7 +7517,7 @@ def _git_common_dir(path: Path) -> Optional[Path]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except Exception:
         return None
     if result.returncode != 0:
@@ -7535,7 +7536,7 @@ def _git_dir(path: Path) -> Optional[Path]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except Exception:
         return None
     if result.returncode != 0:
@@ -7554,7 +7555,7 @@ def _git_current_branch(path: Path) -> Optional[str]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
-        )
+        env=hermes_subprocess_env(inherit_credentials=False))
     except Exception:
         return None
     if result.returncode != 0:
@@ -7611,7 +7612,7 @@ def _ensure_git_worktree(repo_root: Path, target: Path, branch_name: str) -> Non
         text=True, encoding='utf-8', errors='replace',
         timeout=60,
         check=False,
-    )
+    env=hermes_subprocess_env(inherit_credentials=False))
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(
@@ -8111,7 +8112,7 @@ def _pid_alive(pid: Optional[int]) -> bool:
                 text=True, encoding='utf-8', errors='replace',
                 timeout=1,
                 check=False,
-            )
+            env=hermes_subprocess_env(inherit_credentials=False))
             if proc.returncode != 0:
                 return False
             if "Z" in (proc.stdout or "").strip():
@@ -10328,7 +10329,7 @@ def _default_spawn(
     profile_arg = normalize_profile_name(task.assignee)
 
     prompt = f"work kanban task {task.id}"
-    env = dict(os.environ)
+    env = hermes_subprocess_env(inherit_credentials=False)
     # The dispatcher is detached from every conversation. Its worker must never
     # inherit routing mirrored by a previous gateway turn, even before the first
     # session binds ContextVars in this process.

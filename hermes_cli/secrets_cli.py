@@ -31,6 +31,7 @@ from hermes_cli.config import (
     save_env_value,
 )
 from hermes_cli.secret_prompt import masked_secret_prompt
+from tools.child_process_env_policy import DEFAULT_EXECUTABLE_ALLOWLIST, minimal_child_env as build_minimal_subprocess_env
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +565,7 @@ def _bws_version(binary: Path) -> str:
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=5,
-        )
+        env=build_minimal_subprocess_env(allow=DEFAULT_EXECUTABLE_ALLOWLIST), stdin=subprocess.DEVNULL)
         if res.returncode == 0:
             return (res.stdout or res.stderr).strip().splitlines()[0]
     except (OSError, subprocess.TimeoutExpired):
@@ -623,7 +624,7 @@ def _list_projects(
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=15,
-        )
+        stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         console.print(f"  [red]Couldn't list projects: {exc}[/red]")
         return None
