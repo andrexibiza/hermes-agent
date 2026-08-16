@@ -465,6 +465,10 @@ class WebhookCreate(BaseModel):
     deliver_chat_id: Optional[str] = None
     # secret: omit to auto-generate
     secret: Optional[str] = None
+    # signature_mode: explicit provider scheme (github, gitlab,
+    # gitlab_standard, hindsight, svix, generic_v2, generic_v1).
+    # Omit to keep the gateway default (generic_v2).
+    signature_mode: Optional[str] = None
 
 
 # --- from web_server.py (originally lines 13930-13931) ---

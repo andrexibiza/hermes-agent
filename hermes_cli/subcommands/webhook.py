@@ -49,6 +49,13 @@ def build_webhook_parser(subparsers, *, cmd_webhook: Callable) -> None:
         "--secret", default="", help="HMAC secret (auto-generated if omitted)"
     )
     wh_sub.add_argument(
+        "--signature-mode",
+        default="",
+        help="Provider signature scheme: github, gitlab, gitlab_standard, "
+        "hindsight, svix, generic_v2 (default), generic_v1. The test "
+        "subcommand signs with the route's configured mode.",
+    )
+    wh_sub.add_argument(
         "--deliver-only",
         action="store_true",
         help="Skip the agent — deliver the rendered prompt directly as the "

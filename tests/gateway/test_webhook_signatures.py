@@ -174,3 +174,113 @@ class TestMalformedAndAttack:
         adapter = _make_adapter()
         req = _mock_request(headers={"X-Hub-Signature-256": _github_signature(BODY, SECRET)})
         assert adapter._validate_signature(req, BODY, SECRET, signature_mode="bogus") is False
+
+
+class TestGitlabStandardMode:
+    """GitLab Standard Webhooks (issue #47451, impl by HwangJohn in #47849).
+
+    The wire contract: webhook-id / webhook-timestamp / webhook-signature
+    headers, signed content "{id}.{timestamp}.{raw_body}", signature is
+    "v1,<base64-hmac-sha256>". Must validate only in gitlab_standard mode,
+    never under another mode via header presence.
+    """
+
+    def _standard_signature(self, body, secret, msg_id, timestamp):
+        signed = msg_id.encode() + b"." + timestamp.encode() + b"." + body
+        digest = hmac.new(secret.encode(), signed, hashlib.sha256).digest()
+        return "v1," + base64.b64encode(digest).decode()
+
+    def test_accepts_standard_webhooks_wire_format(self):
+        adapter = _make_adapter()
+        msg_id = "msg_gitlab_123"
+        ts = str(int(time.time()))
+        sig = self._standard_signature(BODY, SECRET, msg_id, ts)
+        req = _mock_request(headers={
+            "webhook-id": msg_id,
+            "webhook-timestamp": ts,
+            "webhook-signature": sig,
+        })
+        assert adapter._validate_signature(req, BODY, SECRET, signature_mode="gitlab_standard") is True
+
+    def test_rejects_under_github_mode(self):
+        # Same headers must NOT validate when the route declares github.
+        adapter = _make_adapter()
+        msg_id = "msg_gitlab_123"
+        ts = str(int(time.time()))
+        sig = self._standard_signature(BODY, SECRET, msg_id, ts)
+        req = _mock_request(headers={
+            "webhook-id": msg_id,
+            "webhook-timestamp": ts,
+            "webhook-signature": sig,
+        })
+        assert adapter._validate_signature(req, BODY, SECRET, signature_mode="github") is False
+
+    def test_wrong_body_rejects(self):
+        adapter = _make_adapter()
+        msg_id = "msg_gitlab_123"
+        ts = str(int(time.time()))
+        sig = self._standard_signature(BODY, SECRET, msg_id, ts)
+        req = _mock_request(headers={
+            "webhook-id": msg_id,
+            "webhook-timestamp": ts,
+            "webhook-signature": sig,
+        })
+        tampered = b'{"object_kind": "merge_request"}'
+        assert adapter._validate_signature(req, tampered, SECRET, signature_mode="gitlab_standard") is False
+
+    def test_stale_timestamp_rejects(self):
+        adapter = _make_adapter()
+        msg_id = "msg_gitlab_123"
+        old_ts = str(int(time.time()) - 10000)
+        sig = self._standard_signature(BODY, SECRET, msg_id, old_ts)
+        req = _mock_request(headers={
+            "webhook-id": msg_id,
+            "webhook-timestamp": old_ts,
+            "webhook-signature": sig,
+        })
+        assert adapter._validate_signature(req, BODY, SECRET, signature_mode="gitlab_standard") is False
+
+    def test_legacy_token_does_not_validate_standard_mode(self):
+        # X-Gitlab-Token (legacy plaintext) is NOT the standard-webhooks
+        # wire format and must not validate under gitlab_standard.
+        adapter = _make_adapter()
+        req = _mock_request(headers={"X-Gitlab-Token": SECRET})
+        assert adapter._validate_signature(req, BODY, SECRET, signature_mode="gitlab_standard") is False
+
+
+class TestHindsightMode:
+    """Hindsight signatures (issue #80327, fix by sg-shag in #80329).
+
+    The wire contract: X-Hindsight-Signature carrying sha256=<hex> of the
+    raw body — the same contract as GitHub, different header name.
+    """
+
+    def test_accepts_hindsight_wire_format(self):
+        adapter = _make_adapter()
+        sig = "sha256=" + hmac.new(
+            SECRET.encode(), BODY, hashlib.sha256
+        ).hexdigest()
+        req = _mock_request(headers={"X-Hindsight-Signature": sig})
+        assert adapter._validate_signature(req, BODY, SECRET, signature_mode="hindsight") is True
+
+    def test_rejects_under_github_mode(self):
+        adapter = _make_adapter()
+        sig = "sha256=" + hmac.new(
+            SECRET.encode(), BODY, hashlib.sha256
+        ).hexdigest()
+        req = _mock_request(headers={"X-Hindsight-Signature": sig})
+        assert adapter._validate_signature(req, BODY, SECRET, signature_mode="github") is False
+
+    def test_wrong_body_rejects(self):
+        adapter = _make_adapter()
+        sig = "sha256=" + hmac.new(
+            SECRET.encode(), BODY, hashlib.sha256
+        ).hexdigest()
+        req = _mock_request(headers={"X-Hindsight-Signature": sig})
+        tampered = b'{"event": "delete"}'
+        assert adapter._validate_signature(req, tampered, SECRET, signature_mode="hindsight") is False
+
+    def test_github_header_does_not_validate_hindsight_mode(self):
+        adapter = _make_adapter()
+        req = _mock_request(headers={"X-Hub-Signature-256": _github_signature(BODY, SECRET)})
+        assert adapter._validate_signature(req, BODY, SECRET, signature_mode="hindsight") is False

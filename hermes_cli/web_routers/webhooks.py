@@ -41,6 +41,7 @@ def _webhook_route_summary(name: str, route: Dict[str, Any], base_url: str) -> D
         "url": f"{base_url}/webhooks/{name}",
         # Secret is masked on read; full value only returned on create.
         "secret_set": bool(route.get("secret")),
+        "signature_mode": route.get("signature_mode", "generic_v2"),
         # Default-enabled; only an explicit enabled:false turns a route off.
         "enabled": route.get("enabled", True) is not False,
     }
@@ -134,6 +135,8 @@ async def create_webhook(body: WebhookCreate):
         route["deliver_only"] = True
     if body.deliver_chat_id:
         route["deliver_extra"] = {"chat_id": body.deliver_chat_id}
+    if body.signature_mode and body.signature_mode.strip():
+        route["signature_mode"] = body.signature_mode.strip().lower()
 
     subs = wh._load_subscriptions()
     subs[name] = route

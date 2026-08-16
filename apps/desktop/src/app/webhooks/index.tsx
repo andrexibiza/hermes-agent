@@ -55,6 +55,16 @@ import { ListRow } from '../settings/primitives'
 
 const DELIVER_OPTIONS: readonly string[] = ['log', 'telegram', 'discord', 'slack', 'email', 'github_comment']
 
+const SIGNATURE_MODE_OPTIONS: readonly string[] = [
+  'generic_v2',
+  'github',
+  'gitlab',
+  'gitlab_standard',
+  'hindsight',
+  'svix',
+  'generic_v1'
+]
+
 interface CreatedWebhook {
   secret: string
   url: string
@@ -99,6 +109,7 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
   const [events, setEvents] = useState('')
   const [deliver, setDeliver] = useState('log')
   const [deliverOnly, setDeliverOnly] = useState(false)
+  const [signatureMode, setSignatureMode] = useState('')
   const [prompt, setPrompt] = useState('')
   const [skills, setSkills] = useState('')
   const [creating, setCreating] = useState(false)
@@ -193,6 +204,7 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
     setEvents('')
     setDeliver('log')
     setDeliverOnly(false)
+    setSignatureMode('')
     setPrompt('')
     setSkills('')
   }, [])
@@ -233,6 +245,7 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
         events: eventsList.length ? eventsList : undefined,
         name: name.trim(),
         prompt: prompt.trim() || undefined,
+        signature_mode: signatureMode.trim() || undefined,
         skills: skillsList.length ? skillsList : undefined
       })
 
@@ -245,7 +258,7 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
     } finally {
       setCreating(false)
     }
-  }, [deliver, deliverOnly, description, events, name, prompt, reload, resetForm, skills, w])
+  }, [deliver, deliverOnly, description, events, name, prompt, reload, resetForm, signatureMode, skills, w])
 
   const handleToggle = useCallback(
     async (subName: string, nextEnabled: boolean) => {
@@ -503,6 +516,23 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
                     </SelectContent>
                   </Select>
                 </Field>
+                <Field htmlFor="webhook-signature-mode" label={w.fieldSignatureMode}>
+                  <Select onValueChange={setSignatureMode} value={signatureMode}>
+                    <SelectTrigger className="h-9 rounded-md" id="webhook-signature-mode">
+                      <SelectValue placeholder={w.fieldSignatureModePlaceholder} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SIGNATURE_MODE_OPTIONS.map(opt => (
+                        <SelectItem key={opt} value={opt}>
+                          {opt}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+
+              <div className="grid items-start gap-4 sm:grid-cols-2">
                 <Field htmlFor="webhook-deliver-only" label={w.fieldDeliverOnly}>
                   <div className="flex h-9 items-center">
                     <Switch checked={deliverOnly} id="webhook-deliver-only" onCheckedChange={setDeliverOnly} />
@@ -558,6 +588,7 @@ function WebhookDetail({ sub }: { sub: WebhookRoute }) {
         <PanelMeta
           rows={[
             { label: w.fieldDeliver, value: w.deliverOptions[sub.deliver] ?? sub.deliver },
+            { label: w.fieldSignatureMode, value: sub.signature_mode ?? 'generic_v2' },
             {
               label: w.fieldEvents,
               value:

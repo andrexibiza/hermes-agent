@@ -37,7 +37,15 @@ DEFAULT_REPLAY_TOLERANCE_SECONDS = 300
 # Supported provider schemes. Routes bind to exactly one of these via
 # ``signature_mode``; validation never infers a scheme from request headers.
 SIGNATURE_MODES = frozenset(
-    {"github", "gitlab", "svix", "generic_v2", "generic_v1"}
+    {
+        "github",
+        "gitlab",
+        "gitlab_standard",
+        "hindsight",
+        "svix",
+        "generic_v2",
+        "generic_v1",
+    }
 )
 
 
@@ -70,6 +78,17 @@ class WebhookAuthMixin:
         if not gl_token:
             return False
         return _hmac_str_equal(gl_token, secret)
+
+    def _verify_hindsight(self, request, body, secret) -> bool:
+        # Hindsight (issue #80327, fix by sg-shag in #80329): same
+        # sha256=<hex> raw-body contract as GitHub, different header name.
+        hs_sig = _header(request, "X-Hindsight-Signature")
+        if not hs_sig:
+            return False
+        expected = "sha256=" + hmac.new(
+            secret.encode(), body, hashlib.sha256
+        ).hexdigest()
+        return _hmac_str_equal(hs_sig, expected)
 
     def _verify_generic_v2(self, request, body, secret) -> bool:
         v2_sig = _header(request, "X-Webhook-Signature-V2")
@@ -137,6 +156,20 @@ class WebhookAuthMixin:
             return self._verify_github(request, body, secret)
         if signature_mode == "gitlab":
             return self._verify_gitlab(request, secret)
+        if signature_mode == "gitlab_standard":
+            # Standard Webhooks (issue #47451, fix by HwangJohn in #47849):
+            # webhook-id / webhook-timestamp / webhook-signature headers,
+            # signed content "{id}.{timestamp}.{raw_body}" with a
+            # v1,<base64-hmac-sha256> signature — same wire format as Svix.
+            return self._validate_svix_signature(
+                body=body,
+                secret=secret,
+                msg_id=_header(request, "webhook-id"),
+                timestamp=_header(request, "webhook-timestamp"),
+                signature_header=_header(request, "webhook-signature"),
+            )
+        if signature_mode == "hindsight":
+            return self._verify_hindsight(request, body, secret)
         if signature_mode == "svix":
             svix_id = _header(request, "svix-id")
             svix_timestamp = _header(request, "svix-timestamp")

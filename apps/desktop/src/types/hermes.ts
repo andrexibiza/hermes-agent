@@ -280,6 +280,7 @@ export interface WebhookRoute {
   name: string
   prompt: string
   secret_set: boolean
+  signature_mode: null | string
   skills: string[]
   url: string
 }
@@ -298,6 +299,7 @@ export interface WebhookCreatePayload {
   events?: string[]
   name: string
   prompt?: string
+  signature_mode?: string
   skills?: string[]
 }
 

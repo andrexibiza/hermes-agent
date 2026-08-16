@@ -181,6 +181,13 @@ def _cmd_subscribe(args):
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
+    # Explicit signature_mode on the route: subscribe writes it through so
+    # the gateway validates with the caller's declared provider scheme
+    # instead of defaulting every implicit route to generic_v2.
+    sig_mode = getattr(args, "signature_mode", "") or ""
+    if sig_mode:
+        route["signature_mode"] = sig_mode.strip().lower()
+
     if getattr(args, "deliver_only", False):
         if route["deliver"] == "log":
             print(
@@ -211,6 +218,7 @@ def _cmd_subscribe(args):
     else:
         print("  Events: (all)")
     print(f"  Deliver: {route['deliver']}")
+    print(f"  Signature mode: {route.get('signature_mode', 'generic_v2 (default)')}")
     if route.get("deliver_only"):
         print("  Mode: direct delivery (no agent, zero LLM cost)")
     if route.get("prompt"):
@@ -282,21 +290,65 @@ def _cmd_test(args):
 
     import hmac
     import hashlib
-    sig = "sha256=" + hmac.new(
-        secret.encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()
+    import base64
+    import time
+
+    # Sign with the route's configured signature_mode so the test exercises
+    # the exact wire format the gateway will validate.
+    sig_mode = route.get("signature_mode", "generic_v2")
+    body_bytes = payload.encode()
+    headers = {"Content-Type": "application/json"}
+
+    if sig_mode == "github":
+        sig = "sha256=" + hmac.new(
+            secret.encode(), body_bytes, hashlib.sha256
+        ).hexdigest()
+        headers["X-Hub-Signature-256"] = sig
+        headers["X-GitHub-Event"] = "test"
+    elif sig_mode == "hindsight":
+        # Same sha256=<hex> raw-body contract as GitHub (issue #80327).
+        sig = "sha256=" + hmac.new(
+            secret.encode(), body_bytes, hashlib.sha256
+        ).hexdigest()
+        headers["X-Hindsight-Signature"] = sig
+    elif sig_mode == "gitlab":
+        headers["X-Gitlab-Token"] = secret
+    elif sig_mode in ("gitlab_standard", "svix"):
+        # Standard Webhooks / Svix: v1,<base64-hmac-sha256> of
+        # "{id}.{timestamp}.{raw_body}" (issue #47451).
+        msg_id = f"msg_test_{int(time.time() * 1000)}"
+        ts = str(int(time.time()))
+        signed = f"{msg_id}.{ts}.".encode() + body_bytes
+        sig = "v1," + base64.b64encode(
+            hmac.new(secret.encode(), signed, hashlib.sha256).digest()
+        ).decode()
+        if sig_mode == "gitlab_standard":
+            headers["webhook-id"] = msg_id
+            headers["webhook-timestamp"] = ts
+            headers["webhook-signature"] = sig
+        else:
+            headers["svix-id"] = msg_id
+            headers["svix-timestamp"] = ts
+            headers["svix-signature"] = sig
+    elif sig_mode == "generic_v1":
+        sig = hmac.new(
+            secret.encode(), body_bytes, hashlib.sha256
+        ).hexdigest()
+        headers["X-Webhook-Signature"] = sig
+    else:  # generic_v2 (default)
+        ts = str(int(time.time()))
+        signed = ts.encode() + b"." + body_bytes
+        sig = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+        headers["X-Webhook-Timestamp"] = ts
+        headers["X-Webhook-Signature-V2"] = sig
 
     print(f"  Sending test POST to {url}")
     try:
         import urllib.request
         req = urllib.request.Request(
             url,
-            data=payload.encode(),
-            headers={
-                "Content-Type": "application/json",
-                "X-Hub-Signature-256": sig,
-                "X-GitHub-Event": "test",
-            },
+            data=body_bytes,
+            headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:

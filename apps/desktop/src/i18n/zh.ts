@@ -1752,6 +1752,8 @@ export const zh: Translations = {
     fieldSkillsPlaceholder: '以逗号分隔的技能名称（可选）',
     fieldDeliver: '投递到',
     fieldDeliverOnly: '仅投递载荷',
+    fieldSignatureMode: '签名模式',
+    fieldSignatureModePlaceholder: 'generic_v2（默认）',
     fieldPrompt: '提示词',
     fieldPromptPlaceholder: '此 Webhook 触发时给智能体的说明（可选）',
     nameRequired: '需要名称',
