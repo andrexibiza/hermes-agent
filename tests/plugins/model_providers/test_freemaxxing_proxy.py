@@ -546,9 +546,10 @@ def test_healthz_endpoint():
         data = json.loads(urllib.request.urlopen(
             f"http://127.0.0.1:{port}/healthz", timeout=10.0
         ).read().decode())
-        assert len(data["backends"]) == 1
-        assert data["backends"][0]["name"] == "b1"
-        assert data["backends"][0]["available"] is True
+        assert data["service"] == "freemaxxing"
+        assert len(data["health"]["backends"]) == 1
+        assert data["health"]["backends"][0]["name"] == "b1"
+        assert data["health"]["backends"][0]["available"] is True
     finally:
         _teardown(proxy, [b1])
 
