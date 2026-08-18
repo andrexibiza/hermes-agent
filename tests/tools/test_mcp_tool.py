@@ -625,7 +625,11 @@ class TestToolHandler:
             with self._patch_mcp_loop():
                 result = json.loads(handler({"name": "world"}))
             assert result["result"] == "hello world"
-            mock_session.call_tool.assert_called_once_with("greet", arguments={"name": "world"})
+            # #88698 R2: the MRTR opt-in (allow_input_required=True) is now
+            # always passed on the result-bearing call sites.
+            mock_session.call_tool.assert_called_once_with(
+                "greet", arguments={"name": "world"}, allow_input_required=True
+            )
         finally:
             _servers.pop("test_srv", None)
 
@@ -656,7 +660,11 @@ class TestToolHandler:
                 result = json.loads(handler({"name": "world"}))
             assert result["result"] == "reconnected"
             reconnect.assert_called_once()
-            mock_session.call_tool.assert_called_once_with("greet", arguments={"name": "world"})
+            # #88698 R2: the MRTR opt-in (allow_input_required=True) is now
+            # always passed on the result-bearing call sites.
+            mock_session.call_tool.assert_called_once_with(
+                "greet", arguments={"name": "world"}, allow_input_required=True
+            )
         finally:
             _servers.pop("test_srv", None)
 
@@ -1677,8 +1685,10 @@ class TestUtilityHandlers:
             assert len(result["messages"]) == 1
             assert result["messages"][0]["role"] == "assistant"
             assert "summary" in result["messages"][0]["content"].lower()
+            # #88698 R2: the MRTR opt-in (allow_input_required=True) is now
+            # always passed on the result-bearing call sites.
             mock_session.get_prompt.assert_called_once_with(
-                "summarize", arguments={"text": "hello"}
+                "summarize", arguments={"text": "hello"}, allow_input_required=True
             )
         finally:
             _servers.pop("srv", None)

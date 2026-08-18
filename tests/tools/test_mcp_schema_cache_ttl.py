@@ -115,9 +115,10 @@ def test_config_digest_mismatch_is_a_miss():
     assert sc.get_cached_entry("srv", "fp") is not None
     assert sc.get_cached_entry("srv", "fp", config_digest="B") is None
     assert sc.get_cached_entry("srv", "fp", config_digest="A") is not None
-    # An entry written WITHOUT a digest is served for any read digest.
+    # A read with a digest never matches an entry written without one
+    # (stored None) — fail closed on hand-written/legacy entries.
     sc.write_cache_entry("srv2", "fp", tools=[{"name": "t"}])
-    assert sc.get_cached_entry("srv2", "fp", config_digest="X") is not None
+    assert sc.get_cached_entry("srv2", "fp", config_digest="X") is None
 
 
 def test_partition_keying_no_eviction():

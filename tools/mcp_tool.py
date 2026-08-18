@@ -986,6 +986,17 @@ def _mcp_types():
 _LISTEN_RETRY_BACKOFFS = (1.0, 5.0, 15.0)
 
 
+def _open_listen_stream(session):
+    """Open one ``subscriptions/listen`` stream on *session* (modern era only).
+
+    Thin seam over ``mcp.client.subscriptions.listen`` so the supervision
+    loop stays testable with duck-typed sessions.
+    """
+    from mcp.client.subscriptions import listen
+
+    return listen(session, tools_list_changed=True)
+
+
 def _is_tools_list_changed_event(event) -> bool:
     """True when a ``subscriptions/listen`` event is a tools/list_changed.
 
@@ -3021,7 +3032,6 @@ class MCPServerTask:
         """
         try:
             from mcp.client.subscriptions import (
-                listen,
                 ListenNotSupportedError,
                 SubscriptionLost,
                 ToolsListChanged,
@@ -3031,14 +3041,17 @@ class MCPServerTask:
         session = self.session
         if session is None:
             return
+        # Per-supervision recovery counter: reset when this supervision
+        # starts, incremented on every SubscriptionLost/abrupt drop, and
+        # left visible after recovery so operators can observe re-listens.
+        self._listen_recovery_count = 0
         max_attempts = 3
         attempt = 0
         while attempt < max_attempts and self.session is session:
             attempt += 1
             try:
-                async with listen(session, tools_list_changed=True) as sub:
+                async with _open_listen_stream(session) as sub:
                     self.subscription_state = "active"
-                    self._listen_recovery_count = 0
                     async for event in sub:
                         if not _is_tools_list_changed_event(event):
                             continue
@@ -6130,8 +6143,11 @@ async def _call_with_input_required(
         return await session_method(*args, **kwargs)
 
     session = server.session if hasattr(server, "session") else None
+    server_name = getattr(server, "name", "?")
     generation = getattr(server, "_connection_generation", None)
-    max_rounds = int((server._config or {}).get("input_required_max_rounds", 10) or 10)
+    max_rounds = int(
+        (getattr(server, "_config", None) or {}).get("input_required_max_rounds", 10) or 10
+    )
     max_rounds = max(1, max_rounds)
     supports_read_timeout = (
         "read_timeout_seconds" in _method_params(session_method)
@@ -6178,8 +6194,14 @@ async def _call_with_input_required(
         if captured is None:
             return await session.dispatch_input_request(ctx, req)
         # Replay the agent's contextvars (gateway-platform attribution) —
-        # same pattern as ElicitationHandler._invoke_consent.
-        return await captured.copy().run(session.dispatch_input_request, ctx, req)
+        # same intent as ElicitationHandler._invoke_consent. Context.run()
+        # only propagates context to SYNC callables; for the async dispatch
+        # the coroutine must be run as a task bound to the captured context.
+        task = asyncio.create_task(
+            session.dispatch_input_request(ctx, req),
+            context=captured.copy(),
+        )
+        return await task
 
     result = await _invoke()
     rounds = 0
@@ -6196,7 +6218,7 @@ async def _call_with_input_required(
         if input_requests:
             logger.info(
                 "MCP server '%s': MRTR round %d/%d — dispatching %s",
-                server.name, rounds, max_rounds,
+                server_name, rounds, max_rounds,
                 ", ".join(sorted(input_requests.keys())),
             )
             responses = {}
@@ -6205,7 +6227,7 @@ async def _call_with_input_required(
                 outcome = await _dispatch(key, req)
                 if isinstance(outcome, ErrorData):
                     raise RuntimeError(
-                        f"MCP server '{server.name}' refused input request "
+                        f"MCP server '{server_name}' refused input request "
                         f"{key!r} (decline/cancel) — aborting the tool call "
                         f"(no retry of refused input)"
                     )
@@ -6217,7 +6239,7 @@ async def _call_with_input_required(
             logger.info(
                 "MCP server '%s': MRTR round %d/%d — state-only leg "
                 "(no input requests), retrying",
-                server.name, rounds, max_rounds,
+                server_name, rounds, max_rounds,
             )
             responses = None
         result = await _invoke(
@@ -6227,7 +6249,7 @@ async def _call_with_input_required(
         )
     logger.info(
         "MCP server '%s': MRTR continuation completed after %d round(s)",
-        server.name, rounds,
+        server_name, rounds,
     )
     return result
 
