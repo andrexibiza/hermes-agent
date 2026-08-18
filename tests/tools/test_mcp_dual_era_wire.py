@@ -210,7 +210,7 @@ def test_negotiated_state_observable_after_legacy_and_stateless_wires(
                 out = await task._negotiate_session(session, 30)
                 assert out is not None
                 task.session = session
-                results["legacy"] = task
+                results["wire-legacy"] = task
 
     async def connect_stateless_wire():
         async with stdio_client(modern_params) as (read, write):
@@ -220,7 +220,7 @@ def test_negotiated_state_observable_after_legacy_and_stateless_wires(
                 out = await task._negotiate_session(session, 30)
                 assert out is not None
                 task.session = session
-                results["stateless"] = task
+                results["wire-stateless"] = task
 
     async def connect_cross_era_no_downgrade():
         # prefer-modern client against a LEGACY (1.28.1) server: FastMCP 1.x
@@ -241,7 +241,7 @@ def test_negotiated_state_observable_after_legacy_and_stateless_wires(
                 assert task.negotiated_era == "none"
                 assert task.fallback_reason == "none"
                 task.session = session
-                results["cross-era"] = task
+                results["wire-cross-era"] = task
 
     _run(connect_legacy_wire())
     _run(connect_stateless_wire())
