@@ -2626,6 +2626,11 @@ class MCPServerTask:
         """
         raw_value = (self._config or {}).get("protocol", "auto")
         policy = self._protocol_policy or _resolve_protocol_policy(raw_value)
+        # Record the resolved policy on the server object so the status
+        # surface (get_mcp_status protocol.policy) is correct regardless of
+        # entry path — run() sets it, but a directly-driven _negotiate_session
+        # (tests, embedded reuse) must too.
+        self._protocol_policy = policy
         # Fresh transport re-entry: reset per-connection negotiated state and
         # bump the connection generation the MRTR continuation binds to.
         self.negotiated_era = "none"
