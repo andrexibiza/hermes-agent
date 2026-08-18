@@ -45,6 +45,135 @@ class TestPaginateFullList:
         assert len(items) == _MCP_LIST_MAX_PAGES
 
 
+class TestCacheMetaAggregation:
+    """#88698 R3: SEP-2549 hints aggregate conservatively across ALL pages."""
+
+    def _page(self, ttl=None, scope=None, cursor=None):
+        return SimpleNamespace(
+            tools=[_tool("a")],
+            ttl_ms=ttl,
+            cache_scope=scope,
+            nextCursor=cursor,
+        )
+
+    def test_ttl_aggregates_min_across_pages(self):
+        meta = {}
+        pages = {
+            None: self._page(ttl=60_000, cursor="p2"),
+            "p2": self._page(ttl=5_000),
+        }
+
+        async def list_method(cursor=None):
+            return pages[cursor]
+
+        asyncio.run(
+            _paginate_full_list(list_method, "tools", "srv", cache_meta_out=meta)
+        )
+        assert meta["ttl_ms"] == 5_000
+
+    def test_zero_ttl_wins(self):
+        meta = {}
+        pages = {
+            None: self._page(ttl=60_000, cursor="p2"),
+            "p2": self._page(ttl=0),
+        }
+
+        async def list_method(cursor=None):
+            return pages[cursor]
+
+        asyncio.run(
+            _paginate_full_list(list_method, "tools", "srv", cache_meta_out=meta)
+        )
+        assert meta["ttl_ms"] == 0
+
+    def test_page1_ttl_still_captured(self):
+        # Regression for the old ``not items`` path: a single page's hint
+        # must still be recorded.
+        meta = {}
+
+        async def list_method(cursor=None):
+            return self._page(ttl=60_000)
+
+        asyncio.run(
+            _paginate_full_list(list_method, "tools", "srv", cache_meta_out=meta)
+        )
+        assert meta["ttl_ms"] == 60_000
+
+    def test_numeric_string_ttl_coerced(self):
+        meta = {}
+
+        async def list_method(cursor=None):
+            return self._page(ttl="5000")
+
+        asyncio.run(
+            _paginate_full_list(list_method, "tools", "srv", cache_meta_out=meta)
+        )
+        assert meta["ttl_ms"] == 5000.0
+
+        meta2 = {}
+
+        async def list_method2(cursor=None):
+            return self._page(ttl="soon")
+
+        asyncio.run(
+            _paginate_full_list(list_method2, "tools", "srv", cache_meta_out=meta2)
+        )
+        assert "ttl_ms" not in meta2
+
+    def test_scope_conflict_fails_closed(self):
+        meta = {}
+        pages = {
+            None: self._page(ttl=60_000, scope="public", cursor="p2"),
+            "p2": self._page(ttl=60_000, scope="private"),
+        }
+
+        async def list_method(cursor=None):
+            return pages[cursor]
+
+        asyncio.run(
+            _paginate_full_list(list_method, "tools", "srv", cache_meta_out=meta)
+        )
+        assert meta["cache_scope"] == "private"
+
+        meta2 = {}
+
+        async def list_method2(cursor=None):
+            return self._page(ttl=60_000, scope="public")
+
+        asyncio.run(
+            _paginate_full_list(list_method2, "tools", "srv", cache_meta_out=meta2)
+        )
+        assert meta2["cache_scope"] == "public"
+
+    def test_scope_captured_from_any_page(self):
+        # Fixes the page-1-missing case: the hint may arrive on page 2.
+        meta = {}
+        pages = {
+            None: self._page(ttl=60_000, cursor="p2"),
+            "p2": self._page(ttl=60_000, scope="public"),
+        }
+
+        async def list_method(cursor=None):
+            return pages[cursor]
+
+        asyncio.run(
+            _paginate_full_list(list_method, "tools", "srv", cache_meta_out=meta)
+        )
+        assert meta["cache_scope"] == "public"
+
+    def test_no_cache_meta_out_is_noop(self):
+        pages = {
+            None: self._page(ttl=60_000, cursor="p2"),
+            "p2": self._page(ttl=5_000),
+        }
+
+        async def list_method(cursor=None):
+            return pages[cursor]
+
+        items = asyncio.run(_paginate_full_list(list_method, "tools", "srv"))
+        assert len(items) == 2
+
+
 class TestDiscoveryUsesPagination:
     def test_discover_tools_drains_all_pages(self):
         """MCPServerTask._discover_tools registers tools from every page."""
