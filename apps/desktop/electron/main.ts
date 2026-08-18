@@ -259,6 +259,7 @@ import {
 import { createQuickEntryShortcut, quickEntryWindowBounds, sanitizeQuickEntrySettings } from './quick-entry'
 import { type ActiveWork, mergeActiveWork, normalizeActiveWork, quitPromptFor } from './quit-guard'
 import * as remoteLifecycle from './remote-lifecycle'
+import { scrubDesktopChildEnv } from './scrub-child-env'
 import {
   RemoteLivenessTracker,
   RemoteRevalidationCoordinator,
@@ -2107,7 +2108,7 @@ function backendSupportsServe(backend) {
       // and its timeout-only retry instead of a thinner local bound.
       execProbeSync(backend.command, [...prefix, 'serve', '--help'], {
         cwd: backend.root || undefined,
-        env: { ...process.env, HERMES_HOME, ...(backend.env || {}) },
+        env: scrubDesktopChildEnv(process.env, { HERMES_HOME, ...(backend.env || {}) }),
         timeout: PROBE_TIMEOUT_MS,
         stdio: 'ignore',
         // `.cmd`/`.bat` shim backends carry shell: true in their descriptor
@@ -3565,11 +3566,10 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
 
       child = spawnUpdaterProcess(wrapped.command, wrapped.args, {
         cwd: HERMES_HOME,
-        env: {
-          ...process.env,
+        env: scrubDesktopChildEnv(process.env, {
           HERMES_HOME,
           PATH: pathWithHermesManagedNode(venvBin)
-        },
+        }),
         detached: true,
         stdio: 'ignore'
       })
@@ -3591,11 +3591,10 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
     } else {
       child = spawnUpdaterProcess(updater, updaterArgs, {
         cwd: HERMES_HOME,
-        env: {
-          ...process.env,
+        env: scrubDesktopChildEnv(process.env, {
           HERMES_HOME,
           PATH: pathWithHermesManagedNode(venvBin)
-        },
+        }),
         detached: true,
         stdio: 'ignore'
       })
@@ -3722,11 +3721,10 @@ async function handOffWindowsBootstrapRecovery(reason) {
 
   const child = spawnUpdaterProcess(updater, updaterArgs, {
     cwd: HERMES_HOME,
-    env: {
-      ...process.env,
+    env: scrubDesktopChildEnv(process.env, {
       HERMES_HOME,
       PATH: pathWithHermesManagedNode(venvBin)
-    },
+    }),
     detached: true,
     stdio: 'ignore'
   })
@@ -3950,11 +3948,10 @@ async function applyUpdatesPosixHandoff(opts: any) {
 
   const child = spawnUpdaterProcess(handoff.command, args, {
     cwd: HERMES_HOME,
-    env: {
-      ...process.env,
+    env: scrubDesktopChildEnv(process.env, {
       HERMES_HOME,
       PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
-    },
+    }),
     detached: true,
     stdio: 'ignore'
   })
@@ -9939,8 +9936,7 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
     backend.args,
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
-      env: {
-        ...process.env,
+      env: scrubDesktopChildEnv(process.env, {
         HERMES_HOME,
         ...backend.env,
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
@@ -9957,7 +9953,7 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
         ...parentIdentityEnv,
         HERMES_WEB_DIST: webDist,
         ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
-      },
+      }),
       shell: backend.shell,
       stdio: ['ignore', 'pipe', 'pipe']
     })
@@ -10310,8 +10306,7 @@ async function startHermes() {
       backend.args,
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
-        env: {
-          ...process.env,
+        env: scrubDesktopChildEnv(process.env, {
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
           // this pin, Python falls back to ~/.hermes on every platform — fine on
@@ -10333,7 +10328,7 @@ async function startHermes() {
           ...parentIdentityEnv,
           HERMES_WEB_DIST: webDist,
           ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
-        },
+        }),
         shell: backend.shell,
         stdio: ['ignore', 'pipe', 'pipe']
       })
@@ -14085,7 +14080,10 @@ function terminalShellEnv() {
   // which marks the agent *backend* and gates cron/gateway behavior.
   env.HERMES_DESKTOP_TERMINAL = '1'
 
-  return env
+  // Drop provider / messaging secrets that may ride along from the parent
+  // Electron process. The backend loads credentials from HERMES_HOME/.env;
+  // an interactive PTY must not inherit them into the user's shell.
+  return scrubDesktopChildEnv(env)
 }
 
 function terminalChannel(id, suffix) {
@@ -14654,7 +14652,7 @@ async function getUninstallSummary() {
         ['-m', 'hermes_cli.main', 'uninstall', '--gui-summary'],
         hiddenWindowsChildOptions({
           cwd: agentRoot,
-          env: { ...process.env, HERMES_HOME, NO_COLOR: '1' },
+          env: scrubDesktopChildEnv(process.env, { HERMES_HOME, NO_COLOR: '1' }),
           stdio: ['ignore', 'pipe', 'ignore']
         })
       )
