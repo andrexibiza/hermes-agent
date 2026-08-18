@@ -222,21 +222,30 @@ def test_negotiated_state_observable_after_legacy_and_stateless_wires(
                 task.session = session
                 results["stateless"] = task
 
-    async def connect_cross_era_fallback():
-        # prefer-modern client against a LEGACY (1.28.1) server: discover is
-        # rejected with the exact -32601 signal → recorded fallback.
+    async def connect_cross_era_no_downgrade():
+        # prefer-modern client against a LEGACY (1.28.1) server: FastMCP 1.x
+        # rejects the unknown `server/discover` method with -32602
+        # (INVALID_PARAMS — its typed request union does not know the method),
+        # NOT the exact modern-rejection signals (-32022/-32601). Per the
+        # exact-signal-only fallback rule the client must NOT silently
+        # downgrade to the handshake era on INVALID_PARAMS: the error
+        # propagates and the connection stays unnegotiated.
+        from mcp.shared.exceptions import MCPError
+
         async with stdio_client(legacy_params) as (read, write):
             async with ClientSession(read, write) as session:
                 task = mcp_tool.MCPServerTask("wire-cross-era")
                 task._config = {"protocol": "prefer-modern", "command": "x"}
-                out = await task._negotiate_session(session, 30)
-                assert out is not None
+                with pytest.raises(MCPError):
+                    await task._negotiate_session(session, 30)
+                assert task.negotiated_era == "none"
+                assert task.fallback_reason == "none"
                 task.session = session
                 results["cross-era"] = task
 
     _run(connect_legacy_wire())
     _run(connect_stateless_wire())
-    _run(connect_cross_era_fallback())
+    _run(connect_cross_era_no_downgrade())
 
     monkeypatch.setattr(
         mcp_tool, "_load_mcp_config",
@@ -277,5 +286,9 @@ def test_negotiated_state_observable_after_legacy_and_stateless_wires(
 
     cross_era_proto = statuses["wire-cross-era"]["protocol"]
     assert cross_era_proto["policy"] == "prefer-modern"
-    assert cross_era_proto["negotiated_era"] == "legacy"
-    assert cross_era_proto["fallback_reason"] == "discover_rejected"
+    # A real legacy 1.28.1 server rejects `server/discover` with -32602, so
+    # the exact-signal-only fallback correctly leaves the connection
+    # unnegotiated (no silent downgrade to the handshake era).
+    assert cross_era_proto["negotiated_era"] == "none"
+    assert cross_era_proto["fallback_reason"] == "none"
+    assert cross_era_proto["connection_generation"] >= 1
