@@ -741,6 +741,65 @@ def cmd_mcp_list(args=None):
     print()
 
 
+# ─── hermes mcp status ────────────────────────────────────────────────────────
+
+def cmd_mcp_status(args=None):
+    """Show live MCP connection status incl. negotiated protocol state.
+
+    Unlike ``hermes mcp list`` (config-only), this prints
+    ``tools.mcp_tool.get_mcp_status()`` — live per-server state plus the
+    negotiated protocol sub-dict (resolved policy, negotiated era/version,
+    fallback reason, server identity, connection generation, liveness
+    strategy, subscription state, cache state) added for #88698 R5.
+    """
+    try:
+        from tools.mcp_tool import get_mcp_status
+    except Exception as exc:
+        _error(f"Could not load MCP status: {exc}")
+        return
+
+    entries = get_mcp_status()
+    if not entries:
+        print()
+        _info("No MCP servers configured.")
+        print()
+        _info("Add one with:")
+        _info('  hermes mcp add <name> --url <endpoint>')
+        _info('  hermes mcp add <name> --command <cmd> --args <args...>')
+        print()
+        return
+
+    print()
+    print(color("  MCP Servers (live status):", Colors.CYAN + Colors.BOLD))
+    print()
+
+    for entry in entries:
+        name = entry.get("name", "?")
+        status = entry.get("status", "?")
+        transport = entry.get("transport", "?")
+        tools = entry.get("tools", 0)
+        print(f"  {name:<20} {status:<12} {transport:<30} {tools} tool(s)")
+
+        protocol = entry.get("protocol")
+        if protocol:
+            print(f"    protocol policy:       {protocol.get('policy') or 'n/a'}")
+            print(f"    negotiated era:        {protocol.get('negotiated_era') or 'n/a'}")
+            print(f"    protocol version:      {protocol.get('negotiated_protocol_version') or 'n/a'}")
+            print(f"    fallback reason:       {protocol.get('fallback_reason') or 'none'}")
+            identity = protocol.get("server_identity")
+            if identity:
+                print(f"    server identity:       {identity}")
+            print(f"    connection generation: {protocol.get('connection_generation', 0)}")
+            print(f"    liveness strategy:     {protocol.get('liveness_strategy') or 'none'}")
+            print(f"    subscription state:    {protocol.get('subscription_state') or 'none'}")
+            print(f"    cache state:           {protocol.get('cache_state') or 'none'}")
+        if entry.get("error"):
+            print(f"    error:                 {entry['error']}")
+        print()
+
+    print()
+
+
 # ─── hermes mcp test ──────────────────────────────────────────────────────────
 
 def cmd_mcp_test(args):
@@ -1126,6 +1185,7 @@ def mcp_command(args):
         "rm": cmd_mcp_remove,
         "list": cmd_mcp_list,
         "ls": cmd_mcp_list,
+        "status": cmd_mcp_status,
         "test": cmd_mcp_test,
         "configure": cmd_mcp_configure,
         "config": cmd_mcp_configure,

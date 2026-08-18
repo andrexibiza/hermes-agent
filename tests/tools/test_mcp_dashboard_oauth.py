@@ -27,7 +27,8 @@ def test_dashboard_flow_exposes_authorization_url_and_accepts_callback():
     }
 
     flow.deliver_callback(code="code-1", state="s1", error=None)
-    assert asyncio.run(flow.wait_for_callback()) == ("code-1", "s1")
+    # #88698 R4: the bridge callback is a (code, state, iss) 3-tuple.
+    assert asyncio.run(flow.wait_for_callback()) == ("code-1", "s1", None)
 
 
 def test_dashboard_flow_accepts_only_one_concurrent_callback():
@@ -91,11 +92,18 @@ def test_mcp_oauth_helpers_use_dashboard_flow_without_loopback_port():
                 "https://idp.example/authorize?state=state-4"
             )
         )
-        flow.deliver_callback(code="code-4", state="state-4", error=None)
+        # RFC 9207 ``iss``: delivered verbatim through the bridge and fed
+        # into the SDK's AuthorizationCodeResult (#88698 R4) — this is the
+        # waiter's dashboard branch (the site where the drop used to land).
+        flow.deliver_callback(
+            code="code-4", state="state-4", error=None,
+            iss="https://idp.example",
+        )
         # mcp 2.0's callback_handler contract returns an
         # AuthorizationCodeResult, not the legacy (code, state) tuple.
         result = asyncio.run(_make_callback_waiter(0)())
         assert (result.code, result.state) == ("code-4", "state-4")
+        assert result.iss == "https://idp.example"
 
     assert flow.authorization_url == "https://idp.example/authorize?state=state-4"
 

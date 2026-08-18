@@ -312,6 +312,59 @@ class TestMCPStatus:
         assert statuses["disabled"]["status"] == "disabled"
         assert statuses["disabled"]["disabled"] is True
 
+    def test_connected_server_exposes_protocol_subdict(self, monkeypatch):
+        """#88698 R5: connected servers carry the negotiated protocol sub-dict."""
+        import tools.mcp_tool as mcp_tool
+
+        server = SimpleNamespace(
+            session=object(),
+            _registered_tool_names=["mcp--t"],
+            _tools=[],
+            _sampling=None,
+            _protocol_policy="prefer-modern",
+            negotiated_era="stateless",
+            negotiated_protocol_version="2026-07-28",
+            fallback_reason="none",
+            server_identity={"name": "hermes-test", "version": "1.0.0"},
+            _connection_generation=3,
+            liveness_strategy="ping",
+            subscription_state="active",
+            cache_state="live",
+        )
+        monkeypatch.setattr(
+            mcp_tool, "_load_mcp_config",
+            lambda: {"connected": {"command": "docker"}},
+        )
+        with mcp_tool._lock:
+            saved_servers = dict(mcp_tool._servers)
+            mcp_tool._servers.clear()
+            mcp_tool._servers["connected"] = server
+
+        try:
+            statuses = {
+                entry["name"]: entry
+                for entry in mcp_tool.get_mcp_status()
+            }
+        finally:
+            with mcp_tool._lock:
+                mcp_tool._servers.clear()
+                mcp_tool._servers.update(saved_servers)
+
+        entry = statuses["connected"]
+        assert entry["status"] == "connected"
+        protocol = entry["protocol"]
+        assert protocol["policy"] == "prefer-modern"
+        assert protocol["negotiated_era"] == "stateless"
+        assert protocol["negotiated_protocol_version"] == "2026-07-28"
+        assert protocol["fallback_reason"] == "none"
+        assert protocol["server_identity"] == {
+            "name": "hermes-test", "version": "1.0.0",
+        }
+        assert protocol["connection_generation"] == 3
+        assert protocol["liveness_strategy"] == "ping"
+        assert protocol["subscription_state"] == "active"
+        assert protocol["cache_state"] == "live"
+
 
 class TestLifecycleConfig:
     def test_get_lifecycle_seconds_accepts_top_level_and_nested_values(self):

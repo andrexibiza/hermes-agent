@@ -30,6 +30,109 @@ class TestConfigFingerprint:
             {**base, "timeout": 5, "enabled": True, "lazy": True}
         )
 
+    def test_changes_when_headers_change(self):
+        base = {"command": "npx", "args": []}
+        assert msc.config_fingerprint(base) != msc.config_fingerprint(
+            {**base, "headers": {"X-Tenant": "a"}}
+        )
+        # Header NAMES are case-insensitive (casing-only edits are stable).
+        assert msc.config_fingerprint(
+            {**base, "headers": {"X-Tenant": "a"}}
+        ) == msc.config_fingerprint(
+            {**base, "headers": {"x-tenant": "a"}}
+        )
+        # Header VALUES are hashed: changing the value changes the partition.
+        assert msc.config_fingerprint(
+            {**base, "headers": {"X-Tenant": "a"}}
+        ) != msc.config_fingerprint(
+            {**base, "headers": {"X-Tenant": "b"}}
+        )
+
+    def test_changes_when_env_changes(self):
+        base = {"command": "npx", "args": []}
+        assert msc.config_fingerprint(
+            {**base, "env": {"FOO": "a"}}
+        ) != msc.config_fingerprint(
+            {**base, "env": {"FOO": "b"}}
+        )
+        # Key order must not change the fingerprint.
+        assert msc.config_fingerprint(
+            {**base, "env": {"FOO": "a", "BAR": "b"}}
+        ) == msc.config_fingerprint(
+            {**base, "env": {"BAR": "b", "FOO": "a"}}
+        )
+
+    def test_changes_when_auth_context_changes(self):
+        base = {"command": "npx", "args": []}
+        assert msc.config_fingerprint(
+            {**base, "auth": "bearer"}
+        ) != msc.config_fingerprint(
+            {**base, "auth": "none"}
+        )
+        assert msc.config_fingerprint(
+            {**base, "oauth": {"audience": "x"}}
+        ) != msc.config_fingerprint(
+            {**base, "oauth": {"audience": "y"}}
+        )
+
+    def test_changes_when_identity_header_changes(self, monkeypatch):
+        base = {"command": "npx", "args": []}
+        alice = {"identity_header": {"name": "X-User-Id", "value_from": "static", "value": "alice"}}
+        bob = {"identity_header": {"name": "X-User-Id", "value_from": "static", "value": "bob"}}
+        assert msc.config_fingerprint({**base, **alice}) != msc.config_fingerprint(
+            {**base, **bob}
+        )
+        # profile mode resolves to the active profile name — a different
+        # principal partitions differently.
+        import hermes_cli.profiles as profiles_mod
+
+        monkeypatch.setattr(profiles_mod, "get_active_profile_name", lambda: "work")
+        profile_cfg = {"identity_header": {"name": "X-User-Id", "value_from": "profile"}}
+        work_fp = msc.config_fingerprint({**base, **profile_cfg})
+        monkeypatch.setattr(profiles_mod, "get_active_profile_name", lambda: "personal")
+        personal_fp = msc.config_fingerprint({**base, **profile_cfg})
+        assert work_fp != personal_fp
+        assert work_fp != msc.config_fingerprint({**base, **alice})
+
+    def test_changes_when_protocol_era_changes(self, monkeypatch):
+        base = {"command": "npx", "args": []}
+        monkeypatch.setattr(msc, "_resolve_protocol_era", lambda: "2025-11-25")
+        legacy_fp = msc.config_fingerprint(base)
+        monkeypatch.setattr(msc, "_resolve_protocol_era", lambda: "2026-07-28")
+        assert msc.config_fingerprint(base) != legacy_fp
+
+    def test_changes_when_epoch_bumps(self, monkeypatch):
+        base = {"command": "npx", "args": []}
+        v1 = msc.config_fingerprint(base)
+        monkeypatch.setattr(msc, "CACHE_SCHEMA_VERSION", 99)
+        assert msc.config_fingerprint(base) != v1
+
+    def test_changes_on_ssl_and_cert(self):
+        base = {"command": "npx", "args": []}
+        assert msc.config_fingerprint(base) != msc.config_fingerprint(
+            {**base, "ssl_verify": False}
+        )
+        assert msc.config_fingerprint(base) != msc.config_fingerprint(
+            {**base, "client_cert": "/x.pem"}
+        )
+
+    def test_preserves_ignored_keys(self):
+        # Non-schema-affecting keys stay out of the fingerprint …
+        base = {"command": "npx", "args": []}
+        assert msc.config_fingerprint(base) == msc.config_fingerprint(
+            {**base, "connect_timeout": 5}
+        )
+        # … while schema-affecting context keys are covered by it.
+        assert msc.config_fingerprint(base) != msc.config_fingerprint(
+            {**base, "strict_redirect_headers": True}
+        )
+
+    def test_protocol_pin_partitions(self):
+        base = {"command": "npx", "args": []}
+        assert msc.config_fingerprint(base) != msc.config_fingerprint(
+            {**base, "protocol_version": "2025-11-25"}
+        )
+
 
 class TestCacheRoundTrip:
     def _isolate(self, monkeypatch, tmp_path):

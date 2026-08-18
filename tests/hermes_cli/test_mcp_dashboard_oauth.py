@@ -80,10 +80,12 @@ def test_hosted_callback_bypasses_gated_cookie_auth(monkeypatch):
 
     response = TestClient(web_server.app).get(
         "/api/mcp/oauth/callback/reports?code=abc&state=expected"
+        "&iss=https%3A%2F%2Fidp.example"
     )
 
     assert response.status_code == 200
-    assert flow._callback == ("abc", "expected")
+    # #88698 R4: RFC 9207 ``iss`` survives the dashboard relay verbatim.
+    assert flow._callback == ("abc", "expected", "https://idp.example")
 
 
 def test_hosted_auth_allows_same_server_name_in_different_profiles(tmp_path, monkeypatch):
@@ -130,7 +132,7 @@ def test_flow_status_does_not_expose_authorization_code():
     )
     flow.authorization_url = "https://idp.example/authorize"
     flow.status = "approved"
-    flow._callback = ("secret-code", "secret-state")
+    flow._callback = ("secret-code", "secret-state", None)
     web_server._mcp_oauth_flows[flow.flow_id] = flow
 
     response = _client().get("/api/mcp/oauth/flows/flow-status")

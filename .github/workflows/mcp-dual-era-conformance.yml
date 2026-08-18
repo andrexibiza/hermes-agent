@@ -1,0 +1,58 @@
+name: mcp-dual-era-conformance
+
+on:
+  pull_request:
+    paths:
+      - 'tools/mcp_*.py'
+      - 'tools/mcp_tool.py'
+      - 'mcp_serve.py'
+      - 'agent/transports/hermes_tools_mcp_server.py'
+      - 'tests/tools/test_mcp_*.py'
+      - 'tests/fixtures/mcp_*.py'
+      - '.github/workflows/mcp-dual-era-conformance.yml'
+  push:
+    branches: [main]
+    paths:
+      # Mirror of the pull_request filter — a workflow-file change merged to
+      # main must re-trigger the push lane too (#88698 R5).
+      - 'tools/mcp_*.py'
+      - 'tools/mcp_tool.py'
+      - 'mcp_serve.py'
+      - 'agent/transports/hermes_tools_mcp_server.py'
+      - 'tests/tools/test_mcp_*.py'
+      - 'tests/fixtures/mcp_*.py'
+      - '.github/workflows/mcp-dual-era-conformance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  dual-era-wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install repo env (pinned mcp==2.0.0)
+        run: uv sync --locked --extra dev --extra mcp
+
+      - name: Build isolated legacy SDK venv (mcp==1.28.1)
+        run: |
+          uv venv .mcp-legacy
+          uv pip install --python .mcp-legacy/bin/python "mcp==1.28.1"
+
+      - name: Run dual-era wire + negotiation conformance tests
+        env:
+          # Repo-standard --locked sync above keeps the main env pinned to
+          # mcp==2.0.0; MCP_LEGACY_PYTHON points the wire tests at the
+          # isolated 1.28.1 interpreter for the legacy client/server legs.
+          MCP_LEGACY_PYTHON: ${{ github.workspace }}/.mcp-legacy/bin/python
+        run: |
+          uv run --locked \
+            python -m pytest \
+              tests/tools/test_mcp_dual_era_wire.py \
+              tests/tools/test_mcp_protocol_negotiation.py \
+              -o addopts= \
+              -q

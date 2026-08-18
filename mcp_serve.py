@@ -1041,6 +1041,16 @@ def run_mcp_server(verbose: bool = False) -> None:
     else:
         logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
+    # #88698 R5: surface the SDK/protocol version at startup so wire-level
+    # conformance issues are diagnosable from the server's own logs.
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        _sdk_version = _pkg_version("mcp")
+    except Exception:
+        _sdk_version = "unknown"
+    logger.info("Hermes MCP server starting (mcp SDK %s)", _sdk_version)
+
     bridge = EventBridge()
     bridge.start()
 

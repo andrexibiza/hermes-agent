@@ -77,6 +77,11 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
 
     mcp_sub.add_parser("list", aliases=["ls"], help="List configured MCP servers")
 
+    mcp_sub.add_parser(
+        "status",
+        help="Show live MCP connection status incl. negotiated protocol state",
+    )
+
     mcp_test_p = mcp_sub.add_parser("test", help="Test MCP server connection")
     mcp_test_p.add_argument("name", help="Server name to test")
 

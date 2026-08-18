@@ -447,6 +447,26 @@ class TestCallbackHandlerIsolation:
         assert result["auth_code"] is None
         assert result["error"] == "access_denied"
 
+    def test_handler_captures_iss(self):
+        # #88698 R4: RFC 9207 authorization-response issuer must survive the
+        # loopback callback handler and reach the SDK's
+        # AuthorizationCodeResult.iss.
+        HandlerClass, result = _make_callback_handler()
+
+        self._fake_get(
+            HandlerClass,
+            "/callback?code=t&state=s&iss=https%3A%2F%2Fidp.example",
+        )
+
+        assert result["auth_code"] == "t"
+        assert result["state"] == "s"
+        assert result["iss"] == "https://idp.example"
+
+    def test_handler_without_iss_records_none(self):
+        HandlerClass, result = _make_callback_handler()
+        self._fake_get(HandlerClass, "/callback?code=t&state=s")
+        assert result["iss"] is None
+
 
 # ---------------------------------------------------------------------------
 # TOCTOU port reservation (#22161)
@@ -503,7 +523,10 @@ class TestCallbackPortReservation:
             task = asyncio.create_task(mod._wait_for_callback())
             threading.Thread(
                 target=_hit_callback_when_ready,
-                args=(f"http://127.0.0.1:{port}/callback?code=abc123&state=xyz",),
+                args=(
+                    "http://127.0.0.1:{port}/callback?code=abc123&state=xyz"
+                    "&iss=https%3A%2F%2Fidp.example".format(port=port),
+                ),
                 daemon=True,
             ).start()
             return await asyncio.wait_for(task, timeout=20)
@@ -513,6 +536,8 @@ class TestCallbackPortReservation:
         result = asyncio.run(drive())
         assert result.code == "abc123"
         assert result.state == "xyz"
+        # RFC 9207 ``iss`` survives the full loopback path (#88698 R4).
+        assert result.iss == "https://idp.example"
         # Reservation was consumed by adoption.
         assert port not in mod._reserved_sockets
 
@@ -923,7 +948,9 @@ class TestPasteCallbackReader:
     """_paste_callback_reader parses redirect URLs / query strings from stdin."""
 
     def _empty_result(self):
-        return {"auth_code": None, "state": None, "error": None}
+        # Mirrors _make_callback_handler's production slot shape incl. the
+        # RFC 9207 ``iss`` slot (#88698 R4).
+        return {"auth_code": None, "state": None, "error": None, "iss": None}
 
     def test_parses_pasted_callback(self, monkeypatch):
         result = self._empty_result()
@@ -933,6 +960,19 @@ class TestPasteCallbackReader:
         assert result["auth_code"] == "abc"
         assert result["state"] == "xyz"
         assert result["error"] is None
+
+    def test_pasted_callback_preserves_iss(self, monkeypatch):
+        # #88698 R4: RFC 9207 ``iss`` survives the paste path.
+        result = self._empty_result()
+        pasted = (
+            "http://127.0.0.1:37949/callback?code=abc&state=xyz"
+            "&iss=https%3A%2F%2Fidp.example\n"
+        )
+        monkeypatch.setattr("sys.stdin", MagicMock(readline=lambda: pasted))
+        _paste_callback_reader(result)
+        assert result["auth_code"] == "abc"
+        assert result["state"] == "xyz"
+        assert result["iss"] == "https://idp.example"
 
 
     def test_swallows_stdin_errors(self, monkeypatch):
@@ -992,7 +1032,9 @@ class TestPasteCallbackSkipToken:
     """User can type `skip` (or similar) at the paste prompt to bail out."""
 
     def _empty_result(self):
-        return {"auth_code": None, "state": None, "error": None}
+        # Mirrors _make_callback_handler's production slot shape incl. the
+        # RFC 9207 ``iss`` slot (#88698 R4).
+        return {"auth_code": None, "state": None, "error": None, "iss": None}
 
     @pytest.mark.parametrize("token", ["skip", "QUIT"])
     def test_skip_tokens_set_sentinel(self, monkeypatch, token):

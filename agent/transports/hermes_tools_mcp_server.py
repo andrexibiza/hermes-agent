@@ -266,6 +266,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     os.environ.setdefault("HERMES_QUIET", "1")
     os.environ.setdefault("HERMES_REDACT_SECRETS", "true")
 
+    # #88698 R5: surface the SDK/protocol version at startup so wire-level
+    # conformance issues are diagnosable from the server's own logs.
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        _sdk_version = _pkg_version("mcp")
+    except Exception:
+        _sdk_version = "unknown"
+    logger.info("hermes-tools MCP server starting (mcp SDK %s)", _sdk_version)
+
     try:
         server = _build_server()
     except ImportError as exc:
