@@ -1,90 +1,56 @@
-name: Temporary PR 90252 rebase
+name: Temporary PR 90252 repair executor
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/apply-pr-90252-rebase-temp.yml
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/apply-pr-90252-rebase-temp.yml
-      - .hermes-control/pr-90252-rebase-trigger
+      - .hermes-control/pr-90252-repair.py
+      - .hermes-control/pr-90252-repair.trigger
 
 permissions:
   contents: write
 
 jobs:
-  rebase:
+  repair:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Checkout exact substantive PR head
+      - name: Checkout exact current-main PR branch
         uses: actions/checkout@v4
         with:
           ref: fix/mcp-dual-era-conformance-first
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Rebase onto current upstream main or publish conflict report
+      - name: Load assertion-checked repair script from the control PR
+        shell: bash
+        env:
+          CONTROL_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$CONTROL_SHA"
+          git show "$CONTROL_SHA:.hermes-control/pr-90252-repair.py" > /tmp/pr-90252-repair.py
+          python -m py_compile /tmp/pr-90252-repair.py
+
+      - name: Apply closure repair to the product branch
         shell: bash
         env:
           TARGET_BRANCH: fix/mcp-dual-era-conformance-first
-          SUBSTANTIVE_HEAD: 1d0b0a3e959da007c9239c950fec2eb1c00fca28
+          EXPECTED_BASE: 657550716f370bd5d1e848a57fc24b9c404cf982
+          ARCHIVE_BRANCH: archive/pr-90252-pre-rebuild
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
+          git fetch origin "$ARCHIVE_BRANCH:$ARCHIVE_BRANCH"
+          python /tmp/pr-90252-repair.py
+          git diff --check
+          python -m compileall -q tools hermes_cli agent mcp_serve.py tests/fixtures tests/tools/test_mcp_protocol_negotiation.py
+          git status --short
+
           git config user.name "Axl Ibiza"
           git config user.email "andrexibiza@gmail.com"
-          git remote add upstream https://github.com/NousResearch/hermes-agent.git || true
-          git fetch upstream main --prune
-          git reset --hard "$SUBSTANTIVE_HEAD"
-
-          set +e
-          git rebase upstream/main > /tmp/rebase.log 2>&1
-          rc=$?
-          set -e
-
-          if [ "$rc" -eq 0 ]; then
-            git diff --check upstream/main...HEAD
-            git push --force-with-lease origin HEAD:"$TARGET_BRANCH"
-            exit 0
-          fi
-
-          {
-            echo "# PR #90252 rebase conflict report"
-            echo
-            echo "Substantive head: $SUBSTANTIVE_HEAD"
-            echo "Upstream main: $(git rev-parse upstream/main)"
-            echo
-            echo "## Rebase log"
-            echo '```text'
-            cat /tmp/rebase.log
-            echo '```'
-            echo
-            echo "## Unmerged paths"
-            echo '```text'
-            git diff --name-only --diff-filter=U
-            echo '```'
-            echo
-            echo "## Status"
-            echo '```text'
-            git status --short
-            echo '```'
-            echo
-            echo "## Conflict markers"
-            for path in $(git diff --name-only --diff-filter=U); do
-              echo
-              echo "### $path"
-              echo '```diff'
-              git diff -- "$path" | sed -n '1,400p'
-              echo '```'
-            done
-          } > /tmp/pr-90252-rebase-report.md
-
-          git rebase --abort || true
-          git checkout -B automation/pr-90252-rebase-report upstream/main
-          mkdir -p .hermes-receipts
-          cp /tmp/pr-90252-rebase-report.md .hermes-receipts/pr-90252-rebase-report.md
-          git add .hermes-receipts/pr-90252-rebase-report.md
-          git commit -m "chore(receipt): capture PR #90252 rebase conflicts"
-          git push --force origin HEAD:automation/pr-90252-rebase-report
-          exit 1
+          git add -A
+          git diff --cached --quiet && { echo 'repair produced no product diff'; exit 1; }
+          git commit -m "fix(mcp): close dual-era negotiation and lifecycle matrix (#88875)"
+          git push --force-with-lease=refs/heads/$TARGET_BRANCH:$EXPECTED_BASE origin HEAD:"$TARGET_BRANCH"
