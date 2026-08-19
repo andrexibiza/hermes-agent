@@ -200,6 +200,43 @@ def finish_execution(
     return record
 
 
+
+def mark_execution_unknown(
+    execution_id: str, *, error: Optional[str] = None,
+    delivery_outcome: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Terminalize an in-flight attempt when its outcome cannot be proved.
+
+    This is the fail-closed counterpart to :func:`finish_execution`: use it
+    when control flow ended without positive completion or failure evidence.
+    The compare-and-set keeps terminal attempts immutable and makes concurrent
+    cleanup idempotent.
+    """
+    now = _hermes_now().isoformat()
+    detail = (
+        str(error)
+        if error
+        else (
+            "Execution ended without a durable terminal result; whether side "
+            "effects ran is unknown."
+        )
+    )
+    with _transaction() as conn:
+        cur = conn.execute(
+            """UPDATE executions SET status='unknown', finished_at=?, error=?
+               WHERE id=? AND status IN ('claimed','running')""",
+            (now, detail, execution_id),
+        )
+        if cur.rowcount != 1:
+            return None
+        _prune_unlocked(conn)
+        record = _record(conn.execute(
+            "SELECT * FROM executions WHERE id=?", (execution_id,)
+        ).fetchone())
+    _emit_execution_state(record, delivery_outcome=delivery_outcome)
+    return record
+
+
 def recover_interrupted_executions() -> int:
     """Mark provably abandoned attempts unknown without scheduling retries.
 

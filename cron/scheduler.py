@@ -505,7 +505,13 @@ from cron.jobs import (
     save_job_output,
     use_cron_store,
 )
-from cron.executions import create_execution, finish_execution, mark_execution_running
+
+from cron.executions import (
+    create_execution,
+    finish_execution,
+    mark_execution_running,
+    mark_execution_unknown,
+)
 
 # Sentinel: when a cron agent has nothing new to report, it can start its
 # response with this marker to suppress delivery.  Output is still saved
@@ -5376,6 +5382,13 @@ def run_job(
                 resolve_exc,
             )
             fb_list = get_fallback_chain(_cfg)
+            from hermes_cli.providers import normalize_provider
+
+            pinned_provider = normalize_provider(
+                str(job.get("provider") or "")
+            )
+            pinned_model = str(job.get("model") or "").strip()
+            skipped_incompatible: list[str] = []
             runtime = None
             for entry in fb_list:
                 if not isinstance(entry, dict):
@@ -5383,6 +5396,25 @@ def run_job(
                 fb_provider = str(entry.get("provider") or "").strip()
                 fb_model = str(entry.get("model") or "").strip()
                 if not fb_provider or not fb_model:
+                    continue
+                fb_provider_canonical = normalize_provider(fb_provider)
+                incompatible = (
+                    bool(pinned_provider)
+                    and fb_provider_canonical != pinned_provider
+                ) or (
+                    bool(pinned_model) and fb_model != pinned_model
+                )
+                if incompatible:
+                    skipped_incompatible.append(
+                        f"{fb_provider_canonical}/{fb_model}"
+                    )
+                    logger.debug(
+                        "Job '%s': skipping fallback %s/%s because "
+                        "it conflicts with explicit provider/model pins",
+                        job_id,
+                        fb_provider_canonical,
+                        fb_model,
+                    )
                     continue
                 try:
                     from hermes_cli.fallback_config import resolve_entry_api_key
@@ -5397,16 +5429,10 @@ def run_job(
                     if fb_api_key:
                         fb_kwargs["explicit_api_key"] = fb_api_key
                     runtime = resolve_runtime_provider(**fb_kwargs)
-                    # #90089: preserve the job's explicit model pin across a
-                    # fallback provider switch.  Previously the fallback chain
-                    # unconditionally overwrote ``model = fb_model``, silently
-                    # discarding a pinned model (e.g. glm-4.5-air) when the
-                    # primary provider (e.g. zai) failed transiently.  Only
-                    # swap the model when the job does NOT have an explicit
-                    # model pin — unpinned jobs should follow the fallback
-                    # entry's model as before.
-                    if not job.get("model"):
-                        model = fb_model
+                    # The selected fallback remains one validated
+                    # provider/model route. Compatibility with every
+                    # explicit pin was checked before resolution.
+                    model = fb_model
                     logger.info(
                         "Job '%s': fallback resolved to %s model %s",
                         job_id,
@@ -5417,7 +5443,28 @@ def run_job(
                 except Exception as fb_exc:
                     logger.debug("Job '%s': fallback %s failed: %s", job_id, fb_provider, fb_exc)
             if runtime is None:
-                raise RuntimeError(format_runtime_provider_error(resolve_exc)) from resolve_exc
+                if pinned_provider or pinned_model:
+                    pin_parts = []
+                    if pinned_provider:
+                        pin_parts.append(f"provider={pinned_provider}")
+                    if pinned_model:
+                        pin_parts.append(f"model={pinned_model}")
+                    pin_text = ", ".join(pin_parts)
+                    skipped_text = (
+                        f" Incompatible configured entries: "
+                        f"{', '.join(skipped_incompatible)}."
+                        if skipped_incompatible
+                        else ""
+                    )
+                    raise RuntimeError(
+                        f"Cron job '{job_id}' pinned route ({pin_text}) is "
+                        "unavailable; no configured fallback route compatible "
+                        "with every explicit pin resolved successfully."
+                        f"{skipped_text}"
+                    ) from resolve_exc
+                raise RuntimeError(
+                    format_runtime_provider_error(resolve_exc)
+                ) from resolve_exc
 
         reasoning_config = resolve_reasoning_config(
             _cfg if isinstance(_cfg, dict) else {}, str(model)
@@ -6663,41 +6710,32 @@ def _run_one_job_body(
         if not isinstance(e, Exception):
             raise
         return False
-    finally:
-        # Safety net (#90089): if the execution row is still 'running' or
-        # 'claimed' after _run_one_job_body completes (normal return OR
-        # exception), some code path bypassed the terminal write — e.g. an
-        # exception that escaped before finish_execution was called, or a
-        # logic error in a new branch.  Without this net the row stays
-        # 'running' forever (the dead-owner reaper only fires from the
-        # gateway tick, which may not be running for a manual CLI run).
-        # Mark it 'failed' so the job is unblocked for its next run.
-        # Terminal states (completed/failed/unknown) are never rewritten.
-        try:
-            from cron.executions import latest_execution
 
-            _safety_record = latest_execution(job["id"])
-            if (
-                _safety_record is not None
-                and _safety_record["id"] == execution_id
-                and _safety_record["status"] in ("running", "claimed")
-            ):
+    finally:
+        # Safety net (#90089): if this exact execution remains in-flight
+        # after body control flow exits, a terminal write was lost. That is
+        # not positive failure evidence: external side effects may already
+        # have run. Settle through the ledger's immutable CAS as ``unknown``
+        # so admission is unblocked without making a retry look safe.
+        try:
+            _unknown_record = mark_execution_unknown(
+                execution_id,
+                error=(
+                    "Execution was left in a non-terminal state after the "
+                    "job body completed; whether side effects ran is unknown. "
+                    "See #90089."
+                ),
+            )
+            if _unknown_record is not None:
                 logger.error(
-                    "Job '%s': execution %s still in '%s' state after "
-                    "run_one_job body completed — safety net marking failed",
-                    job["id"], execution_id, _safety_record["status"],
-                )
-                finish_execution(
+                    "Job '%s': execution %s left in-flight after run_one_job "
+                    "body completed — safety net marked outcome unknown",
+                    job["id"],
                     execution_id,
-                    success=False,
-                    error=(
-                        "Execution was left in a non-terminal state after "
-                        "the job body completed; safety net marked it failed. "
-                        "See #90089."
-                    ),
                 )
         except Exception:
             pass
+
 
 
 def _notify_provider_jobs_changed() -> None:

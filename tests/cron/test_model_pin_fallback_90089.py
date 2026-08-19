@@ -114,27 +114,32 @@ def _run_with_fallback(
         try:
             success, output, final_response, error = run_job(job)
         except Exception as exc:
-            return False, "", str(exc), captured_agent_kwargs.get("model", "")
+            return (
+                False,
+                "",
+                str(exc),
+                captured_agent_kwargs.get("model", ""),
+                captured_agent_kwargs.get("provider", ""),
+            )
 
-    return success, output, error, captured_agent_kwargs.get("model", "")
+    return (
+        success,
+        output,
+        error,
+        captured_agent_kwargs.get("model", ""),
+        captured_agent_kwargs.get("provider", ""),
+    )
 
 
-class TestPinnedModelNotOverwrittenByFallback:
-    """When the job has an explicit ``model`` pin, the fallback chain must
-    NOT replace it with the fallback entry's model."""
 
-    def test_pinned_model_survives_primary_provider_failure(self, tmp_path):
-        """Job pinned to glm-4.5-air/zai.  Primary (zai) auth fails →
-        fallback chain fires.  The model passed to AIAgent must still be
-        the pinned model, not the fallback's model."""
+class TestProviderModelFallbackAtomicity:
+    """Fallback may select only a route compatible with every explicit pin."""
+
+    def test_incompatible_pinned_pair_fails_closed_on_auth_error(self, tmp_path):
         from hermes_cli.auth import AuthError
 
-        job = _base_job(
-            model="glm-4.5-air",
-            provider="zai",
-        )
-
-        success, _output, _error, model_used = _run_with_fallback(
+        job = _base_job(model="glm-4.5-air", provider="zai")
+        success, _output, error, model_used, provider_used = _run_with_fallback(
             job,
             primary_provider="zai",
             primary_raises=AuthError("zai token expired"),
@@ -143,27 +148,21 @@ class TestPinnedModelNotOverwrittenByFallback:
             tmp_path=tmp_path,
         )
 
-        assert success is True, f"run should succeed via fallback, got error: {_error}"
-        assert model_used == "glm-4.5-air", (
-            f"pinned model 'glm-4.5-air' must survive fallback, "
-            f"got '{model_used}'"
-        )
+        assert success is False
+        assert "pinned route" in error
+        assert model_used == ""
+        assert provider_used == ""
 
-    def test_unpinned_model_is_replaced_by_fallback(self, tmp_path):
-        """Without a model pin, the fallback chain SHOULD replace the model
-        — this is the existing, correct behavior for unpinned jobs."""
+    def test_unpinned_job_uses_the_configured_fallback_pair(self, tmp_path):
         from hermes_cli.auth import AuthError
 
-        # No snapshots → drift guard never engages, so the fallback path
-        # is exercised end-to-end.
         job = _base_job(
             model=None,
             provider=None,
             provider_snapshot=None,
             model_snapshot=None,
         )
-
-        success, _output, _error, model_used = _run_with_fallback(
+        success, _output, error, model_used, provider_used = _run_with_fallback(
             job,
             primary_provider="zai",
             primary_raises=AuthError("zai token expired"),
@@ -172,21 +171,51 @@ class TestPinnedModelNotOverwrittenByFallback:
             tmp_path=tmp_path,
         )
 
-        # Unpinned job: fallback model is used (existing behavior).
+        assert success is True, error
         assert model_used == "qwen3.8"
+        assert provider_used == "lmstudio"
 
-    def test_pinned_model_with_pinned_provider_survives_transient_network_error(
-        self, tmp_path
-    ):
-        """Same as above but with a transient network error instead of auth."""
-        import httpx
+    def test_model_only_pin_allows_a_matching_configured_route(self, tmp_path):
+        from hermes_cli.auth import AuthError
 
-        job = _base_job(
-            model="glm-4.5-air",
-            provider="zai",
+        job = _base_job(model="shared-model", provider=None)
+        success, _output, error, model_used, provider_used = _run_with_fallback(
+            job,
+            primary_provider="zai",
+            primary_raises=AuthError("zai token expired"),
+            fallback_provider="openrouter",
+            fallback_model="shared-model",
+            tmp_path=tmp_path,
         )
 
-        success, _output, _error, model_used = _run_with_fallback(
+        assert success is True, error
+        assert model_used == "shared-model"
+        assert provider_used == "openrouter"
+
+    def test_provider_only_pin_accepts_a_canonical_alias_match(self, tmp_path):
+        from hermes_cli.auth import AuthError
+
+        job = _base_job(model=None, provider="z-ai")
+        success, _output, error, model_used, provider_used = _run_with_fallback(
+            job,
+            primary_provider="z-ai",
+            primary_raises=AuthError("zai token expired"),
+            fallback_provider="zai",
+            fallback_model="glm-4.5-air",
+            tmp_path=tmp_path,
+        )
+
+        assert success is True, error
+        assert model_used == "glm-4.5-air"
+        assert provider_used == "zai"
+
+    def test_incompatible_pinned_pair_fails_closed_on_network_error(
+        self, tmp_path
+    ):
+        import httpx
+
+        job = _base_job(model="glm-4.5-air", provider="zai")
+        success, _output, error, model_used, provider_used = _run_with_fallback(
             job,
             primary_provider="zai",
             primary_raises=httpx.ConnectError("DNS resolution failed"),
@@ -195,5 +224,7 @@ class TestPinnedModelNotOverwrittenByFallback:
             tmp_path=tmp_path,
         )
 
-        assert success is True
-        assert model_used == "glm-4.5-air"
+        assert success is False
+        assert "pinned route" in error
+        assert model_used == ""
+        assert provider_used == ""

@@ -243,19 +243,13 @@ class TestCliRunReclaimsBeforeDispatch:
 # run_one_job safety net — execution still 'running' after job body
 # ---------------------------------------------------------------------------
 
+
 class TestRunOneJobSafetyNet:
-    """If ``_run_one_job_body`` completes without calling
-    ``finish_execution`` (e.g. an exception path that bypassed the terminal
-    write), the execution row must not be left ``running`` forever.
+    """Missing terminal evidence must settle as ``unknown``, not ``failed``."""
 
-    The safety net in ``_run_one_job_body``'s outer scope checks the
-    execution status after the body returns and marks it ``failed`` if it
-    is still ``running``.
-    """
-
-    def test_safety_net_marks_still_running_as_failed(self, monkeypatch, tmp_path):
-        """Simulate a code path where the body returns without finishing the
-        execution — the safety net must catch it."""
+    def test_safety_net_marks_still_running_as_unknown(
+        self, monkeypatch, tmp_path
+    ):
         import cron.scheduler as scheduler
         import cron.executions as executions
 
@@ -263,26 +257,56 @@ class TestRunOneJobSafetyNet:
             executions, "EXECUTIONS_FILE", tmp_path / "cron" / "executions.db"
         )
 
-        # Create a real execution row in 'running' state.
         record = executions.create_execution("safety-net-job", source="direct")
         executions.mark_execution_running(record["id"])
         execution_id = record["id"]
 
-        # Patch run_job to return successfully but WITHOUT finish_execution
-        # having been called (simulates a bypassed terminal write).
         monkeypatch.setattr(
-            scheduler, "run_job",
+            scheduler,
+            "run_job",
             lambda job, **kw: (True, "output", "response", None),
         )
         monkeypatch.setattr(scheduler, "claim_dispatch", lambda _jid: True)
-        monkeypatch.setattr(scheduler, "save_job_output", lambda *_a, **_k: "/tmp/fake")
-        monkeypatch.setattr(scheduler, "_deliver_result", lambda *_a, **_k: None)
-        monkeypatch.setattr(scheduler, "mark_job_run", lambda *_a, **_k: True)
+        monkeypatch.setattr(
+            scheduler, "save_job_output", lambda *_a, **_k: "/tmp/fake"
+        )
+        monkeypatch.setattr(
+            scheduler, "_deliver_result", lambda *_a, **_k: None
+        )
+        monkeypatch.setattr(
+            scheduler, "mark_job_run", lambda *_a, **_k: True
+        )
+        # Suppress the ordinary terminal writer. The finally-block CAS must
+        # be the only path that can close this execution.
+        monkeypatch.setattr(
+            scheduler, "finish_execution", lambda *_a, **_k: None
+        )
 
-        job = {"id": "safety-net-job", "execution_id": execution_id, "prompt": "test"}
+        job = {
+            "id": "safety-net-job",
+            "execution_id": execution_id,
+            "prompt": "test",
+        }
         scheduler.run_one_job(job)
 
         final = executions.latest_execution("safety-net-job")
-        assert final["status"] != "running", (
-            "safety net must not leave execution 'running' after run_one_job returns"
+        assert final["status"] == "unknown"
+        assert "side effects ran is unknown" in final["error"]
+
+    def test_unknown_settlement_is_terminal_and_immutable(
+        self, monkeypatch, tmp_path
+    ):
+        executions = _point_ledger(monkeypatch, tmp_path)
+        record = executions.create_execution("unknown-cas-job", source="direct")
+        executions.mark_execution_running(record["id"])
+
+        settled = executions.mark_execution_unknown(
+            record["id"], error="outcome cannot be proved"
         )
+
+        assert settled["status"] == "unknown"
+        assert executions.finish_execution(record["id"], success=True) is None
+        assert executions.mark_execution_unknown(record["id"]) is None
+        final = executions.latest_execution("unknown-cas-job")
+        assert final["status"] == "unknown"
+        assert final["error"] == "outcome cannot be proved"
