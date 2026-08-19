@@ -731,7 +731,7 @@ def _exc_str(exc: BaseException) -> str:
 # _ensure_mcp_sdk() overrides it from mcp.types when the SDK is loaded (kept
 # lazy so this module never triggers the ~260ms `mcp` import at import time).
 _JSONRPC_METHOD_NOT_FOUND = -32601
-
+_JSONRPC_INVALID_PARAMS = -32602
 # 2026-07-28 stateless servers answering a legacy ``initialize`` reject it
 # with one of these: UnsupportedProtocolVersion (-32022, spec-reserved range)
 # or plain method-not-found when the handshake methods are gone entirely.
@@ -749,6 +749,14 @@ def _handshake_rejected_as_modern(exc: BaseException) -> bool:
     """
     err = getattr(exc, "error", None)
     code = getattr(err, "code", None) or getattr(exc, "code", None)
+    # -32602 (INVALID_PARAMS) is never a modern-rejection signal here: it
+    # routes through _is_canonical_discover_rejection under prefer-modern
+    # (bounded legacy proof probe for the canonical first-flight discover
+    # rejection) or propagates unconditionally otherwise. Rejecting it here
+    # prevents the substring fallback below from matching "not found" on a
+    # non-discover -32602 and erroneously downgrading to the handshake era.
+    if code == _JSONRPC_INVALID_PARAMS:
+        return False
     if code in (_JSONRPC_UNSUPPORTED_PROTOCOL_VERSION, _JSONRPC_METHOD_NOT_FOUND):
         return True
     msg = str(exc).lower()
@@ -758,6 +766,35 @@ def _handshake_rejected_as_modern(exc: BaseException) -> bool:
         "unsupported protocol version" in msg
         or str(_JSONRPC_UNSUPPORTED_PROTOCOL_VERSION) in msg
         or _is_method_not_found_error(exc)
+    )
+
+
+def _is_canonical_discover_rejection(exc: BaseException) -> bool:
+    """True when a failed ``server/discover`` is the canonical first-flight
+    rejection of a 2026-07-28-only server from an MCP 1.28.1 peer.
+
+    Under ``prefer-modern`` this is the **only** ``-32602`` condition that
+    permits a bounded legacy ``initialize`` proof probe — the exact-signal
+    rule from #88698's acceptance contract. Any other ``-32602`` (a genuinely
+    invalid modern request, a second-flight call, or a transport-level error)
+    propagates without downgrade.
+
+    The canonical signal is a structural ``-32602`` whose message fingerprint
+    names the ``discover`` method or ``server/discover`` — the shape an MCP
+    1.28.1 peer produces when it does not recognize the 2026-07-28
+    ``server/discover`` request on a first-flight probe.
+    """
+    err = getattr(exc, "error", None)
+    code = getattr(err, "code", None) or getattr(exc, "code", None)
+    if code != _JSONRPC_INVALID_PARAMS:
+        return False
+    msg = str(exc).lower()
+    if not msg:
+        return False
+    return (
+        "discover" in msg
+        or "server/discover" in msg
+        or "server .discover" in msg
     )
 
 
@@ -2691,10 +2728,31 @@ class MCPServerTask:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                # Exact-signal-only fallback (#88698): only a modern-rejection
-                # signal (structural -32022/-32601 or its wrapped shape)
-                # permits downgrading to the handshake; everything else
-                # propagates.
+                # Exact-signal-only fallback (#88698). Two distinct rejection
+                # shapes permit downgrading to the legacy handshake:
+                #  (1) a modern-only server rejecting the handshake methods
+                #      outright (-32022/-32601), via _handshake_rejected_as_modern;
+                #  (2) a canonical first-flight server/discover -32602 from an
+                #      MCP 1.28.1 peer that does not know the discover method —
+                #      the ONLY -32602 that triggers the bounded legacy proof probe
+                #      (via _is_canonical_discover_rejection). Any other -32602
+                #      propagates without downgrade.
+                if _is_canonical_discover_rejection(exc):
+                    logger.info(
+                        "MCP server '%s': server/discover rejected with canonical "
+                        "-32602 (%s) — bounded legacy initialize proof probe",
+                        self.name, exc,
+                    )
+                    self.fallback_reason = "discover_rejected"
+                    trigger = _signal(exc)
+                    result = await asyncio.wait_for(
+                        session.initialize(), timeout=connect_timeout
+                    )
+                    self.negotiated_era = "legacy"
+                    self.fallback_reason = "legacy"
+                    _record(result)
+                    _log_completed("legacy initialize handshake", trigger)
+                    return result
                 if not _handshake_rejected_as_modern(exc):
                     raise
                 logger.info(

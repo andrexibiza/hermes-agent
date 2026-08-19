@@ -15,6 +15,8 @@ import pytest
 from tools.mcp_tool import (
     MCPServerTask,
     _handshake_rejected_as_modern,
+    _is_canonical_discover_rejection,
+    _JSONRPC_INVALID_PARAMS,
     _JSONRPC_UNSUPPORTED_PROTOCOL_VERSION,
     _resolve_protocol_policy,
 )
@@ -156,6 +158,40 @@ class TestModernRejectionClassifier:
         assert _handshake_rejected_as_modern(Exception("Unknown method: initialize"))
         assert not _handshake_rejected_as_modern(Exception("connection reset by peer"))
 
+    def test_invalid_params_never_modern_rejection(self):
+        # -32602 (INVALID_PARAMS) must NOT be classified as a modern-rejection
+        # signal — it routes through _is_canonical_discover_rejection or
+        # propagates unconditionally, preventing a non-discover -32602 from
+        # erroneously triggering a legacy fallback via the substring path.
+        assert not _handshake_rejected_as_modern(_Err(-32602, "not found"))
+        assert not _handshake_rejected_as_modern(_Err(-32602, "Unknown method: tools/list"))
+
+
+class TestCanonicalDiscoverRejection:
+    def test_structural_invalid_params_with_discover_message(self):
+        assert _is_canonical_discover_rejection(
+            _Err(_JSONRPC_INVALID_PARAMS, "Method not found: server/discover")
+        )
+
+    def test_structural_invalid_params_with_discover_keyword(self):
+        assert _is_canonical_discover_rejection(
+            _Err(_JSONRPC_INVALID_PARAMS, "server/discover is not available")
+        )
+
+    def test_non_neg32_not_matched(self):
+        assert not _is_canonical_discover_rejection(_Err(-32000, "discover error"))
+
+    def test_invalid_params_without_discover_fingerprint_rejected(self):
+        assert not _is_canonical_discover_rejection(_Err(-32602, "borked"))
+
+    def test_invalid_params_for_other_method_rejected(self):
+        assert not _is_canonical_discover_rejection(
+            _Err(-32602, "Invalid params for tools/list")
+        )
+
+    def test_empty_message_rejected(self):
+        assert not _is_canonical_discover_rejection(_Err(_JSONRPC_INVALID_PARAMS))
+
 
 class TestPolicyResolution:
     def test_aliases_map(self):
@@ -202,12 +238,30 @@ class TestPreferModernMode:
         assert s.calls == ["discover", "initialize"]
 
     def test_invalid_params_propagates_without_fallback(self):
-        # NEW BEHAVIOR (the #88698 defect fix): a non-exact signal must NOT
-        # silently downgrade the connection to the handshake era.
+        # Non-canonical -32602 (no discover fingerprint): must NOT silently
+        # downgrade the connection to the handshake era. This covers a genuinely
+        # invalid modern request or a second-flight call.
         s = _Session(init="INIT_RESULT", disc=_Err(-32602))
         with pytest.raises(_Err):
             _run(_task("prefer-modern")._negotiate_session(s, 5))
         assert s.calls == ["discover"]
+
+    def test_invalid_params_propagates_without_fallback_explicit_msg(self):
+        # A -32602 that names a non-discover method (e.g. tools/list) is NOT a
+        # canonical first-flight server/discover rejection, so it propagates.
+        s = _Session(init="INIT_RESULT", disc=_Err(-32602, "Invalid params: method not found: tools/list"))
+        with pytest.raises(_Err):
+            _run(_task("prefer-modern")._negotiate_session(s, 5))
+        assert s.calls == ["discover"]
+
+    def test_canonical_discover_invalid_params_falls_back_to_handshake(self):
+        # Canonical first-flight server/discover -32602 from an MCP 1.28.1 peer
+        # that does not know discover(): permit a bounded legacy initialize
+        # proof probe under prefer-modern (the #88698 acceptance contract).
+        s = _Session(init="INIT_RESULT", disc=_Err(-32602, "Method not found: server/discover"))
+        out = _run(_task("prefer-modern")._negotiate_session(s, 5))
+        assert out == "INIT_RESULT"
+        assert s.calls == ["discover", "initialize"]
 
     def test_internal_error_propagates_without_fallback(self):
         s = _Session(init="INIT_RESULT", disc=_Err(-32000, "borked"))
@@ -241,6 +295,14 @@ class TestStrictModernMode:
 
     def test_unsupported_protocol_version_propagates(self):
         s = _Session(init="INIT_RESULT", disc=_Err(_JSONRPC_UNSUPPORTED_PROTOCOL_VERSION))
+        with pytest.raises(_Err):
+            _run(_task("strict-modern")._negotiate_session(s, 5))
+        assert s.calls == ["discover"]
+
+    def test_canonical_discover_invalid_params_propagates_strict(self):
+        # strict-modern propagates the canonical -32602 immediately — no
+        # bounded legacy proof probe — even when the message names discover.
+        s = _Session(init="INIT_RESULT", disc=_Err(-32602, "Method not found: server/discover"))
         with pytest.raises(_Err):
             _run(_task("strict-modern")._negotiate_session(s, 5))
         assert s.calls == ["discover"]
