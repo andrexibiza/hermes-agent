@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - .github/workflows/apply-pr-90252-rebase-temp.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-pr-90252-rebase-temp.yml
+      - .hermes-control/pr-90252-rebase-trigger
 
 permissions:
   contents: write
