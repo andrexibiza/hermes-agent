@@ -20,6 +20,7 @@ jobs:
           OLD_HEAD=c4c92ffcb6411bfc1699065e14fd5fa808b82911
           git config user.name "Andrex Ibiza, MBA"
           git config user.email "andrexibiza@gmail.com"
+          git fetch origin fix/dc-standalone-send
           git fetch https://github.com/NousResearch/hermes-agent.git main
           git reset --hard FETCH_HEAD
           git checkout "$OLD_HEAD" -- contributors/emails/andrexibiza@gmail.com contributors/emails/discord-fixer@users.noreply.github.com tests/plugins/discord/test_discord_standalone_sanitize_repair.py tests/plugins/discord/test_discord_standalone_send_seam.py
@@ -34,7 +35,8 @@ jobs:
           Path('plugins/platforms/discord/standalone_send.py').write_text(old[:old.index(marker)]+s[a:b].rstrip()+'\n')
           anchor='from agent.display import ToolPreview\n'
           imports='''from plugins.platforms.discord.standalone_send import (\n    _DISCORD_CHANNEL_TYPE_PROBE_CACHE,\n    _DISCORD_STANDALONE_JSON_BODY_LIMIT_BYTES,\n    _DISCORD_STANDALONE_ERROR_BODY_LIMIT_BYTES,\n    _remember_channel_is_forum,\n    _probe_is_forum_cached,\n    _derive_forum_thread_name,\n    _standalone_sanitize_error,\n    _standalone_close_response,\n    _standalone_read_response_bytes_limited,\n    _standalone_response_encoding,\n    _standalone_read_text_limited,\n    _standalone_read_json_limited,\n    _standalone_send,\n)\n'''
-          s=s.replace(anchor,anchor+imports,1)
+          if imports not in s:
+              s=s.replace(anchor,anchor+imports,1)
           a=s.index(marker); b=s.index(end_marker,a)
           p.write_text(s[:a]+s[b:])
           PY
@@ -56,6 +58,7 @@ jobs:
           OLD_HEAD=f71c8bb6c73c5131bd7ca1e7e3827ee700a92601
           git config user.name "Andrex Ibiza, MBA"
           git config user.email "andrexibiza@gmail.com"
+          git fetch origin fix/dc-media-mixin
           git fetch https://github.com/NousResearch/hermes-agent.git main
           git reset --hard FETCH_HEAD
           git checkout "$OLD_HEAD" -- contributors/emails/andrexibiza@gmail.com contributors/emails/discord-media-seam-fixer@users.noreply.github.com plugins/platforms/discord/media_send_mixin.py tests/plugins/discord/test_discord_media_send_seam.py
@@ -88,17 +91,3 @@ jobs:
           git add -- contributors/emails/andrexibiza@gmail.com contributors/emails/discord-media-seam-fixer@users.noreply.github.com plugins/platforms/discord/adapter.py plugins/platforms/discord/media_send_mixin.py tests/plugins/discord/test_discord_media_send_seam.py
           git commit -s -m 'refactor(discord): rebase media send shard onto current main' -m 'Reapply R3 to the exact current upstream adapter using AST-owned method boundaries.' -m 'Part of #78647' -m 'Part of #78634' -m 'Part of #79564' -m 'Part of #79772'
           git push --force https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/andrexibiza/hermes-agent.git HEAD:fix/dc-media-mixin
-
-  cleanup:
-    needs: [r3, r5]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: {ref: main, fetch-depth: 0, token: "${{ secrets.GITHUB_TOKEN }}"}
-      - run: |
-          git config user.name "Andrex Ibiza, MBA"
-          git config user.email "andrexibiza@gmail.com"
-          git rm .github/workflows/repair-discord-shards.yml
-          git commit -m 'chore: remove temporary Discord shard repair workflow'
-          git push origin main
