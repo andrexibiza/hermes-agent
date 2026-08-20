@@ -1,27 +1,31 @@
-name: GHSA remediation bootstrap
+name: GHSA remediation artifact
 
 on:
-  push:
-    branches:
-      - security/ghsa-remediation-c47f0b4
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ghsa-remediation-bootstrap-${{ github.ref }}
-  cancel-in-progress: false
+  group: ghsa-remediation-artifact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   remediate:
+    if: >-
+      github.event.pull_request.head.repo.full_name == 'andrexibiza/hermes-agent' &&
+      github.event.pull_request.head.ref == 'security/ghsa-remediation-c47f0b4'
     name: Regenerate and verify patched dependency graphs
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout exact branch
+      - name: Checkout exact PR head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.ref_name }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Set up Node 26
@@ -66,23 +70,20 @@ jobs:
           write("apps/desktop/package.json", desktop)
 
           npmrc = Path(".npmrc")
-          npmrc_text = npmrc.read_text(encoding="utf-8")
-          npmrc_text = npmrc_text.replace(
+          text = npmrc.read_text(encoding="utf-8")
+          text = text.replace(
               "# nanoid 3.3.17 includes fixes for GHSA-2v37-7h3g-55p8. remove when > 2wks old (rel 2026-08-03)",
               "# nanoid 3.3.18 fixes GHSA-2v37-7h3g-55p8. remove this exception when > 2wks old (rel 2026-08-07)",
           )
-          npmrc.write_text(npmrc_text, encoding="utf-8")
+          npmrc.write_text(text, encoding="utf-8")
 
-          helper = Path("apps/desktop/scripts/packaged-app-layout.mjs")
-          helper.write_text(
+          Path("apps/desktop/scripts/packaged-app-layout.mjs").write_text(
               "export function resolveLinuxUnpackedDirName(arch) {\n"
               "  return arch === 'x64' ? 'linux-unpacked' : `linux-${arch}-unpacked`\n"
               "}\n",
               encoding="utf-8",
           )
-
-          helper_test = Path("apps/desktop/scripts/packaged-app-layout.test.mjs")
-          helper_test.write_text(
+          Path("apps/desktop/scripts/packaged-app-layout.test.mjs").write_text(
               "import assert from 'node:assert/strict'\n"
               "import test from 'node:test'\n\n"
               "import { resolveLinuxUnpackedDirName } from './packaged-app-layout.mjs'\n\n"
@@ -95,50 +96,48 @@ jobs:
               encoding="utf-8",
           )
 
-          test_desktop = Path("apps/desktop/scripts/test-desktop.mjs")
-          text = test_desktop.read_text(encoding="utf-8")
-          import_anchor = "import PACKAGE_JSON from '../package.json' with { type: 'json' }"
+          target = Path("apps/desktop/scripts/test-desktop.mjs")
+          text = target.read_text(encoding="utf-8")
+          anchor = "import PACKAGE_JSON from '../package.json' with { type: 'json' }"
           helper_import = "import { resolveLinuxUnpackedDirName } from './packaged-app-layout.mjs'"
           if helper_import not in text:
-              if import_anchor not in text:
+              if anchor not in text:
                   raise SystemExit("test-desktop import anchor not found")
-              text = text.replace(import_anchor, helper_import + "\n" + import_anchor, 1)
+              text = text.replace(anchor, helper_import + "\n" + anchor, 1)
           old = "  // linux unpacked layout matches windows but with different binary name\n  const unpacked = path.join(RELEASE_ROOT, 'linux-unpacked')"
           new = "  // electron-builder includes the architecture suffix for non-x64 Linux output.\n  const unpacked = path.join(RELEASE_ROOT, resolveLinuxUnpackedDirName(ARCH))"
           if old in text:
               text = text.replace(old, new, 1)
           elif new not in text:
               raise SystemExit("test-desktop Linux layout anchor not found")
-          test_desktop.write_text(text, encoding="utf-8")
+          target.write_text(text, encoding="utf-8")
           PY
 
-      - name: Regenerate npm lockfiles
+      - name: Regenerate lockfiles
         run: |
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm --prefix website install --package-lock-only --ignore-scripts --no-audit --no-fund
+          uv lock --upgrade-package h2
 
-      - name: Regenerate uv.lock with patched h2
-        run: uv lock --upgrade-package h2
-
-      - name: Verify lockfile consistency
+      - name: Verify clean installs and lock consistency
         run: |
-          uv lock --check
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm --prefix website ci --ignore-scripts --no-audit --no-fund
+          set -o pipefail
+          uv lock --check | tee /tmp/uv-lock-check.txt
+          npm ci --ignore-scripts --no-audit --no-fund | tee /tmp/npm-ci-root.txt
+          npm --prefix website ci --ignore-scripts --no-audit --no-fund | tee /tmp/npm-ci-website.txt
 
-      - name: Verify npm advisories are cleared
+      - name: Verify dependency advisories are cleared
         run: |
-          npm audit --workspaces=false --audit-level=moderate
-          npm audit --workspace web --audit-level=moderate
-          npm audit --workspace ui-tui --audit-level=moderate
-          npm audit --workspace apps/desktop --audit-level=moderate
-          npm --prefix website audit --audit-level=moderate
+          set -o pipefail
+          npm audit --workspaces=false --audit-level=moderate | tee /tmp/npm-audit-root.txt
+          npm audit --workspace web --audit-level=moderate | tee /tmp/npm-audit-web.txt
+          npm audit --workspace ui-tui --audit-level=moderate | tee /tmp/npm-audit-tui.txt
+          npm audit --workspace apps/desktop --audit-level=moderate | tee /tmp/npm-audit-desktop.txt
+          npm --prefix website audit --audit-level=moderate | tee /tmp/npm-audit-website.txt
 
-      - name: Verify desktop packaged-layout regression
-        run: node --test apps/desktop/scripts/packaged-app-layout.test.mjs
-
-      - name: Verify resolved security floors
+      - name: Verify regression contracts and resolved floors
         run: |
+          node --test apps/desktop/scripts/packaged-app-layout.test.mjs | tee /tmp/packaged-layout-test.txt
           node <<'NODE'
           const lock = require('./package-lock.json')
           const root = require('./package.json')
@@ -163,16 +162,40 @@ jobs:
           if not match or match.group(1) != '4.4.1':
               raise SystemExit(f"h2 lock is {match.group(1) if match else 'missing'}")
           PY
-
-      - name: Commit verified remediation
-        run: |
           git diff --check
-          git config user.name "Axl Ibiza"
-          git config user.email "andrexibiza@gmail.com"
-          git rm .github/workflows/ghsa-remediation-bootstrap.yml
-          git add .npmrc package.json package-lock.json website/package.json website/package-lock.json \
-            apps/desktop/package.json apps/desktop/scripts/test-desktop.mjs \
-            apps/desktop/scripts/packaged-app-layout.mjs \
-            apps/desktop/scripts/packaged-app-layout.test.mjs uv.lock
-          git commit -m "fix(deps): clear current GHSA findings"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Build exact-object verification receipt
+        run: |
+          mkdir -p /tmp/ghsa-remediation
+          {
+            echo "source_head=${{ github.event.pull_request.head.sha }}"
+            echo "node=$(node --version)"
+            echo "npm=$(npm --version)"
+            echo "uv=$(uv --version)"
+            echo "verified_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "all_dependency_and_regression_gates=passed"
+          } > /tmp/ghsa-remediation/verification.txt
+          cp /tmp/uv-lock-check.txt /tmp/npm-ci-root.txt /tmp/npm-ci-website.txt \
+            /tmp/npm-audit-root.txt /tmp/npm-audit-web.txt /tmp/npm-audit-tui.txt \
+            /tmp/npm-audit-desktop.txt /tmp/npm-audit-website.txt \
+            /tmp/packaged-layout-test.txt /tmp/ghsa-remediation/
+
+      - name: Upload verified remediation files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ghsa-remediation-files
+          path: |
+            .npmrc
+            package.json
+            package-lock.json
+            website/package.json
+            website/package-lock.json
+            apps/desktop/package.json
+            apps/desktop/scripts/test-desktop.mjs
+            apps/desktop/scripts/packaged-app-layout.mjs
+            apps/desktop/scripts/packaged-app-layout.test.mjs
+            uv.lock
+            /tmp/ghsa-remediation
+          retention-days: 1
+          include-hidden-files: true
+          if-no-files-found: error
