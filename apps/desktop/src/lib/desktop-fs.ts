@@ -4,6 +4,8 @@ import type {
   HermesReadFileTextResult,
   HermesSelectPathsOptions
 } from '@/global'
+import { hermesApi } from '@/hermes'
+import { currentRouteActivationReceiptForMutation } from '@/store/gateway-activation'
 import { $connection } from '@/store/session'
 
 export interface DesktopFsRemotePicker {
@@ -26,7 +28,9 @@ function connectionCacheKey(connection: HermesConnection | null) {
       ? connection.remoteIdentity || connection.remoteHost || ''
       : connection.baseUrl || ''
 
-  return `${connection.mode || 'local'}:${connection.remoteKind || ''}:${connection.profile || ''}:${target}`
+  const owner = connection.connectionId ? `${connection.connectionId}:` : ''
+
+  return `${owner}${connection.mode || 'local'}:${connection.remoteKind || ''}:${connection.profile || ''}:${target}`
 }
 
 export function desktopFsCacheKey(connection: HermesConnection | null = $connection.get()) {
@@ -37,8 +41,8 @@ export function isDesktopFsRemoteMode() {
   return $connection.get()?.mode === 'remote'
 }
 
-// Active profile for FS/git REST calls. Without it the Electron api bridge
-// hits the primary (local) backend even when the user switched to a remote profile.
+// Active logical profile for FS/git REST calls. hermesApi carries the active
+// registry source separately; profile names are not globally unique.
 export function desktopFsProfile(): string | undefined {
   return $connection.get()?.profile || undefined
 }
@@ -58,9 +62,38 @@ function bridge() {
 }
 
 function remoteFsApi<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-  return bridge().api<T>(
+  // Route read-only requests through the same active connection context the
+  // gateway registry maintains. The old direct bridge call carried only a
+  // profile, so a registry agent silently fell back to the primary source
+  // (#89916, the owner-loss form of #90866).
+  return hermesApi<T>(
     body ? { body, method: 'POST', path, profile: desktopFsProfile() } : { path, profile: desktopFsProfile() }
   )
+}
+
+function remoteFsMutationApi<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const connection = $connection.get()
+  const receipt = currentRouteActivationReceiptForMutation(connection)
+  const connectionId = receipt?.route.connectionId
+
+  // A remote write must name an exact registry owner. A legacy descriptor may
+  // expose an inferred connectionId for display/read compatibility, but that
+  // is not authority to mutate a filesystem. Keep the route read-only until an
+  // exact registry activation produces a current ready receipt.
+  if (!receipt || !connectionId) {
+    throw new Error('Remote file mutation requires a current exact route activation')
+  }
+
+  // Consume the receipt directly at the side-effect boundary. Do not re-read
+  // the foreground profile or ask Electron to infer a source from endpoint
+  // shape: the exact owner and profile that were activated ride on the proof.
+  return bridge().api<T>({
+    body,
+    connectionId,
+    method: 'POST',
+    path,
+    profile: receipt.route.profile
+  })
 }
 
 export async function readDesktopDir(path: string): Promise<HermesReadDirResult> {
@@ -80,9 +113,9 @@ export async function readDesktopFileText(path: string): Promise<HermesReadFileT
 }
 
 // Save UTF-8 text back to a file. Local writes go through the hardened Electron
-// IPC; remote writes hit the dashboard's POST /api/fs/write-text (same path
-// hardening, parent-must-exist, size cap) so the editor behaves identically in
-// both modes. Stale-on-disk detection is the caller's job (re-read before save).
+// IPC; remote writes hit the dashboard's POST /api/fs/write-text only after
+// the active route proves its exact registry owner, descriptor realization, and
+// generation. Stale-on-disk detection is the caller's job (re-read before save).
 export async function writeDesktopFileText(path: string, content: string): Promise<{ path: string }> {
   const desktop = bridge()
 
@@ -94,7 +127,7 @@ export async function writeDesktopFileText(path: string, content: string): Promi
     return desktop.writeTextFile(path, content)
   }
 
-  const result = await remoteFsApi<{ ok?: boolean; path?: string }>('/api/fs/write-text', { content, path })
+  const result = await remoteFsMutationApi<{ ok?: boolean; path?: string }>('/api/fs/write-text', { content, path })
 
   return { path: result.path || path }
 }
