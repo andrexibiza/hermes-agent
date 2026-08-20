@@ -1,0 +1,67 @@
+name: One-shot #90924 import-order repair
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-90924-import-order
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'architecture/proof-carrying-route-activation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Apply authoritative import ordering and remove branch-local runner
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('apps/desktop/src/store/profile.ts')
+          text = path.read_text(encoding='utf-8')
+          old = '''import {
+            activateGatewayAgentWithProof,
+            activeGatewayRouteMatches,
+            activateGatewayProfileWithProof,
+            routeActivationReceiptIsCurrent
+          } from '@/store/gateway-activation'
+          '''
+          new = '''import {
+            activateGatewayAgentWithProof,
+            activateGatewayProfileWithProof,
+            activeGatewayRouteMatches,
+            routeActivationReceiptIsCurrent
+          } from '@/store/gateway-activation'
+          '''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('gateway-activation import block has an unexpected shape')
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -f .github/workflows/fix-90924-import-order.yml
+          git diff --check
+
+      - name: Commit exact branch repair
+        run: |
+          if git diff --quiet; then
+            echo 'Exact branch is already repaired.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/desktop/src/store/profile.ts .github/workflows/fix-90924-import-order.yml
+          git commit -m 'style(desktop): satisfy route-proof import ordering'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
