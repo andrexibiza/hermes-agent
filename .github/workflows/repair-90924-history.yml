@@ -1,0 +1,59 @@
+name: Repair PR 90924 history
+
+on:
+  push:
+    branches:
+      - ops/repair-90924-history
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out target branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: architecture/proof-carrying-route-activation
+          fetch-depth: 0
+
+      - name: Repair typecheck and rebuild one-commit history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch upstream main
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('apps/desktop/electron/connection-registry.ts')
+          text = path.read_text(encoding='utf-8')
+
+          first = '  const normalized = {\n'
+          second = '  const migrated = { version: REGISTRY_VERSION, primary, launchMode:'
+
+          if text.count(first) != 1:
+              raise SystemExit(f'expected one normalized registry literal, found {text.count(first)}')
+          if text.count(second) != 1:
+              raise SystemExit(f'expected one migrated registry literal, found {text.count(second)}')
+
+          text = text.replace(first, '  const normalized: ConnectionRegistry = {\n', 1)
+          text = text.replace(
+              second,
+              '  const migrated: ConnectionRegistry = { version: REGISTRY_VERSION, primary, launchMode:',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git diff --check
+          git config user.name 'andrexibiza'
+          git config user.email '84248988+andrexibiza@users.noreply.github.com'
+          git add apps/desktop/electron/connection-registry.ts
+          git commit -m 'fix(desktop): preserve registry version literal'
+
+          git reset --soft upstream/main
+          git commit -m 'fix(desktop): bind remote mutations to generated route authority'
+          git push origin HEAD:architecture/proof-carrying-route-activation --force
