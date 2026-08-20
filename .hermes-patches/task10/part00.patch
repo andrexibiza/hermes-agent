@@ -1,0 +1,173 @@
+diff --git a/gateway/platforms/webhook.py b/gateway/platforms/webhook.py
+index bc3ebe0..2cbe1d5 100644
+--- a/gateway/platforms/webhook.py
++++ b/gateway/platforms/webhook.py
+@@ -40,8 +40,11 @@ import logging
+ import re
+ import subprocess
+ import sys
++import threading
+ import time
++import uuid
+ from collections import deque
++from enum import Enum
+ from typing import Any, Deque, Dict, List, Optional
+ 
+ try:
+@@ -131,6 +134,14 @@ DEFAULT_PORT = 8644
+ _INSECURE_NO_AUTH = "INSECURE_NO_AUTH"
+ _DYNAMIC_ROUTES_FILENAME = "webhook_subscriptions.json"
+ _RATE_WINDOW_SECONDS = 60.0
++_IDEMPOTENCY_DEFAULT_MAX_ENTRIES = 4096
++_IDEMPOTENCY_MAX_ENTRIES_LIMIT = 1_000_000
++_RAW_PAYLOAD_DEFAULT_CAP_BYTES = 4_000
++_RAW_PAYLOAD_MIN_CAP_BYTES = 64
++_RAW_PAYLOAD_MAX_CAP_BYTES = 1_000_000
++_PROMPT_TOKEN_RE = re.compile(
++    r"\{(?P<token>__raw__(?::(?P<raw_cap>[^{}]*))?|[a-zA-Z0-9_.]+)\}"
++)
+ # Hostnames/IP literals that only serve connections originating on the same
+ # machine. Anything else is treated as a public bind for safety-rail purposes.
+ _LOOPBACK_HOSTS = frozenset({
+@@ -174,6 +185,26 @@ def check_webhook_requirements() -> bool:
+     return AIOHTTP_AVAILABLE
+ 
+ 
++class IdempotencyResult(str, Enum):
++    """Outcome of binding a stable provider delivery identity."""
++
++    ACCEPTED = "accepted"
++    DUPLICATE = "duplicate"
++    CONFLICT = "conflict"
++
++
++def _bounded_positive_int(value: Any, *, default: int, maximum: int) -> int:
++    """Parse an integer setting and keep it inside a safe positive range."""
++    if isinstance(value, bool):
++        parsed = default
++    else:
++        try:
++            parsed = int(value)
++        except (TypeError, ValueError, OverflowError):
++            parsed = default
++    return min(max(parsed, 1), maximum)
++
++
+ class WebhookAdapter(BasePlatformAdapter):
+     """Generic webhook receiver that triggers agent runs from HTTP POSTs."""
+ 
+@@ -217,14 +248,25 @@ class WebhookAdapter(BasePlatformAdapter):
+         # Reference to gateway runner for cross-platform delivery (set externally)
+         self.gateway_runner = None
+ 
+-        # Idempotency: TTL cache of recently processed delivery IDs.
+-        # Prevents duplicate agent runs when webhook providers retry.
+-        self._seen_deliveries: Dict[str, float] = {}
++        # Idempotency: TTL cache of provider-native retry identities.
++        # Keys include every authority boundary that can otherwise alias:
++        # (profile, route, provider, delivery_id). The original body hash is
++        # retained so conflicting reuse can be rejected with HTTP 409.
++        self._seen_deliveries: Dict[tuple[str, str, str, str], float] = {}
++        self._seen_delivery_bodies: Dict[tuple[str, str, str, str], str] = {}
+         self._idempotency_ttl: int = 3600  # 1 hour
++        self._idempotency_max_entries: int = _bounded_positive_int(
++            config.extra.get(
++                "idempotency_max_entries", _IDEMPOTENCY_DEFAULT_MAX_ENTRIES
++            ),
++            default=_IDEMPOTENCY_DEFAULT_MAX_ENTRIES,
++            maximum=_IDEMPOTENCY_MAX_ENTRIES_LIMIT,
++        )
++        self._idempotency_lock = threading.RLock()
+         self._seen_deliveries_next_prune_at: float = 0.0
+ 
+-        # Rate limiting: per-route timestamps in a fixed window.
+-        self._rate_counts: Dict[str, Deque[float]] = {}
++        # Rate limiting is isolated by profile and route.
++        self._rate_counts: Dict[tuple[str, str], Deque[float]] = {}
+         self._rate_limit: int = int(config.extra.get("rate_limit", 30))  # per minute
+ 
+         # Body size limit (auth-before-body pattern)
+@@ -423,22 +465,65 @@ class WebhookAdapter(BasePlatformAdapter):
+             self._delivery_info.pop(key, None)
+             self._delivery_info_created.pop(key, None)
+ 
+-    def _prune_seen_deliveries(self, now: float) -> None:
+-        """Occasionally prune expired delivery IDs without scanning every POST."""
+-        if now < self._seen_deliveries_next_prune_at:
+-            return
+-        cutoff = now - self._idempotency_ttl
+-        stale = [k for k, t in self._seen_deliveries.items() if t < cutoff]
+-        for k in stale:
+-            self._seen_deliveries.pop(k, None)
+-        self._seen_deliveries_next_prune_at = now + min(60.0, max(1.0, self._idempotency_ttl / 10))
+-
+-    def _record_rate_limit_hit(self, route_name: str, now: float) -> bool:
+-        """Return True if route is still within limit after recording this hit."""
+-        window = self._rate_counts.get(route_name)
++    def _prune_seen_deliveries(
++        self,
++        now: float,
++        *,
++        reserve: int = 0,
++        force: bool = False,
++    ) -> None:
++        """Expire old identities and enforce the configured hard ceiling.
++
++        ``reserve`` leaves room for an imminent insertion. This makes the
++        configured ceiling true at the insertion boundary, including values
++        below the historical implicit floor of 128.
++        """
++        target_size = max(0, self._idempotency_max_entries - reserve)
++        with self._idempotency_lock:
++            if (
++                not force
++                and now < self._seen_deliveries_next_prune_at
++                and len(self._seen_deliveries) <= target_size
++            ):
++                return
++
++            cutoff = now - self._idempotency_ttl
++            stale = [
++                key
++                for key, seen_at in self._seen_deliveries.items()
++                if seen_at < cutoff
++            ]
++            for key in stale:
++                self._seen_deliveries.pop(key, None)
++                self._seen_delivery_bodies.pop(key, None)
++
++            overflow = len(self._seen_deliveries) - target_size
++            if overflow > 0:
++                oldest = sorted(
++                    self._seen_deliveries,
++                    key=lambda key: self._seen_deliveries[key],
++                )[:overflow]
++                for key in oldest:
++                    self._seen_deliveries.pop(key, None)
++                    self._seen_delivery_bodies.pop(key, None)
++
++            self._seen_deliveries_next_prune_at = now + min(
++                60.0, max(1.0, self._idempotency_ttl / 10)
++            )
++
++    def _record_rate_limit_hit(
++        self,
++        route_name: str,
++        now: float,
++        *,
++        profile: Optional[str] = None,
++    ) -> bool:
++        """Record one hit in a profile/route-scoped fixed window."""
++        key = ((profile or "default"), route_name)
++        window = self._rate_counts.get(key)
+         if not isinstance(window, deque):
+             new_window: Deque[float] = deque(window or ())
+-            self._rate_counts[route_name] = new_window
++            self._rate_counts[key] = new_window
+             window = new_window
+         cutoff = now - _RATE_WINDOW_SECONDS
+         while window and window[0] < cutoff:
+@@ -448,17 +533,178 @@ class WebhookAdapter(BasePlatformAdapter):
+         window.append(now)
+         return True
+ 

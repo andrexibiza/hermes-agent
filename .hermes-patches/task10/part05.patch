@@ -1,0 +1,189 @@
++    ) -> None:
++        arguments = {
++            "delivery_id": "delivery",
++            "now": 1000.0,
++            "body_hash": "body",
++            "profile": "default",
++            "route": "route",
++            "provider": "github",
++        }
++        arguments.update(overrides)
++        with pytest.raises(ValueError, match=message):
++            _adapter()._record_delivery_id(**arguments)
++
++    def test_rate_limit_isolated_by_profile_and_route(self) -> None:
++        adapter = _adapter(rate_limit=1)
++
++        assert adapter._record_rate_limit_hit("route", 1000.0, profile="alpha")
++        assert adapter._record_rate_limit_hit("route", 1000.0, profile="beta")
++        assert adapter._record_rate_limit_hit("other", 1000.0, profile="alpha")
++        assert not adapter._record_rate_limit_hit(
++            "route", 1000.1, profile="alpha"
++        )
++
++
++class TestProviderDeliveryIdentity:
++    @staticmethod
++    def _request(headers: dict[str, str]) -> SimpleNamespace:
++        return SimpleNamespace(headers=headers)
++
++    @pytest.mark.parametrize(
++        ("route", "headers", "payload", "expected"),
++        [
++            (
++                {"provider": "github"},
++                {"X-GitHub-Delivery": "gh-1"},
++                {},
++                ("github", "gh-1"),
++            ),
++            ({"provider": "svix"}, {"svix-id": "msg-1"}, {}, ("svix", "msg-1")),
++            (
++                {"provider": "gitlab"},
++                {"X-Gitlab-Event-UUID": "gl-1"},
++                {},
++                ("gitlab", "gl-1"),
++            ),
++            (
++                {"signature_mode": "gitlab_standard"},
++                {"webhook-id": "std-1"},
++                {},
++                ("gitlab_standard", "std-1"),
++            ),
++            (
++                {"provider": "generic"},
++                {"X-Request-ID": "req-1"},
++                {},
++                ("generic", "req-1"),
++            ),
++            ({"provider": "stripe"}, {}, {"id": "evt_1"}, ("stripe", "evt_1")),
++            (
++                {"provider": "chatwoot"},
++                {"X-Chatwoot-Delivery": "cw-header"},
++                {"id": 77},
++                ("chatwoot", "cw-header"),
++            ),
++            ({"provider": "chatwoot"}, {}, {"id": 77}, ("chatwoot", "77")),
++            (
++                {},
++                {"X-Chatwoot-Delivery": "cw-inferred"},
++                {},
++                ("chatwoot", "cw-inferred"),
++            ),
++        ],
++    )
++    def test_stable_provider_native_matrix(
++        self,
++        route: dict,
++        headers: dict[str, str],
++        payload: dict,
++        expected: tuple[str, str],
++    ) -> None:
++        adapter = _adapter()
++        assert adapter._resolve_delivery_identity(
++            self._request(headers), route, payload
++        ) == expected
++
++    @pytest.mark.parametrize(
++        ("route", "headers", "payload"),
++        [
++            ({"provider": "github"}, {"X-GitHub-Delivery": "   "}, {}),
++            ({"provider": "generic"}, {"X-Request-ID": ""}, {}),
++            ({}, {}, {"id": "shape-is-not-proof"}),
++            (
++                {"provider": "generic"},
++                {"X-Webhook-Timestamp": "1700000000"},
++                {},
++            ),
++            ({"provider": "stripe"}, {}, {"id": []}),
++            ({"provider": "chatwoot"}, {}, {"id": None}),
++        ],
++    )
++    def test_blank_or_unqualified_identity_skips_dedup(
++        self, route: dict, headers: dict[str, str], payload: dict
++    ) -> None:
++        adapter = _adapter()
++        assert adapter._resolve_delivery_identity(
++            self._request(headers), route, payload
++        ) is None
++
++
++class TestHttpContract:
++    @pytest.mark.asyncio
++    async def test_same_delivery_runs_each_route_once(self) -> None:
++        secret = "secret"
++        adapter = _adapter({"a": _route(secret), "b": _route(secret)})
++        events = []
++
++        async def capture(event) -> None:
++            events.append(event)
++
++        adapter.handle_message = capture
++        body = json.dumps({"value": 1}).encode()
++        headers = _github_headers(body, secret, delivery_id="fanout-1")
++
++        async with TestClient(TestServer(_app(adapter))) as client:
++            first_a = await client.post("/webhooks/a", data=body, headers=headers)
++            first_b = await client.post("/webhooks/b", data=body, headers=headers)
++            retry_a = await client.post("/webhooks/a", data=body, headers=headers)
++            assert first_a.status == 202
++            assert first_b.status == 202
++            assert retry_a.status == 200
++            assert (await retry_a.json())["status"] == "duplicate"
++
++        await asyncio.sleep(0.01)
++        assert len(events) == 2
++
++    @pytest.mark.asyncio
++    async def test_conflicting_body_returns_409(self) -> None:
++        secret = "secret"
++        adapter = _adapter({"route": _route(secret)})
++        body_a = json.dumps({"value": 1}).encode()
++        body_b = json.dumps({"value": 2}).encode()
++
++        async with TestClient(TestServer(_app(adapter))) as client:
++            first = await client.post(
++                "/webhooks/route",
++                data=body_a,
++                headers=_github_headers(body_a, secret, delivery_id="conflict"),
++            )
++            conflict = await client.post(
++                "/webhooks/route",
++                data=body_b,
++                headers=_github_headers(body_b, secret, delivery_id="conflict"),
++            )
++            assert first.status == 202
++            assert conflict.status == 409
++            assert (await conflict.json())["status"] == "conflict"
++
++    @pytest.mark.asyncio
++    async def test_missing_stable_id_gets_unique_trace_without_dedup(self) -> None:
++        adapter = _adapter(
++            {
++                "route": {
++                    "secret": _INSECURE_NO_AUTH,
++                    "prompt": "{event_type}",
++                    "deliver": "log",
++                }
++            }
++        )
++        events = []
++
++        async def capture(event) -> None:
++            events.append(event)
++
++        adapter.handle_message = capture
++
++        async with TestClient(TestServer(_app(adapter))) as client:
++            first = await client.post("/webhooks/route", json={"value": 1})
++            second = await client.post("/webhooks/route", json={"value": 1})
++            first_body = await first.json()
++            second_body = await second.json()
++
++        await asyncio.sleep(0.01)
++        assert first.status == second.status == 202
++        assert first_body["deduplication"] == "skipped"
++        assert second_body["deduplication"] == "skipped"
++        assert first_body["delivery_id"].startswith("generated-")
++        assert second_body["delivery_id"].startswith("generated-")
++        assert first_body["delivery_id"] != second_body["delivery_id"]
++        assert len(events) == 2

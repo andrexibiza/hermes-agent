@@ -14,9 +14,29 @@ const FENCE_LINE_RE = /^([ \t]*)(`{3,}|~{3,})([^\n]*)$/
 const EMPTY_FENCE_BLOCK_RE = /(^|\n)[ \t]*(?:`{3,}|~{3,})[^\n]*\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?=\n|$)/g
 const CODE_FENCE_SPLIT_RE = /((?:```|~~~)[\s\S]*?(?:```|~~~))/g
 const INLINE_CODE_SPLIT_RE = /(`[^`\n]+`)/g
+// Math spans as remark-math will see them: a `$$…$$` block, which may span
+// lines, or a same-line `$…$`. A delimiter escaped as `\$` is prose — that is
+// exactly how escapeCurrencyDollarsPreservingMath marks a price, so the
+// lookbehinds keep `\$5 and \$10` out of the math branch.
+//
+// The inline body steps over escape pairs (`\\[^\n]`) rather than excluding
+// `$` outright, because `\$` is a literal dollar INSIDE math (`$x + \$5$`) and
+// must not end the span — the same distinction findClosingSingleDollar draws
+// via isEscapedAt. The two alternatives are disjoint on their first character,
+// so the body cannot backtrack ambiguously.
+const MATH_SPAN_SPLIT_RE = /((?<!\\)\$\$[\s\S]*?(?<!\\)\$\$|(?<!\\)\$(?:[^\n$\\]|\\[^\n])+?(?<!\\)\$)/g
 const LATEX_DISPLAY_OPEN_LINE_RE = /^([ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d+[.)])[ \t]+)?[ \t]*)\\{1,2}\[[ \t]*\r?$/
 const LATEX_DISPLAY_CLOSE_LINE_RE = /^([ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d+[.)])[ \t]+)?[ \t]*)\\{1,2}\][ \t]*\r?$/
 const CUSTOM_DISPLAY_MATH_LINE_RE = /^([ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d+[.)])[ \t]+)?[ \t]*)\[\/math\][ \t]*\r?$/
+
+// A `$$` that opens a block and is immediately followed by the first line of the
+// equation, e.g. `$$\begin{aligned}`. Both patterns anchor the `$$` to the start
+// of the line (modulo blockquote/list prefix), which is also what keeps them from
+// firing inside an inline code span — `` `$$a `` leads with a backtick.
+const HUGGING_DISPLAY_MATH_OPEN_RE =
+  /^([ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d+[.)])[ \t]+)?[ \t]*)\$\$[ \t]*(\S[^\n]*?)[ \t]*\r?$/
+
+const HUGGING_DISPLAY_MATH_CLOSE_RE = /^([ \t]*(?:>[ \t]*)*[ \t]*)(\S[^\n]*?)\$\$[ \t]*\r?$/
 // Bare-URL autolink matcher. The character classes EXCLUDE `*` so a URL that
 // abuts markdown emphasis with no separating space (e.g. `**label: https://x**`,
 // a very common LLM pattern) doesn't swallow the trailing `**` into the href.
@@ -173,19 +193,39 @@ function routeFileLinksToPreview(text: string): string {
   })
 }
 
+function rewriteProseSegment(segment: string): string {
+  return linkifySessionRefs(
+    autoLinkRawUrls(
+      routeFileLinksToPreview(
+        segment.replace(/`{3,}/g, '').replace(LOCAL_PREVIEW_URL_RE, '$1').replace(CITATION_MARKER_RE, '')
+      )
+    )
+  )
+}
+
+/**
+ * Apply the prose rewrites to visible prose only.
+ *
+ * Inline code has always been shielded here. Math has to be shielded for the
+ * same reason: these rewrites read TeX as prose. `CITATION_MARKER_RE` is the
+ * one that bites — its lookbehind accepts any letter, so the `t` of `\sqrt`
+ * qualifies and `$\sqrt[3]{8}$` loses its index to what looks like a citation
+ * marker, long before KaTeX sees it.
+ *
+ * Split on math spans is odd-index-is-a-delimiter (capturing split), not a
+ * `startsWith('$')` test, so a prose segment that merely opens with a stray
+ * dollar can't be mistaken for math.
+ */
 function normalizeVisibleProse(text: string): string {
   return text
     .split(INLINE_CODE_SPLIT_RE)
     .map(part =>
       part.startsWith('`')
         ? part
-        : linkifySessionRefs(
-            autoLinkRawUrls(
-              routeFileLinksToPreview(
-                part.replace(/`{3,}/g, '').replace(LOCAL_PREVIEW_URL_RE, '$1').replace(CITATION_MARKER_RE, '')
-              )
-            )
-          )
+        : part
+            .split(MATH_SPAN_SPLIT_RE)
+            .map((segment, index) => (index % 2 === 1 ? segment : rewriteProseSegment(segment)))
+            .join('')
     )
     .join('')
 }
@@ -302,6 +342,76 @@ function escapeCurrencyDollarsPreservingMath(text: string): string {
   return out + text.slice(copiedThrough)
 }
 
+/**
+ * Moves the `$$` delimiters of a MULTI-LINE display-math block onto their own
+ * lines: `$$\begin{aligned}` … `\end{aligned}$$` becomes a `$$`-only line, the
+ * body, then a `$$`-only line.
+ *
+ * remark-math's flow-math construct is fence-shaped: whatever follows the
+ * opening `$$` on the same line is read as an info string and DISCARDED, and the
+ * closing `$$` is only recognized alone on its own line. So the hugging form
+ * loses its first line, never closes, and KaTeX paints the remains as raw source
+ * text. Models emit this form constantly.
+ *
+ * Single-line `$$…$$` is left alone — it routes through the inline math-text
+ * construct and already renders.
+ */
+function splitHuggingDisplayMath(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const openingMatch = lines[index].match(HUGGING_DISPLAY_MATH_OPEN_RE)
+
+    // `$$x^2$$` closes on the same line — not our case.
+    if (!openingMatch || openingMatch[2].endsWith('$$')) {
+      out.push(lines[index])
+
+      continue
+    }
+
+    let closingIndex = -1
+
+    for (let candidate = index + 1; candidate < lines.length; candidate += 1) {
+      if (HUGGING_DISPLAY_MATH_CLOSE_RE.test(lines[candidate])) {
+        closingIndex = candidate
+
+        break
+      }
+    }
+
+    if (closingIndex === -1) {
+      out.push(lines[index])
+
+      continue
+    }
+
+    const closingMatch = lines[closingIndex].match(HUGGING_DISPLAY_MATH_CLOSE_RE) as RegExpMatchArray
+    const openingCarriageReturn = lines[index].endsWith('\r') ? '\r' : ''
+    const closingCarriageReturn = lines[closingIndex].endsWith('\r') ? '\r' : ''
+
+    // The container prefix (blockquote marker, list bullet) has to be replayed
+    // onto the delimiter lines, or the block falls out of its container.
+    out.push(
+      `${openingMatch[1]}$$${openingCarriageReturn}`,
+      `${openingMatch[1]}${openingMatch[2]}${openingCarriageReturn}`
+    )
+    out.push(...lines.slice(index + 1, closingIndex))
+    // The break this split INTRODUCES takes the block's own line ending, not the
+    // closing line's — a final `\end{aligned}$$` with no trailing CRLF (it's the
+    // last line of the message) would otherwise emit a bare LF into an
+    // otherwise-CRLF block.
+    out.push(
+      `${closingMatch[1]}${closingMatch[2]}${openingCarriageReturn}`,
+      `${closingMatch[1]}$$${closingCarriageReturn}`
+    )
+
+    index = closingIndex
+  }
+
+  return out.join('\n')
+}
+
 function normalizeDisplayMathForMarkdown(text: string): string {
   const lines = text.split('\n')
 
@@ -344,7 +454,12 @@ function normalizeProseMath(text: string): string {
   // Normalize those locally before the dependency handles inline forms;
   // its compact `$$body$$` rewrite makes the first equation line metadata
   // and leaks the trailing `$$` into KaTeX's error fallback.
-  const normalized = normalizeMathDelimiters(normalizeDisplayMathForMarkdown(text))
+  //
+  // splitHuggingDisplayMath runs LAST because normalizeMathDelimiters is itself
+  // a source of the hugging form: a multi-line `\[…\]` comes out of it as
+  // `$$\begin{aligned}…\end{aligned}$$`. Running afterwards catches both the
+  // hugging math the model emitted and the hugging math the rewrite produced.
+  const normalized = splitHuggingDisplayMath(normalizeMathDelimiters(normalizeDisplayMathForMarkdown(text)))
 
   return escapeCurrencyDollarsPreservingMath(normalized)
 }

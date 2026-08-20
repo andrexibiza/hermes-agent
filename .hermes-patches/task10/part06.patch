@@ -1,0 +1,165 @@
++        assert events[0].source.chat_id != events[1].source.chat_id
++        assert adapter._seen_deliveries == {}
++
++    @pytest.mark.asyncio
++    async def test_non_object_json_is_rejected_cleanly(self) -> None:
++        adapter = _adapter(
++            {"route": _route(_INSECURE_NO_AUTH, provider="generic")}
++        )
++        async with TestClient(TestServer(_app(adapter))) as client:
++            response = await client.post("/webhooks/route", json=[1, 2, 3])
++            assert response.status == 400
++            assert (await response.json())["error"] == (
++                "JSON body must be an object"
++            )
++
++    @pytest.mark.asyncio
++    @pytest.mark.parametrize("content_type", [None, "text/plain"])
++    async def test_missing_or_unsupported_content_type_returns_415(
++        self, content_type: str | None
++    ) -> None:
++        adapter = _adapter(
++            {"route": _route(_INSECURE_NO_AUTH, provider="generic")}
++        )
++        headers = {} if content_type is None else {"Content-Type": content_type}
++        async with TestClient(TestServer(_app(adapter))) as client:
++            response = await client.post(
++                "/webhooks/route", data=b"{}", headers=headers
++            )
++            assert response.status == 415
++
++    @pytest.mark.asyncio
++    async def test_compressed_content_is_rejected_before_parsing(self) -> None:
++        adapter = _adapter(
++            {"route": _route(_INSECURE_NO_AUTH, provider="generic")}
++        )
++        async with TestClient(TestServer(_app(adapter))) as client:
++            response = await client.post(
++                "/webhooks/route",
++                data=b"not-really-gzip",
++                headers={
++                    "Content-Type": "application/json",
++                    "Content-Encoding": "gzip",
++                },
++            )
++            assert response.status == 415
++
++    @pytest.mark.asyncio
++    async def test_rate_limit_returns_retry_after(self) -> None:
++        adapter = _adapter(
++            {"route": _route(_INSECURE_NO_AUTH)}, rate_limit=1
++        )
++        async with TestClient(TestServer(_app(adapter))) as client:
++            first = await client.post(
++                "/webhooks/route",
++                json={"value": 1},
++                headers={"X-GitHub-Delivery": "one"},
++            )
++            second = await client.post(
++                "/webhooks/route",
++                json={"value": 2},
++                headers={"X-GitHub-Delivery": "two"},
++            )
++            assert first.status == 202
++            assert second.status == 429
++            assert second.headers["Retry-After"] == "60"
++
++    @pytest.mark.asyncio
++    async def test_idempotency_precedes_script_side_effects(self) -> None:
++        secret = "secret"
++        adapter = _adapter(
++            {"route": _route(secret, script="transform.py")}
++        )
++        calls = 0
++
++        def run_script(_script: str, payload: dict) -> tuple[bool, dict]:
++            nonlocal calls
++            calls += 1
++            return True, payload
++
++        adapter._route_processor.run_route_script = run_script
++        body = json.dumps({"value": 1}).encode()
++        headers = _github_headers(body, secret, delivery_id="script-once")
++
++        async with TestClient(TestServer(_app(adapter))) as client:
++            first = await client.post(
++                "/webhooks/route", data=body, headers=headers
++            )
++            retry = await client.post(
++                "/webhooks/route", data=body, headers=headers
++            )
++            assert first.status == 202
++            assert retry.status == 200
++
++        assert calls == 1
++
++
++class TestRawPayloadEnvelope:
++    def test_bare_token_uses_complete_4000_byte_cap(self) -> None:
++        adapter = _adapter()
++        payload = {"text": ("é\\\"{event_type}" * 1000)}
++        rendered = adapter._render_prompt(
++            "Raw={__raw__}", payload, "push", "route"
++        )
++        envelope_text = rendered.split("Raw=", 1)[1]
++        envelope = json.loads(envelope_text)
++
++        assert len(envelope_text.encode("utf-8")) <= (
++            _RAW_PAYLOAD_DEFAULT_CAP_BYTES
++        )
++        assert envelope["truncated"] is True
++        assert envelope["original_bytes"] == len(
++            json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
++        )
++
++    def test_parameterized_cap_bounds_escaping_and_multibyte_text(self) -> None:
++        adapter = _adapter()
++        payload = {"text": ("\\\"é" * 500)}
++        rendered = adapter._render_prompt(
++            "{__raw__:256}", payload, "push", "route"
++        )
++        envelope = json.loads(rendered)
++
++        assert len(rendered.encode("utf-8")) <= 256
++        assert envelope["truncated"] is True
++
++    def test_raw_payload_is_not_treated_as_a_second_template_layer(self) -> None:
++        adapter = _adapter()
++        payload = {
++            "text": "literal {event_type} and {nested.value}",
++            "nested": {"value": "resolved-only-outside-raw"},
++        }
++        rendered = adapter._render_prompt(
++            "Event={event_type} Raw={__raw__:512}",
++            payload,
++            "push",
++            "route",
++        )
++        envelope = json.loads(rendered.split(" Raw=", 1)[1])
++
++        assert rendered.startswith("Event=push Raw=")
++        assert "literal {event_type} and {nested.value}" in envelope["payload"]
++
++    def test_empty_template_uses_same_parseable_envelope(self) -> None:
++        adapter = _adapter()
++        rendered = adapter._render_prompt("", {"value": "é"}, "push", "r")
++        fenced = rendered.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
++        envelope = json.loads(fenced)
++
++        assert envelope["truncated"] is False
++        assert envelope["original_bytes"] == len(
++            json.dumps(
++                {"value": "é"}, indent=2, ensure_ascii=False
++            ).encode("utf-8")
++        )
++
++    @pytest.mark.parametrize(
++        "cap",
++        [
++            _RAW_PAYLOAD_MIN_CAP_BYTES - 1,
++            _RAW_PAYLOAD_MAX_CAP_BYTES + 1,
++        ],
++    )
++    def test_absurd_cap_is_rejected(self, cap: int) -> None:
++        with pytest.raises(ValueError):
++            _adapter()._render_raw_payload({"value": 1}, cap)

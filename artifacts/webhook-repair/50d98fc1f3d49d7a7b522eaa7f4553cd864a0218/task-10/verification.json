@@ -1,0 +1,16 @@
+{
+  "branch": "wr/task-10-intake-contract",
+  "changed_files": [
+    "gateway/platforms/webhook.py",
+    "tests/gateway/test_webhook_http_contract.py",
+    "tests/gateway/test_webhook_intake_hardening.py"
+  ],
+  "head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+  "head_before_commit": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+  "phase": "verification",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\task-10-intake-contract",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 10,
+  "timestamp": "2026-08-14T23:56:11Z"
+}

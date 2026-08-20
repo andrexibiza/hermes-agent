@@ -784,15 +784,25 @@ class TestRawTemplateToken:
 
 
     def test_raw_mixed_with_other_variables(self):
-        """{__raw__} can be mixed with regular template variables."""
+        """{__raw__} can be mixed with regular template variables.
+
+        The raw payload is rendered as a structurally valid JSON envelope
+        (#55829), so the portion after ``Raw=`` must parse as JSON with
+        ``payload``, ``truncated``, and ``original_bytes`` fields.
+        """
         adapter = _make_adapter()
         payload = {"action": "closed", "number": 7}
         result = adapter._render_prompt(
             "Action={action} Raw={__raw__}", payload, "push", "test"
         )
         assert result.startswith("Action=closed Raw=")
-        assert '"action": "closed"' in result
-        assert '"number": 7' in result
+        envelope_json = result.split("Raw=", 1)[1]
+        import json as _json
+        envelope = _json.loads(envelope_json)  # must parse
+        assert envelope["truncated"] is False
+        assert envelope["original_bytes"] > 0
+        assert '"action": "closed"' in envelope["payload"]
+        assert '"number": 7' in envelope["payload"]
 
 
 # ===================================================================

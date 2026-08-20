@@ -1,0 +1,13 @@
+{
+  "branch": "wr/task-10-intake-contract",
+  "expected_head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+  "head": "b402cf4c01909b74ebfac65f8a4dedef358b9309",
+  "mode": "existing_pr",
+  "phase": "preflight",
+  "repository": "D:\\HERMES-TEMP\\webhook-revolution\\task-10-intake-contract",
+  "schema_version": 1,
+  "status": "pass",
+  "task": 10,
+  "task_title": "HTTP intake, idempotency, limits, filters, and transforms",
+  "timestamp": "2026-08-14T23:54:53Z"
+}

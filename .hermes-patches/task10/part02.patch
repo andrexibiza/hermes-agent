@@ -1,0 +1,176 @@
++            candidate = self._nonempty_identity(payload.get("id"))
++            if candidate is not None:
++                return provider, candidate
++
++        return None
+ 
+     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
+         return {"name": chat_id, "type": "webhook"}
+@@ -669,6 +915,14 @@ class WebhookAdapter(BasePlatformAdapter):
+                 {"error": "Payload too large"}, status=413
+             )
+ 
++        content_encoding = request.headers.get(
++            "Content-Encoding", ""
++        ).strip().lower()
++        if content_encoding not in {"", "identity"}:
++            return web.json_response(
++                {"error": "Unsupported Content-Encoding"}, status=415
++            )
++
+         # Read body (must be done before any validation)
+         try:
+             raw_body = await request.read()
+@@ -713,26 +967,50 @@ class WebhookAdapter(BasePlatformAdapter):
+ 
+         # ── Rate limiting (after auth) ───────────────────────────
+         now = time.time()
+-        if not self._record_rate_limit_hit(route_name, now):
++        effective_profile = profile or "default"
++        if not self._record_rate_limit_hit(
++            route_name, now, profile=effective_profile
++        ):
+             return web.json_response(
+-                {"error": "Rate limit exceeded"}, status=429
++                {"error": "Rate limit exceeded"},
++                status=429,
++                headers={"Retry-After": str(int(_RATE_WINDOW_SECONDS))},
+             )
+ 
+-        # Parse payload
+-        try:
+-            payload = json.loads(raw_body)
+-        except json.JSONDecodeError:
+-            # Try form-encoded as fallback
++        # Parse only the declared media type. Invalid JSON must never fall
++        # through into form decoding, and webhook envelopes must be objects.
++        media_type = request.headers.get("Content-Type", "").split(
++            ";", 1
++        )[0].strip().lower()
++        if media_type == "application/x-www-form-urlencoded":
+             try:
+                 import urllib.parse
+ 
+                 payload = dict(
+                     urllib.parse.parse_qsl(raw_body.decode("utf-8"))
+                 )
+-            except Exception:
++            except (UnicodeDecodeError, ValueError):
+                 return web.json_response(
+-                    {"error": "Cannot parse body"}, status=400
++                    {"error": "Cannot parse form body"}, status=400
+                 )
++        elif media_type == "application/json" or media_type.endswith(
++            "+json"
++        ):
++            try:
++                payload = json.loads(raw_body)
++            except (json.JSONDecodeError, UnicodeDecodeError):
++                return web.json_response(
++                    {"error": "Cannot parse JSON body"}, status=400
++                )
++        else:
++            return web.json_response(
++                {"error": "Unsupported Content-Type"}, status=415
++            )
++
++        if not isinstance(payload, dict):
++            return web.json_response(
++                {"error": "JSON body must be an object"}, status=400
++            )
+ 
+         # Check event type filter
+         event_type = (
+@@ -770,6 +1048,46 @@ class WebhookAdapter(BasePlatformAdapter):
+                 }
+             )
+ 
++        identity = self._resolve_delivery_identity(
++            request, route_config, payload
++        )
++        if identity is None:
++            provider, _declared = self._delivery_provider(
++                request, route_config
++            )
++            delivery_id = f"generated-{uuid.uuid4().hex}"
++            stable_delivery_id = None
++        else:
++            provider, delivery_id = identity
++            stable_delivery_id = delivery_id
++            idem_result = self._record_delivery_id(
++                delivery_id,
++                now,
++                hashlib.sha256(raw_body).hexdigest(),
++                profile=effective_profile,
++                route=route_name,
++                provider=provider,
++            )
++            if idem_result is IdempotencyResult.CONFLICT:
++                return web.json_response(
++                    {
++                        "status": "conflict",
++                        "delivery_id": delivery_id,
++                        "error": (
++                            "Idempotency key reused with a different body"
++                        ),
++                    },
++                    status=409,
++                )
++            if idem_result is IdempotencyResult.DUPLICATE:
++                logger.info(
++                    "[webhook] Skipping duplicate delivery %s", delivery_id
++                )
++                return web.json_response(
++                    {"status": "duplicate", "delivery_id": delivery_id},
++                    status=200,
++                )
++
+         if route_config.get("script"):
+             # run_route_script shells out (subprocess.run, up to its timeout);
+             # run it in a worker thread so it can't block the gateway event loop.
+@@ -795,9 +1113,20 @@ class WebhookAdapter(BasePlatformAdapter):
+ 
+         # Format prompt from template
+         prompt_template = route_config.get("prompt", "")
+-        prompt = self._render_prompt(
+-            prompt_template, payload, event_type, route_name
+-        )
++        try:
++            prompt = self._render_prompt(
++                prompt_template, payload, event_type, route_name
++            )
++        except ValueError as exc:
++            logger.error(
++                "[webhook] Invalid prompt template for route %s: %s",
++                route_name,
++                exc,
++            )
++            return web.json_response(
++                {"error": "Webhook route has an invalid prompt template"},
++                status=500,
++            )
+ 
+         # Inject skill content if configured.
+         # We call build_skill_invocation_message() directly rather than
+@@ -828,27 +1157,6 @@ class WebhookAdapter(BasePlatformAdapter):
+             except Exception as e:
+                 logger.warning("[webhook] Skill loading failed: %s", e)
+ 
+-        # Build a unique delivery ID
+-        delivery_id = request.headers.get(
+-            "X-GitHub-Delivery",
+-            request.headers.get(
+-                "svix-id",
+-                request.headers.get("X-Request-ID", str(int(time.time() * 1000))),
+-            ),
+-        )
+-
+-        # ── Idempotency ─────────────────────────────────────────
+-        # Skip duplicate deliveries (webhook retries).
+-        now = time.time()
+-        if not self._record_delivery_id(delivery_id, now):
+-            logger.info(
+-                "[webhook] Skipping duplicate delivery %s", delivery_id
+-            )
+-            return web.json_response(
+-                {"status": "duplicate", "delivery_id": delivery_id},

@@ -1,0 +1,163 @@
+-                status=200,
+-            )
+-
+         # ── Direct delivery mode (deliver_only) ─────────────────
+         # Skip the agent entirely — the rendered prompt IS the message we
+         # deliver.  Use case: external services (Supabase, monitoring,
+@@ -967,6 +1275,9 @@ class WebhookAdapter(BasePlatformAdapter):
+                 "route": route_name,
+                 "event": event_type,
+                 "delivery_id": delivery_id,
++                "deduplication": (
++                    "stable" if stable_delivery_id is not None else "skipped"
++                ),
+             },
+             status=202,
+         )
+@@ -1251,40 +1562,114 @@ class WebhookAdapter(BasePlatformAdapter):
+         event_type: str,
+         route_name: str,
+     ) -> str:
+-        """Render a prompt template with the webhook payload.
++        """Render a prompt template with bounded, parseable raw envelopes.
+ 
+-        Supports dot-notation access into nested dicts:
+-        ``{pull_request.title}`` → ``payload["pull_request"]["title"]``
+-
+-        Special token ``{__raw__}`` dumps the entire payload as indented
+-        JSON (truncated to 4000 chars).  Useful for monitoring alerts or
+-        any webhook where the agent needs to see the full payload.
++        ``{__raw__}`` retains its 4,000-byte default. ``{__raw__:N}``
++        selects an explicit complete-envelope byte cap between 64 and
++        1,000,000 bytes. The cap includes metadata and JSON escaping.
+         """
+         if not template:
+-            truncated = json.dumps(payload, indent=2)[:4000]
++            raw_envelope = self._render_raw_payload(
++                payload, _RAW_PAYLOAD_DEFAULT_CAP_BYTES
++            )
+             return (
+                 f"Webhook event '{event_type}' on route "
+-                f"'{route_name}':\n\n```json\n{truncated}\n```"
++                f"'{route_name}':\n\n```json\n{raw_envelope}\n```"
+             )
+ 
+         def _resolve(match: re.Match) -> str:
+-            key = match.group(1)
+-            # Special token: dump the entire payload as JSON
+-            if key == "__raw__":
+-                return json.dumps(payload, indent=2)[:4000]
+-            if key == "event_type":
++            token = match.group("token")
++            if token.startswith("__raw__"):
++                cap_text = match.group("raw_cap")
++                if cap_text is None:
++                    cap = _RAW_PAYLOAD_DEFAULT_CAP_BYTES
++                else:
++                    try:
++                        cap = int(cap_text)
++                    except (TypeError, ValueError) as exc:
++                        raise ValueError(
++                            f"invalid raw payload cap: {cap_text!r}"
++                        ) from exc
++                return self._render_raw_payload(payload, cap)
++            if token == "event_type":
+                 return event_type
+             value: Any = payload
+-            for part in key.split("."):
++            for part in token.split("."):
+                 if isinstance(value, dict):
+-                    value = value.get(part, f"{{{key}}}")
++                    value = value.get(part, f"{{{token}}}")
+                 else:
+-                    return f"{{{key}}}"
++                    return f"{{{token}}}"
+             if isinstance(value, (dict, list)):
+                 return json.dumps(value, indent=2)[:2000]
+             return str(value)
+ 
+-        return re.sub(r"\{([a-zA-Z0-9_.]+)\}", _resolve, template)
++        # One substitution pass is deliberate: payload text emitted by
++        # ``{__raw__}`` may itself contain brace-shaped strings and must never
++        # be interpreted as a second template layer.
++        return _PROMPT_TOKEN_RE.sub(_resolve, template)
++
++    def _render_raw_payload(
++        self, payload: dict, cap: int = _RAW_PAYLOAD_DEFAULT_CAP_BYTES
++    ) -> str:
++        """Render a valid JSON envelope within the complete UTF-8 byte cap."""
++        try:
++            requested_cap = int(cap)
++        except (TypeError, ValueError) as exc:
++            raise ValueError(f"invalid raw payload cap: {cap!r}") from exc
++        if not (
++            _RAW_PAYLOAD_MIN_CAP_BYTES
++            <= requested_cap
++            <= _RAW_PAYLOAD_MAX_CAP_BYTES
++        ):
++            raise ValueError(
++                "raw payload cap must be between "
++                f"{_RAW_PAYLOAD_MIN_CAP_BYTES} and "
++                f"{_RAW_PAYLOAD_MAX_CAP_BYTES} bytes"
++            )
++
++        serialized = json.dumps(payload, indent=2, ensure_ascii=False)
++        serialized_bytes = serialized.encode("utf-8")
++        original_bytes = len(serialized_bytes)
++
++        def _envelope(payload_text: str, *, truncated: bool) -> str:
++            return json.dumps(
++                {
++                    "payload": payload_text,
++                    "truncated": truncated,
++                    "original_bytes": original_bytes,
++                },
++                ensure_ascii=False,
++                separators=(",", ":"),
++            )
++
++        full = _envelope(serialized, truncated=False)
++        if len(full.encode("utf-8")) <= requested_cap:
++            return full
++
++        smallest = _envelope("", truncated=True)
++        if len(smallest.encode("utf-8")) > requested_cap:
++            raise ValueError(
++                "raw payload cap is too small for the envelope metadata"
++            )
++
++        # JSON-string encoding size is monotonic as the prefix grows, so a
++        # binary search finds the largest code-point-safe payload prefix whose
++        # complete escaped envelope still fits the selected cap.
++        low = 0
++        high = min(original_bytes, requested_cap)
++        best = smallest
++        while low <= high:
++            midpoint = (low + high) // 2
++            bounded = serialized_bytes[:midpoint].decode(
++                "utf-8", errors="ignore"
++            )
++            candidate = _envelope(bounded, truncated=True)
++            if len(candidate.encode("utf-8")) <= requested_cap:
++                best = candidate
++                low = midpoint + 1
++            else:
++                high = midpoint - 1
++        return best
+ 
+     def _render_delivery_extra(
+         self, extra: dict, payload: dict
+diff --git a/tests/gateway/test_webhook_adapter.py b/tests/gateway/test_webhook_adapter.py
+index 4f5cdb1..21be925 100644
+--- a/tests/gateway/test_webhook_adapter.py
++++ b/tests/gateway/test_webhook_adapter.py
+@@ -791,8 +791,11 @@ class TestRawTemplateToken:
+             "Action={action} Raw={__raw__}", payload, "push", "test"
+         )
+         assert result.startswith("Action=closed Raw=")
+-        assert '"action": "closed"' in result
+-        assert '"number": 7' in result
++        envelope = json.loads(result.split("Raw=", 1)[1])
++        assert envelope["truncated"] is False
++        assert envelope["original_bytes"] > 0
++        assert '"action": "closed"' in envelope["payload"]

@@ -1,0 +1,178 @@
+-    def _record_delivery_id(self, delivery_id: str, now: float) -> bool:
+-        """Return True when this delivery should be processed."""
+-        seen_at = self._seen_deliveries.get(delivery_id)
+-        if seen_at is not None and now - seen_at < self._idempotency_ttl:
+-            return False
+-        if seen_at is not None:
+-            self._seen_deliveries.pop(delivery_id, None)
+-        self._seen_deliveries[delivery_id] = now
+-        if len(self._seen_deliveries) > max(self._rate_limit * 2, 128):
+-            self._prune_seen_deliveries(now)
+-        return True
++    def _record_delivery_id(
++        self,
++        delivery_id: str,
++        now: float,
++        body_hash: str,
++        *,
++        profile: str,
++        route: str,
++        provider: str,
++    ) -> IdempotencyResult:
++        """Bind a stable provider identity to one body and authority scope."""
++        normalized_id = str(delivery_id).strip()
++        normalized_hash = str(body_hash).strip()
++        normalized_scope = tuple(
++            str(value).strip() for value in (profile, route, provider)
++        )
++        if not normalized_id:
++            raise ValueError("delivery_id must be a non-empty stable identity")
++        if not normalized_hash:
++            raise ValueError("body_hash must be non-empty")
++        if not all(normalized_scope):
++            raise ValueError("profile, route, and provider must be non-empty")
++        key = (*normalized_scope, normalized_id)
++
++        with self._idempotency_lock:
++            seen_at = self._seen_deliveries.get(key)
++            if seen_at is not None and now - seen_at < self._idempotency_ttl:
++                previous_hash = self._seen_delivery_bodies.get(key, "")
++                if previous_hash and normalized_hash != previous_hash:
++                    return IdempotencyResult.CONFLICT
++                return IdempotencyResult.DUPLICATE
++
++            if seen_at is not None:
++                self._seen_deliveries.pop(key, None)
++                self._seen_delivery_bodies.pop(key, None)
++
++            self._prune_seen_deliveries(now, reserve=1)
++            self._seen_deliveries[key] = now
++            self._seen_delivery_bodies[key] = normalized_hash
++            return IdempotencyResult.ACCEPTED
++
++    @staticmethod
++    def _nonempty_identity(value: Any) -> Optional[str]:
++        """Normalize a provider identity without collapsing blanks together."""
++        if isinstance(value, bool) or value is None:
++            return None
++        if not isinstance(value, (str, int)):
++            return None
++        normalized = str(value).strip()
++        return normalized or None
++
++    @staticmethod
++    def _delivery_provider(
++        request: "web.Request", route_config: dict
++    ) -> tuple[str, bool]:
++        """Return the provider namespace and whether the route declared it."""
++        configured: Optional[str] = None
++        for candidate in (
++            route_config.get("provider"),
++            route_config.get("signature_mode"),
++        ):
++            if isinstance(candidate, str) and candidate.strip():
++                configured = candidate.strip().lower()
++                break
++
++        aliases = {
++            "agentmail": "svix",
++            "generic_v1": "generic",
++            "generic_v2": "generic",
++            "github_hmac_sha256": "github",
++            "gitlab_token": "gitlab",
++            "standard_webhooks": "gitlab_standard",
++        }
++        if configured is not None:
++            return aliases.get(configured, configured), True
++
++        headers = request.headers
++        if any(
++            headers.get(name, "").strip()
++            for name in ("svix-id", "svix-signature", "svix-timestamp")
++        ):
++            return "svix", False
++        if any(
++            headers.get(name, "").strip()
++            for name in ("X-Hub-Signature-256", "X-GitHub-Delivery")
++        ):
++            return "github", False
++        if any(
++            headers.get(name, "").strip()
++            for name in (
++                "X-Gitlab-Token",
++                "X-Gitlab-Event-UUID",
++                "X-Gitlab-Webhook-UUID",
++                "X-Gitlab-Idempotency-Key",
++            )
++        ):
++            return "gitlab", False
++        if any(
++            headers.get(name, "").strip()
++            for name in ("webhook-id", "webhook-signature")
++        ):
++            return "gitlab_standard", False
++        if headers.get("X-Chatwoot-Delivery", "").strip():
++            return "chatwoot", False
++        if headers.get("linear-signature", "").strip():
++            return "linear", False
++        if headers.get("X-Hindsight-Signature", "").strip():
++            return "hindsight", False
++        if any(
++            headers.get(name, "").strip()
++            for name in (
++                "X-Webhook-Signature-V2",
++                "X-Webhook-Signature",
++                "X-Request-ID",
++            )
++        ):
++            return "generic", False
++        return "generic", False
++
++    def _resolve_delivery_identity(
++        self,
++        request: "web.Request",
++        route_config: dict,
++        payload: dict,
++    ) -> Optional[tuple[str, str]]:
++        """Resolve one trustworthy provider-native retry identity.
++
++        No timestamp or blank-header fallback is permitted. When this returns
++        ``None`` the caller creates a unique trace/session ID but deliberately
++        skips retry deduplication.
++        """
++        provider, declared = self._delivery_provider(request, route_config)
++        headers = request.headers
++
++        header_names: tuple[str, ...]
++        if provider == "github":
++            header_names = ("X-GitHub-Delivery",)
++        elif provider == "svix":
++            header_names = ("svix-id",)
++        elif provider in {"gitlab", "gitlab_standard"}:
++            header_names = (
++                "X-Gitlab-Event-UUID",
++                "X-Gitlab-Webhook-UUID",
++                "X-Gitlab-Idempotency-Key",
++                "Idempotency-Key",
++                "webhook-id",
++            )
++        elif provider == "chatwoot":
++            header_names = ("X-Chatwoot-Delivery",)
++        elif provider == "generic":
++            header_names = ("X-Request-ID",)
++        else:
++            header_names = ()
++
++        for header_name in header_names:
++            candidate = self._nonempty_identity(headers.get(header_name))
++            if candidate is not None:
++                return provider, candidate
++
++        if provider == "stripe" and declared:
++            candidate = self._nonempty_identity(payload.get("id"))
++            if candidate is not None:
++                return provider, candidate
++
++        # Chatwoot payload IDs are ambiguous outside a route that explicitly
++        # declares the Chatwoot scheme; never infer this fallback from shape.
++        if provider == "chatwoot" and declared:
