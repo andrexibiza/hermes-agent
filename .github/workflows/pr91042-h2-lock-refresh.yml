@@ -1,0 +1,65 @@
+name: Refresh PR 91042 h2 lock
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/pr91042-h2-lock-refresh.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr91042-h2-lock-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact remediation branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: security/p0-dependency-remediation-20260820
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: '0.9.28'
+
+      - name: Regenerate and verify Python lock
+        run: |
+          set -euo pipefail
+          uv lock --upgrade-package h2
+          uv lock --check
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          lock = Path('uv.lock').read_text(encoding='utf-8')
+          h2 = re.search(r'\[\[package\]\]\nname = "h2"\nversion = "([^"]+)"', lock)
+          hpack = re.search(r'\[\[package\]\]\nname = "hpack"\nversion = "([^"]+)"', lock)
+          if not h2 or h2.group(1) != '4.4.1':
+              raise SystemExit(f"h2 resolved to {h2.group(1) if h2 else 'missing'}")
+          if not hpack or hpack.group(1) != '4.2.0':
+              raise SystemExit(f"hpack resolved to {hpack.group(1) if hpack else 'missing'}")
+          PY
+          changed=$(git diff --name-only)
+          test "$changed" = "uv.lock" || {
+            echo "Unexpected changed files:"
+            printf '%s\n' "$changed"
+            exit 1
+          }
+          git diff --check
+
+      - name: Push exact lock update
+        run: |
+          set -euo pipefail
+          git config user.name "Axl Ibiza"
+          git config user.email "andrexibiza@gmail.com"
+          git add uv.lock
+          git commit -m "fix(deps): update h2 to 4.4.1"
+          git push origin HEAD:security/p0-dependency-remediation-20260820
