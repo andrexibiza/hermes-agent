@@ -18,7 +18,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == 'andrexibiza/hermes-agent' &&
       github.event.pull_request.head.ref == 'security/p0-dependency-remediation-20260820'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout exact remediation branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -28,50 +28,49 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
-        with:
-          version: '0.9.28'
-
-      - name: Update only h2 and its required hpack resolution
+      - name: Restore lock metadata and verify patched resolutions
         run: |
           set -euo pipefail
-          cp uv.lock /tmp/uv.lock.before
-          uv lock --upgrade-package h2
-          uv lock --check
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path('uv.lock')
+          text = path.read_text(encoding='utf-8')
+          text, count = re.subn(
+              r'(?m)^exclude-newer = "[^"]+"$',
+              'exclude-newer = "2026-08-04T07:06:16.774262776Z"',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one exclude-newer field, replaced {count}')
+          path.write_text(text, encoding='utf-8')
+          PY
           python3 - <<'PY'
           import tomllib
           from pathlib import Path
 
-          def versions(path: str) -> dict[str, tuple[str, ...]]:
-              data = tomllib.loads(Path(path).read_text(encoding='utf-8'))
-              grouped: dict[str, list[str]] = {}
-              for package in data.get('package', []):
-                  grouped.setdefault(package['name'], []).append(package['version'])
-              return {name: tuple(sorted(values)) for name, values in grouped.items()}
-
-          before = versions('/tmp/uv.lock.before')
-          after = versions('uv.lock')
-          changed = {name for name in before.keys() | after.keys() if before.get(name) != after.get(name)}
-          unexpected = changed - {'h2', 'hpack'}
-          if unexpected:
-              raise SystemExit(f'unexpected uv.lock package changes: {sorted(unexpected)}')
-          if after.get('h2') != ('4.4.1',):
-              raise SystemExit(f'h2 resolved to {after.get("h2")}')
-          if after.get('hpack') != ('4.2.0',):
-              raise SystemExit(f'hpack resolved to {after.get("hpack")}')
-          print(f'verified changed packages: {sorted(changed)}')
+          data = tomllib.loads(Path('uv.lock').read_text(encoding='utf-8'))
+          packages = {}
+          for package in data.get('package', []):
+              packages.setdefault(package['name'], []).append(package['version'])
+          if sorted(packages.get('h2', [])) != ['4.4.1']:
+              raise SystemExit(f'h2 resolved to {packages.get("h2")}')
+          if sorted(packages.get('hpack', [])) != ['4.2.0']:
+              raise SystemExit(f'hpack resolved to {packages.get("hpack")}')
+          if data.get('options', {}).get('exclude-newer') != '2026-08-04T07:06:16.774262776Z':
+              raise SystemExit(f'exclude-newer drifted to {data.get("options", {}).get("exclude-newer")}')
           PY
 
-      - name: Push the final lockfile
+      - name: Push the minimal metadata cleanup
         run: |
           set -euo pipefail
-          rm -f .github/workflows/p0-h2-remediation.yml
           git config user.name 'Axl Ibiza'
           git config user.email 'andrexibiza@gmail.com'
-          git add uv.lock .github/workflows/p0-h2-remediation.yml
+          git add uv.lock
           git diff --cached --check
-          git commit -m 'fix(deps): patch h2 request-smuggling advisory' \
-            -m 'Update h2 to 4.4.1 and the required hpack resolution to 4.2.0; remove the branch-local runner.' \
+          git commit -m 'chore(lock): preserve the existing uv cutoff' \
+            -m 'Keep the h2/hpack remediation while restoring the pre-existing global exclude-newer timestamp.' \
             -m 'Signed-off-by: Axl Ibiza <andrexibiza@gmail.com>'
           git push origin HEAD:security/p0-dependency-remediation-20260820
