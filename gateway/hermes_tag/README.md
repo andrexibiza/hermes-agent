@@ -49,6 +49,15 @@ remains authoritative and no runtime-governance claim is made.
    receipts.
 10. Shadow admission may fail open only as observation; effect enforcement never
     does.
+11. Task-local authority is one atomic admission/decision/lease tuple. Rebinding
+    an admission or decision clears authority derived from the prior tuple, and
+    cross-principal, cross-continuity, cross-scope, or mismatched leases are
+    rejected before binding.
+12. Approval creation is itself a governed `approval.grant` effect. The public
+    kernel requires an authenticated durable principal, explicit policy allow,
+    an exact argument-bound lease, pre-effect evidence, one-shot completion, and
+    rollback if the governing effect cannot complete. Raw approval storage is
+    not exported through the package or kernel facade.
 
 Campaign authority: NousResearch/hermes-agent#79772. Slack flagship:
 NousResearch/hermes-agent#80338. Executable campaign ledger:
