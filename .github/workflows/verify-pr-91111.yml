@@ -1,6 +1,8 @@
 name: Verify PR 91111 authority fixes
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
     paths:
