@@ -13,15 +13,15 @@ def load(path: str):
 
 def write(path: str, data):
     Path(path).write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(data, indent=2) + "\n",
         encoding="utf-8",
     )
 
 
 root = load("package.json")
 overrides = root.setdefault("overrides", {})
-overrides.pop("nanoid@^3", None)
-overrides["postcss"] = {".": "8.5.23", "nanoid": "3.3.18"}
+overrides["nanoid@^3"] = "3.3.18"
+overrides["postcss"] = "8.5.23"
 allow_scripts = root.setdefault("allowScripts", {})
 allow_scripts.pop("electron@40.10.2", None)
 allow_scripts["electron@41.10.3"] = True
@@ -129,10 +129,11 @@ const root = require('./package.json')
 const desktop = require('./apps/desktop/package.json')
 const website = require('./website/package.json')
 
-const postcssOverride = root.overrides.postcss
-if (root.overrides['nanoid@^3'] !== undefined) throw new Error('flat nanoid v3 override remains')
-if (postcssOverride?.['.'] !== '8.5.23' || postcssOverride?.nanoid !== '3.3.18') {
-  throw new Error(`postcss override is ${JSON.stringify(postcssOverride)}`)
+if (root.overrides['nanoid@^3'] !== '3.3.18') {
+  throw new Error(`nanoid v3 override is ${root.overrides['nanoid@^3']}`)
+}
+if (root.overrides.postcss !== '8.5.23') {
+  throw new Error(`postcss override is ${JSON.stringify(root.overrides.postcss)}`)
 }
 if (root.overrides['nanoid@^6'] !== '6.0.0') throw new Error('nanoid v6 isolation changed')
 if (website.overrides.nanoid !== '3.3.18') throw new Error('website nanoid override is not 3.3.18')
@@ -161,7 +162,9 @@ if not match or match.group(1) != '4.4.1':
 PY
 
 git diff --check
-rm -f .github/workflows/p0-dependency-remediation.yml .github/scripts/p0-remediate.sh
+rm -f .github/workflows/p0-dependency-remediation.yml \
+      .github/workflows/p0-remediation-artifact.yml \
+      .github/scripts/p0-remediate.sh
 git config user.name "Axl Ibiza"
 git config user.email "andrexibiza@gmail.com"
 git add .
