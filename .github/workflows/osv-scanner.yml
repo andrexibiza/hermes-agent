@@ -62,18 +62,22 @@ jobs:
         run: mkdir -p /tmp/osv-results
 
       - name: Run OSV scanner (Docker image, not a tagged action)
-        # Pulls the official OSV scanner image. Using a digest-pinned image
-        # gives reproducibility; the image pull itself is not subject to the
-        # repo's "actions must be pinned to a SHA" policy (it is not an action).
+        # Pulls the official OSV scanner image. The mutable tag is resolved to
+        # the registry-provided RepoDigest before execution so the scanner that
+        # runs is immutable even if the tag moves during the job.
         run: |
           set -euo pipefail
-          # Resolve a digest-pinned image so the scan is reproducible across runs.
-          FULL_REF=$(docker pull ghcr.io/google/osv-scanner:latest 2>&1 | head -1)
-          IMAGE="ghcr.io/google/osv-scanner:latest"
+          IMAGE_TAG="ghcr.io/google/osv-scanner:latest"
+          docker pull "$IMAGE_TAG"
+          IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE_TAG")"
+          if [[ -z "$IMAGE_REF" || "$IMAGE_REF" != *@sha256:* ]]; then
+            echo "::error::could not resolve immutable OSV scanner image digest for $IMAGE_TAG"
+            exit 1
+          fi
           docker run --rm \
             -v "$PWD:/src" \
             -v /tmp/osv-results:/out \
-            "$IMAGE" \
+            "$IMAGE_REF" \
             osv-scanner scan \
               --format=sarif \
               --output=/out/osv-results.sarif \
@@ -154,7 +158,7 @@ jobs:
                       rule_id = result.get('ruleId', 'unknown')
                       loc = result.get('locations', [{}])[0].get('physicalLocation', {}).get('artifactLocation', {}).get('uri', '')
                       vulns.append(f'- {rule_id} in {loc}')
-              print(json.dumps('\n'.join(vulns[:20]))
+              print(json.dumps('\n'.join(vulns[:20])))
           except Exception:
               print(json.dumps(''))
           ")
