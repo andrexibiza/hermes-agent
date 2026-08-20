@@ -4,24 +4,36 @@ on:
   push:
     branches:
       - security/ghsa-remediation-c47f0b4
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
 
 permissions:
   contents: write
 
 concurrency:
-  group: ghsa-remediation-bootstrap-${{ github.ref }}
+  group: ghsa-remediation-bootstrap-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   remediate:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'security/ghsa-remediation-c47f0b4')
     name: Regenerate and verify patched dependency graphs
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      TARGET_REPOSITORY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
+      TARGET_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.ref_name }}
+      TARGET_BRANCH: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}
     steps:
-      - name: Checkout exact branch
+      - name: Checkout exact branch head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.ref_name }}
+          repository: ${{ env.TARGET_REPOSITORY }}
+          ref: ${{ env.TARGET_REF }}
           fetch-depth: 0
 
       - name: Set up Node 26
@@ -175,4 +187,4 @@ jobs:
             apps/desktop/scripts/packaged-app-layout.mjs \
             apps/desktop/scripts/packaged-app-layout.test.mjs uv.lock
           git commit -m "fix(deps): clear current GHSA findings"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${TARGET_BRANCH}"
