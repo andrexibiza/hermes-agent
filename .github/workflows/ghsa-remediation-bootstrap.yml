@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+  pull_request_target:
+    types: [reopened]
+    branches: [main]
 
 permissions:
   contents: write
@@ -14,6 +17,10 @@ concurrency:
 
 jobs:
   remediate:
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'security/ghsa-remediation-c47f0b4')
     name: Regenerate and verify patched dependency graphs
     runs-on: ubuntu-latest
     timeout-minutes: 45
