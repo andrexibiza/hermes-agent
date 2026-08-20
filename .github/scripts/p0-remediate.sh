@@ -13,15 +13,17 @@ def load(path: str):
 
 def write(path: str, data):
     Path(path).write_text(
-        json.dumps(data, indent=2) + "\n",
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
 
 root = load("package.json")
 overrides = root.setdefault("overrides", {})
-overrides["nanoid@^3"] = "3.3.18"
-overrides["postcss"] = "8.5.23"
+# The flat nanoid@^3 selector does not cover the PostCSS edge reliably.
+# Scope the fixed v3 release to PostCSS and keep Nano ID v6 isolated.
+overrides.pop("nanoid@^3", None)
+overrides["postcss"] = {".": "8.5.23", "nanoid": "3.3.18"}
 allow_scripts = root.setdefault("allowScripts", {})
 allow_scripts.pop("electron@40.10.2", None)
 allow_scripts["electron@41.10.3"] = True
@@ -53,7 +55,7 @@ Path("apps/desktop/scripts/packaged-app-layout.mjs").write_text(
 )
 Path("apps/desktop/scripts/packaged-app-layout.test.mjs").write_text(
     "import assert from 'node:assert/strict'\n"
-    "import test from 'node:test'\n\n"
+    "import { test } from 'vitest'\n\n"
     "import { resolveLinuxUnpackedDirName } from './packaged-app-layout.mjs'\n\n"
     "test('uses electron-builder default directory on Linux x64', () => {\n"
     "  assert.equal(resolveLinuxUnpackedDirName('x64'), 'linux-unpacked')\n"
@@ -79,39 +81,14 @@ if old in text:
 elif new not in text:
     raise SystemExit("test-desktop Linux layout anchor not found")
 target.write_text(text, encoding="utf-8")
-
-osv = Path(".github/workflows/osv-scanner.yml")
-text = osv.read_text(encoding="utf-8")
-text = text.replace(
-    "# This is detection-only — OSV-Scanner does NOT open PRs or modify pins.\n"
-    "# It reports known CVEs in currently-pinned dependency versions so we can\n"
-    "# decide when and how to patch on our own schedule. Our pinning strategy\n"
-    "# (full SHA / exact version) is preserved; only the notification signal\n"
-    "# is added.\n",
-    "# OSV-Scanner is a merge boundary for known vulnerabilities in the pinned\n"
-    "# dependency graph. It never modifies pins; remediation remains an explicit\n"
-    "# reviewed repository change.\n",
-)
-text = text.replace(
-    "# fail-on-vuln is disabled so the job does not block merges on pre-existing\n"
-    "# vulnerabilities in pinned deps that we may need to patch deliberately.\n",
-    "# Known vulnerabilities fail the required lane. A green result therefore\n"
-    "# means the exact scanned dependency graph completed without OSV findings.\n",
-)
-if "fail-on-vuln: false" not in text:
-    raise SystemExit("OSV fail-on-vuln anchor not found")
-text = text.replace("fail-on-vuln: false", "fail-on-vuln: true", 1)
-text = text.replace(
-    '\"kind\":\"warning\",\"title\":\"OSV vulnerability scan\"',
-    '\"kind\":\"error\",\"title\":\"OSV vulnerability scan\"',
-)
-osv.write_text(text, encoding="utf-8")
 PY
 
+# Regenerate every affected source-of-truth lock with the repository toolchain.
 npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 npm --prefix website install --package-lock-only --ignore-scripts --no-audit --no-fund
 uv lock --upgrade-package h2
 
+# Prove clean, reproducible installation and the affected graph itself.
 uv lock --check
 npm ci --ignore-scripts --no-audit --no-fund
 npm --prefix website ci --ignore-scripts --no-audit --no-fund
@@ -122,18 +99,20 @@ npm audit --workspace ui-tui --audit-level=moderate
 npm audit --workspace apps/desktop --audit-level=moderate
 npm --prefix website audit --audit-level=moderate
 
-node --test apps/desktop/scripts/packaged-app-layout.test.mjs
+# Exercise the repository's actual test collector, not a side-channel node:test run.
+npm run test:desktop:platforms --workspace apps/desktop
+npm run build --workspace web
+
 node <<'NODE'
 const lock = require('./package-lock.json')
 const root = require('./package.json')
 const desktop = require('./apps/desktop/package.json')
 const website = require('./website/package.json')
 
-if (root.overrides['nanoid@^3'] !== '3.3.18') {
-  throw new Error(`nanoid v3 override is ${root.overrides['nanoid@^3']}`)
-}
-if (root.overrides.postcss !== '8.5.23') {
-  throw new Error(`postcss override is ${JSON.stringify(root.overrides.postcss)}`)
+const postcssOverride = root.overrides.postcss
+if (root.overrides['nanoid@^3'] !== undefined) throw new Error('flat nanoid v3 override remains')
+if (postcssOverride?.['.'] !== '8.5.23' || postcssOverride?.nanoid !== '3.3.18') {
+  throw new Error(`postcss override is ${JSON.stringify(postcssOverride)}`)
 }
 if (root.overrides['nanoid@^6'] !== '6.0.0') throw new Error('nanoid v6 isolation changed')
 if (website.overrides.nanoid !== '3.3.18') throw new Error('website nanoid override is not 3.3.18')
@@ -162,14 +141,18 @@ if not match or match.group(1) != '4.4.1':
 PY
 
 git diff --check
+
+# Only the delivered source changes belong in the upstream PR. OSV remains
+# detection-only here so unrelated PRs do not all become hostage to old debt.
 rm -f .github/workflows/p0-dependency-remediation.yml \
       .github/workflows/p0-remediation-artifact.yml \
       .github/scripts/p0-remediate.sh
+
 git config user.name "Axl Ibiza"
 git config user.email "andrexibiza@gmail.com"
 git add .
 git diff --cached --check
-git commit -m "fix(deps): close active advisory set and enforce OSV" \
+git commit -m "fix(deps): close active dependency advisories" \
   -m "Co-authored-by: schmitzi8 <281458983+schmitzi8@users.noreply.github.com>" \
   -m "Co-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>"
 git push origin HEAD:security/p0-dependency-remediation-20260820
