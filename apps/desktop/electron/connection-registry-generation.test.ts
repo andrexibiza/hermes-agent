@@ -2,13 +2,13 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { currentRegistryRouteGeneration } from './connection-route-generation'
 import {
   normalizeConnectionInput,
   normalizeRegistry,
   removeConnection,
   upsertConnection
 } from './connection-registry'
+import { currentRegistryRouteGeneration } from './connection-route-generation'
 
 test('new registered sources receive an opaque generation visible to the main authority map', () => {
   const registry = normalizeRegistry(null)
