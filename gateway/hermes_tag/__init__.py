@@ -66,7 +66,7 @@ from .obligations import (
     ObligationRegistry,
 )
 from .omniscience import FactStore
-from .policy import ApprovalStore, PolicyEngine, PolicyEvaluation, PolicyRule
+from .policy import PolicyEngine, PolicyEvaluation, PolicyRule
 from .runtime import (
     RuntimeAuthority,
     bind_admission,
@@ -109,7 +109,6 @@ __all__ = [
     "UnknownIdentity",
     "AdmissionResult",
     "ApprovalGrant",
-    "ApprovalStore",
     "AuthorizationResult",
     "BUILTIN_CAPABILITIES",
     "BUILTIN_OBLIGATIONS",
