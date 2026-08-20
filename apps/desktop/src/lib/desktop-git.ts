@@ -1,4 +1,5 @@
 import type {
+  HermesConnection,
   HermesGitBaseBranch,
   HermesGitBranch,
   HermesGitWorktree,
@@ -7,6 +8,9 @@ import type {
   HermesReviewList,
   HermesReviewShipInfo
 } from '@/global'
+import { hermesApi } from '@/hermes'
+import { currentRouteActivationReceiptForMutation } from '@/store/gateway-activation'
+import { $connection } from '@/store/session'
 
 import { desktopFsProfile, isDesktopFsRemoteMode } from './desktop-fs'
 
@@ -18,16 +22,54 @@ import { desktopFsProfile, isDesktopFsRemoteMode } from './desktop-fs'
 
 type GitBridge = NonNullable<NonNullable<Window['hermesDesktop']>['git']>
 
-function desktopApi<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+type RouteGenerationBoundConnection = HermesConnection & {
+  routeGeneration?: string
+}
+
+function desktopBridge() {
   const desktop = window.hermesDesktop
 
   if (!desktop) {
     throw new Error('Hermes Desktop bridge is unavailable')
   }
 
-  return desktop.api<T>(
+  return desktop
+}
+
+function desktopReadApi<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+  // hermesApi carries the active registry connection as well as the logical
+  // profile. A profile name alone is not a globally unique Git owner.
+  return hermesApi<T>(
     body ? { body, method: 'POST', path, profile: desktopFsProfile() } : { path, profile: desktopFsProfile() }
   )
+}
+
+function desktopMutationApi<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const connection = $connection.get()
+  const receipt = currentRouteActivationReceiptForMutation(connection)
+  const connectionId = receipt?.route.connectionId
+  const routeGeneration = String(
+    (receipt?.connection as RouteGenerationBoundConnection | undefined)?.routeGeneration || ''
+  ).trim()
+
+  // Git mutations are filesystem mutations with a larger blast radius. Never
+  // reconstruct their owner from the foreground profile or ambient API route:
+  // consume the exact activation receipt and its main-owned source generation
+  // at the side-effect boundary.
+  if (!receipt || !connectionId || !routeGeneration) {
+    throw new Error('Remote Git mutation requires a current exact generated route activation')
+  }
+
+  const request = {
+    body,
+    connectionId,
+    method: 'POST' as const,
+    path,
+    profile: receipt.route.profile,
+    routeGeneration
+  }
+
+  return desktopBridge().api<T>(request)
 }
 
 function gitGet<T>(route: string, params: Record<string, boolean | null | string | undefined>): Promise<T> {
@@ -39,23 +81,27 @@ function gitGet<T>(route: string, params: Record<string, boolean | null | string
     }
   }
 
-  return desktopApi<T>(`/api/git/${route}?${query.toString()}`)
+  return desktopReadApi<T>(`/api/git/${route}?${query.toString()}`)
 }
 
-function gitPost<T>(route: string, body: Record<string, unknown>): Promise<T> {
-  return desktopApi<T>(`/api/git/${route}`, body)
+function gitMutate<T>(route: string, body: Record<string, unknown>): Promise<T> {
+  return desktopMutationApi<T>(`/api/git/${route}`, body)
+}
+
+function gitPostQuery<T>(route: string, body: Record<string, unknown>): Promise<T> {
+  return desktopReadApi<T>(`/api/git/${route}`, body)
 }
 
 const remoteGit: GitBridge = {
   worktreeList: async repoPath =>
     (await gitGet<{ worktrees: HermesGitWorktree[] }>('worktrees', { path: repoPath })).worktrees,
 
-  worktreeAdd: (repoPath, options) => gitPost('worktree/add', { path: repoPath, ...options }),
+  worktreeAdd: (repoPath, options) => gitMutate('worktree/add', { path: repoPath, ...options }),
 
   worktreeRemove: (repoPath, worktreePath, options) =>
-    gitPost('worktree/remove', { force: options?.force ?? false, path: repoPath, worktreePath }),
+    gitMutate('worktree/remove', { force: options?.force ?? false, path: repoPath, worktreePath }),
 
-  branchSwitch: (repoPath, branch) => gitPost('branch/switch', { branch, path: repoPath }),
+  branchSwitch: (repoPath, branch) => gitMutate('branch/switch', { branch, path: repoPath }),
 
   branchList: async repoPath =>
     (await gitGet<{ branches: HermesGitBranch[] }>('branches', { path: repoPath })).branches,
@@ -76,31 +122,31 @@ const remoteGit: GitBridge = {
       (await gitGet<{ diff: string }>('review/diff', { base: baseRef, file: filePath, path: repoPath, scope, staged }))
         .diff,
 
-    stage: (repoPath, filePath) => gitPost('review/stage', { file: filePath ?? null, path: repoPath }),
+    stage: (repoPath, filePath) => gitMutate('review/stage', { file: filePath ?? null, path: repoPath }),
 
-    unstage: (repoPath, filePath) => gitPost('review/unstage', { file: filePath ?? null, path: repoPath }),
+    unstage: (repoPath, filePath) => gitMutate('review/unstage', { file: filePath ?? null, path: repoPath }),
 
-    revert: (repoPath, filePath) => gitPost('review/revert', { file: filePath ?? null, path: repoPath }),
+    revert: (repoPath, filePath) => gitMutate('review/revert', { file: filePath ?? null, path: repoPath }),
 
     revParse: async (repoPath, ref) =>
       (await gitGet<{ sha: null | string }>('review/rev-parse', { path: repoPath, ref })).sha,
 
-    commit: (repoPath, message, push) => gitPost('review/commit', { message, path: repoPath, push }),
+    commit: (repoPath, message, push) => gitMutate('review/commit', { message, path: repoPath, push }),
 
     commitContext: repoPath => gitGet('review/commit-context', { path: repoPath }),
 
-    push: repoPath => gitPost('review/push', { path: repoPath }),
+    push: repoPath => gitMutate('review/push', { path: repoPath }),
 
     shipInfo: repoPath => gitGet<HermesReviewShipInfo>('review/ship-info', { path: repoPath }),
 
     prList: (repoPath, branches, numbers) =>
-      gitPost<HermesRepoPullRequests>('review/pr-list', { branches, numbers: numbers ?? [], path: repoPath }),
+      gitPostQuery<HermesRepoPullRequests>('review/pr-list', { branches, numbers: numbers ?? [], path: repoPath }),
 
     // Remote gateways have no PR-comment route yet; resolve to null so the
     // paste degrades to a plain URL instead of throwing mid-paste.
     fetchPrComment: async () => null,
 
-    createPr: repoPath => gitPost('review/create-pr', { path: repoPath })
+    createPr: repoPath => gitMutate('review/create-pr', { path: repoPath })
   },
 
   // Repo discovery is a local-disk crawl; on a remote gateway the backend

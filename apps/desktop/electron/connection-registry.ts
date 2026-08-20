@@ -27,6 +27,8 @@
  * these into the IPC layer and owns file I/O + secret encryption.
  */
 
+import { randomUUID } from 'node:crypto'
+
 import {
   hostLabelFromBaseUrl,
   modeIsRemoteLike,
@@ -35,8 +37,13 @@ import {
   normalizeSshConfig,
   normAuthMode
 } from './connection-config'
+import {
+  forgetRegistryRouteGeneration,
+  rememberRegistryRouteGeneration,
+  replaceRegistryRouteGenerations
+} from './connection-route-generation'
 
-export const REGISTRY_VERSION = 2
+export const REGISTRY_VERSION: 2 = 2
 
 export const LOCAL_CONNECTION_ID = 'local'
 
@@ -48,6 +55,8 @@ export type ConnectionKind = 'cloud' | 'local' | 'remote' | 'ssh'
 export interface RegistryConnection {
   id: string
   kind: ConnectionKind
+  /** Opaque main-process source generation. Rotates on dial-material changes. */
+  generation?: string
   /** Required, unique (case-insensitive) display name — the "device name". */
   label: string
   /** remote/cloud: normalized base URL. */
@@ -56,7 +65,7 @@ export interface RegistryConnection {
   authMode?: 'oauth' | 'token'
   /** remote: encrypted token envelope (opaque here; main.ts encrypts/decrypts). */
   token?: unknown
-  /** remote/cloud: extra gateway headers (Cloudflare Access etc.). Secret
+  /** remote/cloud: extra gateway headers (access-proxy credentials). Secret
    * envelopes, same shape as `token`; names pre-filtered through
    * normalizeRemoteHeaders. Optional and additive — v2 registries written
    * before this field keep loading unchanged. */
@@ -87,6 +96,41 @@ export interface ConnectionRegistry {
 // ── Labels and ids ──────────────────────────────────────────────────────────
 
 const LABEL_MAX = 64
+
+function mintRouteGeneration(): string {
+  return randomUUID()
+}
+
+/**
+ * Preserve a source generation across cosmetic edits, but rotate it whenever
+ * dial material changes. The stable connection id remains UI identity; this
+ * opaque generation is mutation authority and therefore cannot be supplied by
+ * the renderer.
+ *
+ * `local` is not a replaceable remote source and local mutations never cross
+ * the registry REST bridge. Keep its historical storage/input shape intact;
+ * the fixed local generation is tracked only in main-process authority state.
+ */
+function withRouteGeneration(
+  entry: RegistryConnection,
+  existing: null | RegistryConnection | undefined
+): RegistryConnection {
+  if (entry.kind === 'local') {
+    rememberRegistryRouteGeneration(entry.id, 'local')
+
+    return entry
+  }
+
+  const generation =
+    existing && !connectionDialFieldsChanged(existing, entry)
+      ? String(existing.generation || '').trim() || mintRouteGeneration()
+      : mintRouteGeneration()
+  const versioned = { ...entry, generation }
+
+  rememberRegistryRouteGeneration(versioned.id, generation)
+
+  return versioned
+}
 
 /** Canonical comparison key for label uniqueness. */
 export function labelKey(label: string): string {
@@ -374,8 +418,8 @@ export function rememberSshEnumeration(
 }
 
 /** Whether an undialed SSH source should be inventoried again. Cached
- *  successes never retry. Failures retry after `retryAfterMs` so a cold box
- *  does not stay seeded as `default` until the user hits Test. */
+ * successes never retry. Failures retry after `retryAfterMs` so a cold box
+ * does not stay seeded as `default` until the user hits Test. */
 export function shouldRetrySshInventory(
   hasCache: boolean,
   lastAttemptMs: null | number | undefined,
@@ -595,6 +639,7 @@ export function normalizeConnectionInput(input: ConnectionInput, registry: Conne
     throw new Error(`Connection name is too long (max ${LABEL_MAX} characters).`)
   }
 
+  const existing = input.id ? registry.connections.find(c => c.id === input.id) : null
   const key = labelKey(label)
   const collision = registry.connections.find(c => labelKey(c.label) === key && c.id !== input.id)
 
@@ -606,7 +651,7 @@ export function normalizeConnectionInput(input: ConnectionInput, registry: Conne
 
   if (kind === 'local') {
     // The local entry is managed by the app; only its label is editable.
-    return { id: LOCAL_CONNECTION_ID, kind: 'local', label }
+    return withRouteGeneration({ id: LOCAL_CONNECTION_ID, kind: 'local', label }, existing)
   }
 
   // The reserved local id can never be claimed by a non-local entry — a
@@ -654,7 +699,7 @@ export function normalizeConnectionInput(input: ConnectionInput, registry: Conne
       throw new Error(`A connection to this SSH host already exists ("${sshDupe.label}").`)
     }
 
-    return { id, kind: 'ssh', label, ...sshFields }
+    return withRouteGeneration({ id, kind: 'ssh', label, ...sshFields }, existing)
   }
 
   if (kind === 'remote' || kind === 'cloud') {
@@ -703,7 +748,7 @@ export function normalizeConnectionInput(input: ConnectionInput, registry: Conne
       entry.org = org
     }
 
-    return entry
+    return withRouteGeneration(entry, existing)
   }
 
   throw new Error(`Unknown connection kind: ${String(kind)}`)
@@ -803,7 +848,7 @@ export function connectionDialFieldsChanged(before: RegistryConnection, after: R
 // ── Registry-level operations (all pure: return a new registry) ────────────
 
 function localEntry(label = 'This device'): RegistryConnection {
-  return { id: LOCAL_CONNECTION_ID, kind: 'local', label }
+  return { generation: 'local', id: LOCAL_CONNECTION_ID, kind: 'local', label }
 }
 
 /**
@@ -856,7 +901,13 @@ export function normalizeRegistry(raw: unknown): ConnectionRegistry {
     seenLabels.add(labelKey(label))
     seenIds.add(id)
 
-    const clean: RegistryConnection = { id, kind, label }
+    const storedGeneration = String(entry.generation || '').trim()
+    const clean: RegistryConnection = {
+      generation: kind === 'local' ? 'local' : storedGeneration || mintRouteGeneration(),
+      id,
+      kind,
+      label
+    }
 
     if (kind === 'remote' || kind === 'cloud') {
       const url = String(entry.url || '').trim()
@@ -904,14 +955,17 @@ export function normalizeRegistry(raw: unknown): ConnectionRegistry {
   const storedPrimary = String(parsed.primary || '').trim()
   const primary = connections.some(c => c.id === storedPrimary) ? storedPrimary : LOCAL_CONNECTION_ID
   const storedLastUsed = String(parsed.lastUsed || '').trim()
-
-  return {
+  const normalized = {
     version: REGISTRY_VERSION,
     primary,
-    launchMode: parsed.launchMode === 'last-used' ? 'last-used' : 'primary',
+    launchMode: parsed.launchMode === 'last-used' ? ('last-used' as const) : ('primary' as const),
     lastUsed: connections.some(c => c.id === storedLastUsed) ? storedLastUsed : primary,
     connections
   }
+
+  replaceRegistryRouteGenerations(connections)
+
+  return normalized
 }
 
 /**
@@ -950,6 +1004,7 @@ export function migrateV1ToRegistry(v1: unknown): ConnectionRegistry {
     )
 
     const entry: RegistryConnection = {
+      generation: mintRouteGeneration(),
       id: connectionIdForLabel(
         label,
         connections.map(c => c.id)
@@ -1004,6 +1059,7 @@ export function migrateV1ToRegistry(v1: unknown): ConnectionRegistry {
     const { mode: _mode, ...sshFields } = ssh
 
     const entry: RegistryConnection = {
+      generation: mintRouteGeneration(),
       id: connectionIdForLabel(
         label,
         connections.map(c => c.id)
@@ -1054,7 +1110,11 @@ export function migrateV1ToRegistry(v1: unknown): ConnectionRegistry {
     }
   }
 
-  return { version: REGISTRY_VERSION, primary, launchMode: 'primary', lastUsed: primary, connections }
+  const migrated = { version: REGISTRY_VERSION, primary, launchMode: 'primary' as const, lastUsed: primary, connections }
+
+  replaceRegistryRouteGenerations(connections)
+
+  return migrated
 }
 
 /** Insert or replace by id. Input must already be normalized/validated. */
@@ -1062,6 +1122,8 @@ export function upsertConnection(registry: ConnectionRegistry, entry: RegistryCo
   const connections = registry.connections.some(c => c.id === entry.id)
     ? registry.connections.map(c => (c.id === entry.id ? entry : c))
     : [...registry.connections, entry]
+
+  rememberRegistryRouteGeneration(entry.id, entry.kind === 'local' ? 'local' : entry.generation)
 
   return { ...registry, connections }
 }
@@ -1082,6 +1144,8 @@ export function removeConnection(registry: ConnectionRegistry, id: string): Conn
   }
 
   const primary = registry.primary === id ? LOCAL_CONNECTION_ID : registry.primary
+
+  forgetRegistryRouteGeneration(id)
 
   return {
     ...registry,

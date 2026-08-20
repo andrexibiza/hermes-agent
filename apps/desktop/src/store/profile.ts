@@ -13,7 +13,13 @@ import {
   storedStringRecord
 } from '@/lib/storage'
 import { invalidateCronModelImpactScopeState } from '@/store/cron-model-impact-scope'
-import { $gateway, ensureGatewayForAgent, ensureGatewayForProfile, openGatewayForProfile } from '@/store/gateway'
+import { openGatewayForProfile } from '@/store/gateway'
+import {
+  activateGatewayAgentWithProof,
+  activateGatewayProfileWithProof,
+  activeGatewayRouteMatches,
+  routeActivationReceiptIsCurrent
+} from '@/store/gateway-activation'
 import { setConnection } from '@/store/session'
 import { resetStarmapGraph } from '@/store/starmap'
 import type { ProfileInfo } from '@/types/hermes'
@@ -320,8 +326,12 @@ export async function ensureGatewayProfile(profile: string | null | undefined): 
   }
 
   const target = normalizeProfileKey(profile)
+  const requested = { connectionId: null, profile: target }
 
-  if (normalizeProfileKey($activeGatewayProfile.get()) === target && $gateway.get()) {
+  // A bare profile atom is not route authority: a registry agent can expose
+  // the same profile name. Skip only when the gateway store proves the exact
+  // local/legacy owner is already active.
+  if (activeGatewayRouteMatches(requested)) {
     return
   }
 
@@ -330,31 +340,38 @@ export async function ensureGatewayProfile(profile: string | null | undefined): 
   if (gatewaySwitch) {
     await gatewaySwitch.catch(() => undefined)
 
-    if (normalizeProfileKey($activeGatewayProfile.get()) === target && $gateway.get()) {
+    if (activeGatewayRouteMatches(requested)) {
       return
     }
   }
 
   $gatewaySwapTarget.set(target)
   gatewaySwitch = (async () => {
-    // ensureGatewayForProfile opens (or reuses) the target's socket and points
-    // the active gateway at it — without closing the profile you came from.
-    // The descriptor resolves concurrently so nothing awaits between the
-    // activation and the publication below: the old post-activation
-    // syncConnectionToActiveProfile await left a window where $gateway
-    // already targeted the new backend while $connection still described the
-    // previous one, and remote-aware paths announced the wrong mode (#46651).
-    const [connection] = await Promise.all([resolveConnectionForProfile(target), ensureGatewayForProfile(target)])
+    // The activation helper starts the descriptor lookup and gateway dial in
+    // parallel, captures the gateway's exact activation generation, and
+    // returns a route-qualified readiness verdict. This preserves #89797's
+    // fail-open atomic publication contract without discarding the proof that
+    // says which activation actually landed (#90866).
+    const receipt = await activateGatewayProfileWithProof(target, () => resolveConnectionForProfile(target))
+
+    // A later activation, source removal, or route mismatch makes this a
+    // deterministic no-op. The synchronous recheck and batch are one
+    // JavaScript turn, so no successor generation can interleave between them.
+    if (!routeActivationReceiptIsCurrent(receipt)) {
+      console.warn(`[profile] profile gateway activation for "${target}" did not retain current route proof`)
+
+      return
+    }
 
     // ONE publication frame. batch() defers Nanostores' notifications to the
     // end of the callback, so the profile pointer and the connection
-    // descriptor become visible together; a null descriptor (no bridge, or a
-    // failed best-effort lookup) keeps the previous one — fail open.
+    // descriptor become visible together; a degraded receipt with no
+    // descriptor keeps the previous one — fail open for display/navigation.
     batch(() => {
       $activeGatewayProfile.set(target)
 
-      if (connection) {
-        setConnection(connection)
+      if (receipt.connection) {
+        setConnection(receipt.connection)
       }
     })
   })()
@@ -420,31 +437,32 @@ export async function ensureGatewayAgent(connectionId: null | string, profile: s
 
   $gatewaySwapTarget.set(target)
   gatewaySwitch = (async () => {
-    // Descriptor resolves concurrently with the dial, same as the profile
-    // path, so no await sits between the activation and the publication.
-    const [descriptor, activated] = await Promise.all([
-      resolveConnectionForAgent(connection, target),
-      ensureGatewayForAgent(connection, target)
-    ])
+    // Generation N is observed before this lazy descriptor resolver starts;
+    // descriptor lookup and dial then run concurrently inside the proof
+    // boundary. An edit/remove/recreate under the same id cannot borrow the
+    // successor generation.
+    const receipt = await activateGatewayAgentWithProof(connection, target, () =>
+      resolveConnectionForAgent(connection, target)
+    )
 
-    if (!activated) {
-      // The target stopped existing mid-dial (source edited/removed). Keep
-      // every atom on the previous backend; the caller's surfaces re-check
-      // what's active. Log so a dead agent click is diagnosable (#89622's
-      // silence lesson) — but never fail the whole switch closed here.
-      console.warn(`[profile] agent gateway activation for "${connection}:${target}" did not land`)
+    if (!routeActivationReceiptIsCurrent(receipt)) {
+      // The target stopped existing, another activation superseded this one,
+      // or the route no longer names this exact source/profile. Keep every atom
+      // on the successor backend; the read-only descriptor probe may complete,
+      // but it cannot publish authority for a different route.
+      console.warn(`[profile] agent gateway activation for "${connection}:${target}" did not retain current route proof`)
 
       return
     }
 
-    // ONE publication frame, profile pointer + descriptor together. A null
-    // descriptor keeps the previous one — fail open, resynced by
-    // boot/reconnect later.
+    // ONE publication frame, profile pointer + descriptor together. A degraded
+    // receipt with no descriptor keeps the previous one — fail open for
+    // display/navigation while mutation consumers require a ready receipt.
     batch(() => {
       $activeGatewayProfile.set(target)
 
-      if (descriptor) {
-        setConnection(descriptor)
+      if (receipt.connection) {
+        setConnection(receipt.connection)
       }
     })
   })()

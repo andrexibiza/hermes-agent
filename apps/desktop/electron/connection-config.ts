@@ -18,6 +18,8 @@
  *     this via the public `/api/status` field `auth_required: true`.
  */
 
+import { assertApiRequestRouteGeneration } from './connection-route-generation'
+
 // Bare + prefixed variants of the session cookies the gateway may set,
 // depending on its deploy shape (HTTPS direct → __Host-, behind a path prefix
 // → __Secure-, loopback HTTP → bare). Mirrors
@@ -768,10 +770,17 @@ function pathWithProfileScope(path, profile) {
  * when the v1 route is remote, only the registry resolver can force the request
  * back to this device. Single-source users omit the id and keep the
  * byte-identical v1 route.
+ *
+ * Consequential filesystem/Git paths additionally require the current
+ * main-process registry generation. The check executes here before main calls
+ * ensureRegistryBackend(), so a stale receipt cannot be reinterpreted against
+ * a replacement source that reused the same stable id.
  */
 function apiRequestRegistryConnectionId(request): null | string {
-  const raw = request && typeof request === 'object' ? (request as { connectionId?: unknown }).connectionId : ''
-  const id = String(raw ?? '').trim()
+  const object = request && typeof request === 'object' ? (request as { connectionId?: unknown }) : null
+  const id = String(object?.connectionId ?? '').trim()
+
+  assertApiRequestRouteGeneration(request, id)
 
   if (!id) {
     return null

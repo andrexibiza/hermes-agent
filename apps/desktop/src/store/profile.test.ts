@@ -6,13 +6,25 @@ import type { ProfileInfo } from '@/types/hermes'
 
 // Keep profile.ts's side-effecting imports inert: the gateway socket layer and
 // the REST query client must not run for real in a unit test.
-const ensureGatewayForProfile = vi.fn(async () => undefined)
-const ensureGatewayForAgent = vi.fn(async () => undefined)
+const ensureGatewayForProfile = vi.fn(async (_profile: string) => undefined)
+const ensureGatewayForAgent = vi.fn(async (_connectionId: null | string, _profile: string) => undefined)
 const openGatewayForProfile = vi.fn(async (_profile: string) => undefined)
 const $gateway = atom<unknown>({ id: 'live-socket' })
 const resetStarmapGraph = vi.fn()
+const activationProof = vi.hoisted(() => ({
+  activeRouteMatches: vi.fn(),
+  activateAgent: vi.fn(),
+  activateProfile: vi.fn(),
+  receiptIsCurrent: vi.fn()
+}))
 
 vi.mock('@/store/gateway', () => ({ $gateway, ensureGatewayForAgent, ensureGatewayForProfile, openGatewayForProfile }))
+vi.mock('@/store/gateway-activation', () => ({
+  activeGatewayRouteMatches: activationProof.activeRouteMatches,
+  activateGatewayAgentWithProof: activationProof.activateAgent,
+  activateGatewayProfileWithProof: activationProof.activateProfile,
+  routeActivationReceiptIsCurrent: activationProof.receiptIsCurrent
+}))
 vi.mock('@/hermes', () => ({
   getProfiles: vi.fn(async () => ({ profiles: [] })),
   setApiRequestProfile: vi.fn()
@@ -51,10 +63,66 @@ const localConn = (over: Partial<HermesConnection> = {}): HermesConnection =>
 
 const getConnection = vi.fn<(profile?: string | null) => Promise<HermesConnection>>()
 
+type ConnectionResolver =
+  | Promise<HermesConnection | null>
+  | (() => Promise<HermesConnection | null>)
+
+function startConnectionResolver(resolver: ConnectionResolver): Promise<HermesConnection | null> {
+  return typeof resolver === 'function' ? resolver() : resolver
+}
+
+function receipt(connectionId: null | string, profile: string, connection: HermesConnection | null) {
+  const route = { connectionId, profile }
+
+  return {
+    activationGeneration: 1,
+    connection,
+    gateway: $gateway.get(),
+    physicalRoute: route,
+    readiness: { descriptor: 'resolved', gateway: 'open', route: 'exact' },
+    requested: route,
+    route,
+    status: 'ready' as const
+  }
+}
+
 beforeEach(() => {
   getConnection.mockReset()
-  ensureGatewayForProfile.mockClear()
-  openGatewayForProfile.mockClear()
+  ensureGatewayForAgent.mockReset()
+  ensureGatewayForAgent.mockResolvedValue(undefined)
+  ensureGatewayForProfile.mockReset()
+  ensureGatewayForProfile.mockResolvedValue(undefined)
+  openGatewayForProfile.mockReset()
+  openGatewayForProfile.mockResolvedValue(undefined)
+  activationProof.activeRouteMatches.mockReset()
+  activationProof.activeRouteMatches.mockImplementation(
+    ({ connectionId, profile }: { connectionId: null | string; profile: string }) =>
+      connectionId === null && profile === $activeGatewayProfile.get() && Boolean($gateway.get())
+  )
+  activationProof.activateProfile.mockReset()
+  activationProof.activateProfile.mockImplementation(
+    async (profile: string, connectionResolver: ConnectionResolver) => {
+      const connectionPromise = startConnectionResolver(connectionResolver)
+      const gatewayPromise = ensureGatewayForProfile(profile)
+      const [connection] = await Promise.all([connectionPromise, gatewayPromise])
+
+      return receipt(null, profile, connection)
+    }
+  )
+  activationProof.activateAgent.mockReset()
+  activationProof.activateAgent.mockImplementation(
+    async (connectionId: string, profile: string, connectionResolver: ConnectionResolver) => {
+      const connectionPromise = startConnectionResolver(connectionResolver)
+      const gatewayPromise = ensureGatewayForAgent(connectionId, profile)
+      const [connection] = await Promise.all([connectionPromise, gatewayPromise])
+
+      return receipt(connectionId, profile, connection)
+    }
+  )
+  activationProof.receiptIsCurrent.mockReset()
+  activationProof.receiptIsCurrent.mockImplementation(
+    (value: { status: string }) => value.status === 'ready' || value.status === 'degraded'
+  )
   $gateway.set({ id: 'live-socket' })
   $activeGatewayProfile.set('default')
   $connection.set(localConn())
@@ -105,12 +173,25 @@ describe('ensureGatewayProfile → $connection sync (#46651)', () => {
     expect($connection.get()?.mode).toBe('local')
   })
 
-  it('does not churn $connection when the target is already the active profile', async () => {
+  it('does not publish a descriptor from a superseded activation generation', async () => {
+    getConnection.mockResolvedValue(remoteConn())
+    activationProof.receiptIsCurrent.mockReturnValueOnce(false)
+
+    await ensureGatewayProfile('vps-remote')
+
+    expect(ensureGatewayForProfile).toHaveBeenCalledWith('vps-remote')
+    expect(getConnection).toHaveBeenCalledWith('vps-remote')
+    expect($activeGatewayProfile.get()).toBe('default')
+    expect($connection.get()?.mode).toBe('local')
+  })
+
+  it('does not churn $connection when the exact target route is already active', async () => {
     $activeGatewayProfile.set('vps-remote')
     $connection.set(remoteConn())
 
     await ensureGatewayProfile('vps-remote')
 
+    expect(activationProof.activeRouteMatches).toHaveBeenCalledWith({ connectionId: null, profile: 'vps-remote' })
     expect(getConnection).not.toHaveBeenCalled()
     expect(ensureGatewayForProfile).not.toHaveBeenCalled()
     expect($connection.get()?.mode).toBe('remote')

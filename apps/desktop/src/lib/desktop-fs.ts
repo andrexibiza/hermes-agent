@@ -4,10 +4,16 @@ import type {
   HermesReadFileTextResult,
   HermesSelectPathsOptions
 } from '@/global'
+import { hermesApi } from '@/hermes'
+import { currentRouteActivationReceiptForMutation } from '@/store/gateway-activation'
 import { $connection } from '@/store/session'
 
 export interface DesktopFsRemotePicker {
   selectPaths: (options?: HermesSelectPathsOptions) => Promise<string[]>
+}
+
+type RouteGenerationBoundConnection = HermesConnection & {
+  routeGeneration?: string
 }
 
 let remotePicker: DesktopFsRemotePicker | null = null
@@ -26,7 +32,9 @@ function connectionCacheKey(connection: HermesConnection | null) {
       ? connection.remoteIdentity || connection.remoteHost || ''
       : connection.baseUrl || ''
 
-  return `${connection.mode || 'local'}:${connection.remoteKind || ''}:${connection.profile || ''}:${target}`
+  const owner = connection.connectionId ? `${connection.connectionId}:` : ''
+
+  return `${owner}${connection.mode || 'local'}:${connection.remoteKind || ''}:${connection.profile || ''}:${target}`
 }
 
 export function desktopFsCacheKey(connection: HermesConnection | null = $connection.get()) {
@@ -37,8 +45,8 @@ export function isDesktopFsRemoteMode() {
   return $connection.get()?.mode === 'remote'
 }
 
-// Active profile for FS/git REST calls. Without it the Electron api bridge
-// hits the primary (local) backend even when the user switched to a remote profile.
+// Active logical profile for FS/git REST calls. hermesApi carries the active
+// registry source separately; profile names are not globally unique.
 export function desktopFsProfile(): string | undefined {
   return $connection.get()?.profile || undefined
 }
@@ -58,9 +66,43 @@ function bridge() {
 }
 
 function remoteFsApi<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-  return bridge().api<T>(
+  // Route read-only requests through the same active connection context the
+  // gateway registry maintains. The old direct bridge call carried only a
+  // profile, so a registry agent silently fell back to the primary source
+  // (#89916, the owner-loss form of #90866).
+  return hermesApi<T>(
     body ? { body, method: 'POST', path, profile: desktopFsProfile() } : { path, profile: desktopFsProfile() }
   )
+}
+
+function remoteFsMutationApi<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const connection = $connection.get()
+  const receipt = currentRouteActivationReceiptForMutation(connection)
+  const connectionId = receipt?.route.connectionId
+  const routeGeneration = String(
+    (receipt?.connection as RouteGenerationBoundConnection | undefined)?.routeGeneration || ''
+  ).trim()
+
+  // A remote write must name an exact registry owner AND the main-owned source
+  // generation that the activation proved. A stable connectionId is UI
+  // identity only: Settings can edit it in place to target a different host.
+  if (!receipt || !connectionId || !routeGeneration) {
+    throw new Error('Remote file mutation requires a current exact generated route activation')
+  }
+
+  // Consume the receipt directly at the side-effect boundary. Main revalidates
+  // routeGeneration before resolving/dialling the registry source, so a stale
+  // renderer receipt cannot authorize a replacement source under the same id.
+  const request = {
+    body,
+    connectionId,
+    method: 'POST' as const,
+    path,
+    profile: receipt.route.profile,
+    routeGeneration
+  }
+
+  return bridge().api<T>(request)
 }
 
 export async function readDesktopDir(path: string): Promise<HermesReadDirResult> {
@@ -80,9 +122,9 @@ export async function readDesktopFileText(path: string): Promise<HermesReadFileT
 }
 
 // Save UTF-8 text back to a file. Local writes go through the hardened Electron
-// IPC; remote writes hit the dashboard's POST /api/fs/write-text (same path
-// hardening, parent-must-exist, size cap) so the editor behaves identically in
-// both modes. Stale-on-disk detection is the caller's job (re-read before save).
+// IPC; remote writes hit the dashboard's POST /api/fs/write-text only after
+// the active route proves its exact registry owner, descriptor realization, and
+// generation. Stale-on-disk detection is the caller's job (re-read before save).
 export async function writeDesktopFileText(path: string, content: string): Promise<{ path: string }> {
   const desktop = bridge()
 
@@ -94,7 +136,7 @@ export async function writeDesktopFileText(path: string, content: string): Promi
     return desktop.writeTextFile(path, content)
   }
 
-  const result = await remoteFsApi<{ ok?: boolean; path?: string }>('/api/fs/write-text', { content, path })
+  const result = await remoteFsMutationApi<{ ok?: boolean; path?: string }>('/api/fs/write-text', { content, path })
 
   return { path: result.path || path }
 }

@@ -54,12 +54,23 @@ let getConnectionFor: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   getConnection = vi.fn(async (profile?: null | string) => conn({ profile: profile ?? 'default' }))
-  getConnectionFor = vi.fn(async ({ profile }: { connectionId?: null | string; profile?: null | string }) =>
-    conn({ baseUrl: 'https://homelab.invalid', profile: profile ?? 'default' })
+  getConnectionFor = vi.fn(
+    async ({ connectionId, profile }: { connectionId?: null | string; profile?: null | string }) =>
+      conn({
+        baseUrl: 'https://homelab.invalid',
+        connectionId: connectionId ?? undefined,
+        profile: profile ?? 'default',
+        registryScoped: true
+      })
   )
   Object.defineProperty(window, 'hermesDesktop', {
     configurable: true,
     value: {
+      connections: {
+        list: vi.fn(async () => ({
+          connections: [{ generation: 'homelab-generation-1', id: 'homelab' }]
+        }))
+      },
       getConnection,
       getConnectionFor,
       getGatewayWsUrl: vi.fn(async () => 'wss://pool.invalid/api/ws?ticket=fake'),
