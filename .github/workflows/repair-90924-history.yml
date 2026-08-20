@@ -8,6 +8,8 @@ on:
       - .github/workflows/repair-90924-history.yml
   pull_request:
     types: [opened, reopened, synchronize]
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
@@ -22,6 +24,7 @@ jobs:
       github.repository == 'andrexibiza/hermes-agent' &&
       (
         github.event_name == 'push' ||
+        github.event_name == 'schedule' ||
         (
           github.event.pull_request.head.repo.full_name == github.repository &&
           github.event.pull_request.head.ref == 'chore/remove-pr90924-recovery-workflow'
