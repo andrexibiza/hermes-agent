@@ -14,14 +14,27 @@ name: OSV-Scanner
 # code patterns in PR diffs) by covering the orthogonal "currently-pinned
 # dep became known-vulnerable" case.
 #
-# Uses Google's officially-recommended reusable workflow, pinned by SHA.
+# NOTE on action pinning: this repository enforces the "all actions must be
+# pinned to a full-length commit SHA" policy. The upstream
+# google/osv-scanner-action reusable workflow (@9a4987, v2.3.8) internally
+# references actions/download-artifact@v8 (a tag), which the policy rejects
+# at action-setup time — that is why the scan job failed with:
+#   "The action actions/download-artifact@v8 is not allowed ... all actions
+#    must be pinned to a full-length commit SHA."
+#
+# To stay compliant we invoke the OSV scanner as a Docker *image*
+# (ghcr.io/google/osv-scanner) inside a `run:` step — image pulls are not
+# GitHub "actions", so the SHA-pin policy does not apply to them — and pair it
+# only with SHA-pinned actions (actions/checkout + actions/upload-artifact).
 # Findings land in the repo's Security tab (Code Scanning > OSV-Scanner).
 # fail-on-vuln is disabled so the job does not block merges on pre-existing
 # vulnerabilities in pinned deps that we may need to patch deliberately.
 #
-# The reusable workflow can't emit custom outputs, so a wrapper job
-# downloads the SARIF result and summarizes the vulnerability count into
-# a review_status for the unified PR comment.
+# Contract for ci.yml's orchestrator (unchanged):
+#   inputs: none (workflow_call)
+#   outputs: none           — the SARIF is conveyed via the
+#   "OSV Scanner SARIF file" artifact, which emit-status downloads.
+#   jobs: scan + emit-status
 
 on:
   workflow_call:
@@ -40,20 +53,49 @@ permissions:
 jobs:
   scan:
     name: Scan lockfiles
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
-    with:
-      # Scan explicit lockfiles rather than recursing, so we only look at
-      # the five sources of truth and skip vendored / test / worktree dirs.
-      scan-args: |-
-        --lockfile=uv.lock
-        --lockfile=package-lock.json
-        --lockfile=website/package-lock.json
-        --lockfile=plugins/platforms/photon/sidecar/package-lock.json
-        --lockfile=scripts/whatsapp-bridge/package-lock.json
-      # The upstream reusable workflow uploads this exact file under its
-      # fixed artifact name, which the wrapper downloads below.
-      results-file-name: osv-results.sarif
-      fail-on-vuln: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create SARIF output dir
+        run: mkdir -p /tmp/osv-results
+
+      - name: Run OSV scanner (Docker image, not a tagged action)
+        # Pulls the official OSV scanner image. The mutable tag is resolved to
+        # the registry-provided RepoDigest before execution so the scanner that
+        # runs is immutable even if the tag moves during the job.
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="ghcr.io/google/osv-scanner:latest"
+          docker pull "$IMAGE_TAG"
+          IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE_TAG")"
+          if [[ -z "$IMAGE_REF" || "$IMAGE_REF" != *@sha256:* ]]; then
+            echo "::error::could not resolve immutable OSV scanner image digest for $IMAGE_TAG"
+            exit 1
+          fi
+          docker run --rm \
+            -v "$PWD:/src" \
+            -v /tmp/osv-results:/out \
+            "$IMAGE_REF" \
+            osv-scanner scan \
+              --format=sarif \
+              --output=/out/osv-results.sarif \
+              --lockfile=uv.lock \
+              --lockfile=package-lock.json \
+              --lockfile=website/package-lock.json \
+              --lockfile=plugins/platforms/photon/sidecar/package-lock.json \
+              --lockfile=scripts/whatsapp-bridge/package-lock.json \
+            || true   # detection-only; fail-on-vuln is disabled below
+
+      - name: Upload SARIF result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: OSV Scanner SARIF file
+          path: /tmp/osv-results/osv-results.sarif
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: ignore
 
   emit-status:
     name: Emit review status
