@@ -16,8 +16,8 @@ import { invalidateCronModelImpactScopeState } from '@/store/cron-model-impact-s
 import { openGatewayForProfile } from '@/store/gateway'
 import {
   activateGatewayAgentWithProof,
-  activeGatewayRouteMatches,
   activateGatewayProfileWithProof,
+  activeGatewayRouteMatches,
   routeActivationReceiptIsCurrent
 } from '@/store/gateway-activation'
 import { setConnection } from '@/store/session'
