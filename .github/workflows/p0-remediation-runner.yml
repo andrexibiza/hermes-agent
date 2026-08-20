@@ -2,12 +2,9 @@ name: Run P0 dependency remediation
 
 on:
   push:
-    branches: [main]
-    paths:
-      - .github/workflows/p0-remediation-runner.yml
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - security/p0-dependency-remediation-20260820
 
 permissions:
   contents: write
@@ -18,9 +15,7 @@ concurrency:
 
 jobs:
   remediate:
-    if: >-
-      github.actor != 'github-actions[bot]' &&
-      (github.event_name == 'push' || github.event.pull_request.head.ref == 'security/p0-dependency-remediation-20260820')
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
@@ -47,24 +42,3 @@ jobs:
 
       - name: Materialize, verify, and push exact delivered tree
         run: bash .github/scripts/p0-remediate.sh
-
-      - name: Remove temporary runner from fork main
-        if: success()
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: main
-          path: runner-cleanup
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Commit runner cleanup
-        if: success()
-        working-directory: runner-cleanup
-        run: |
-          set -euo pipefail
-          rm -f .github/workflows/p0-remediation-runner.yml
-          git config user.name "Axl Ibiza"
-          git config user.email "andrexibiza@gmail.com"
-          git add .github/workflows/p0-remediation-runner.yml
-          git commit -m "ci(security): remove temporary P0 remediation runner"
-          git push origin HEAD:main
