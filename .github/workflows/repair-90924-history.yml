@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - .github/workflows/repair-90924-history.yml
+  pull_request:
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
@@ -16,7 +18,15 @@ concurrency:
 
 jobs:
   cleanup:
-    if: github.repository == 'andrexibiza/hermes-agent'
+    if: >-
+      github.repository == 'andrexibiza/hermes-agent' &&
+      (
+        github.event_name == 'push' ||
+        (
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.head.ref == 'chore/remove-pr90924-recovery-workflow'
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
