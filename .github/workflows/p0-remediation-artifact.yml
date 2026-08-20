@@ -25,7 +25,7 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Set up Node 26
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -46,6 +46,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
+          npm update nanoid --package-lock-only --ignore-scripts --no-audit --no-fund
           awk '/^git diff --check$/ { exit } { print }' .github/scripts/p0-remediate.sh > /tmp/p0-artifact.sh
           bash /tmp/p0-artifact.sh 2>&1 | tee /tmp/p0-remediation.log
 
