@@ -3,7 +3,7 @@ name: Repair PR 90924 history
 on:
   push:
     branches:
-      - ops/repair-90924-history
+      - main
 
 permissions:
   contents: write
