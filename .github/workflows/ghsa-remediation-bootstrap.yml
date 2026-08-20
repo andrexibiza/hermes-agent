@@ -1,0 +1,178 @@
+name: GHSA remediation bootstrap
+
+on:
+  push:
+    branches:
+      - security/ghsa-remediation-c47f0b4
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ghsa-remediation-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    name: Regenerate and verify patched dependency graphs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up Node 26
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install npm 12
+        run: npm --version | grep -q '^12\.' || npm install --global npm@12
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Apply manifest and desktop compatibility changes
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          def load(path: str):
+              return json.loads(Path(path).read_text(encoding="utf-8"))
+
+          def write(path: str, data):
+              Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+          root = load("package.json")
+          root["overrides"]["nanoid@^3"] = "3.3.18"
+          root["allowScripts"].pop("electron@40.10.2", None)
+          root["allowScripts"]["electron@41.10.3"] = True
+          write("package.json", root)
+
+          website = load("website/package.json")
+          website["overrides"]["nanoid"] = "3.3.18"
+          write("website/package.json", website)
+
+          desktop = load("apps/desktop/package.json")
+          desktop["devDependencies"]["electron"] = "41.10.3"
+          desktop["build"]["electronVersion"] = "41.10.3"
+          write("apps/desktop/package.json", desktop)
+
+          npmrc = Path(".npmrc")
+          npmrc_text = npmrc.read_text(encoding="utf-8")
+          npmrc_text = npmrc_text.replace(
+              "# nanoid 3.3.17 includes fixes for GHSA-2v37-7h3g-55p8. remove when > 2wks old (rel 2026-08-03)",
+              "# nanoid 3.3.18 fixes GHSA-2v37-7h3g-55p8. remove this exception when > 2wks old (rel 2026-08-07)",
+          )
+          npmrc.write_text(npmrc_text, encoding="utf-8")
+
+          helper = Path("apps/desktop/scripts/packaged-app-layout.mjs")
+          helper.write_text(
+              "export function resolveLinuxUnpackedDirName(arch) {\n"
+              "  return arch === 'x64' ? 'linux-unpacked' : `linux-${arch}-unpacked`\n"
+              "}\n",
+              encoding="utf-8",
+          )
+
+          helper_test = Path("apps/desktop/scripts/packaged-app-layout.test.mjs")
+          helper_test.write_text(
+              "import assert from 'node:assert/strict'\n"
+              "import test from 'node:test'\n\n"
+              "import { resolveLinuxUnpackedDirName } from './packaged-app-layout.mjs'\n\n"
+              "test('uses electron-builder default directory on Linux x64', () => {\n"
+              "  assert.equal(resolveLinuxUnpackedDirName('x64'), 'linux-unpacked')\n"
+              "})\n\n"
+              "test('includes architecture in electron-builder Linux ARM64 directory', () => {\n"
+              "  assert.equal(resolveLinuxUnpackedDirName('arm64'), 'linux-arm64-unpacked')\n"
+              "})\n",
+              encoding="utf-8",
+          )
+
+          test_desktop = Path("apps/desktop/scripts/test-desktop.mjs")
+          text = test_desktop.read_text(encoding="utf-8")
+          import_anchor = "import PACKAGE_JSON from '../package.json' with { type: 'json' }"
+          helper_import = "import { resolveLinuxUnpackedDirName } from './packaged-app-layout.mjs'"
+          if helper_import not in text:
+              if import_anchor not in text:
+                  raise SystemExit("test-desktop import anchor not found")
+              text = text.replace(import_anchor, helper_import + "\n" + import_anchor, 1)
+          old = "  // linux unpacked layout matches windows but with different binary name\n  const unpacked = path.join(RELEASE_ROOT, 'linux-unpacked')"
+          new = "  // electron-builder includes the architecture suffix for non-x64 Linux output.\n  const unpacked = path.join(RELEASE_ROOT, resolveLinuxUnpackedDirName(ARCH))"
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("test-desktop Linux layout anchor not found")
+          test_desktop.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Regenerate npm lockfiles
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm --prefix website install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Regenerate uv.lock with patched h2
+        run: uv lock --upgrade-package h2
+
+      - name: Verify lockfile consistency
+        run: |
+          uv lock --check
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix website ci --ignore-scripts --no-audit --no-fund
+
+      - name: Verify npm advisories are cleared
+        run: |
+          npm audit --workspaces=false --audit-level=moderate
+          npm audit --workspace web --audit-level=moderate
+          npm audit --workspace ui-tui --audit-level=moderate
+          npm audit --workspace apps/desktop --audit-level=moderate
+          npm --prefix website audit --audit-level=moderate
+
+      - name: Verify desktop packaged-layout regression
+        run: node --test apps/desktop/scripts/packaged-app-layout.test.mjs
+
+      - name: Verify resolved security floors
+        run: |
+          node <<'NODE'
+          const lock = require('./package-lock.json')
+          const root = require('./package.json')
+          const desktop = require('./apps/desktop/package.json')
+          if (root.overrides['nanoid@^3'] !== '3.3.18') throw new Error('nanoid override is not 3.3.18')
+          if (desktop.devDependencies.electron !== '41.10.3') throw new Error('Electron manifest is not 41.10.3')
+          const electron = lock.packages['node_modules/electron'] || lock.packages['apps/desktop/node_modules/electron']
+          if (!electron || electron.version !== '41.10.3') throw new Error(`Electron lock is ${electron?.version}`)
+          for (const [path, pkg] of Object.entries(lock.packages)) {
+            if (path.endsWith('/nanoid') && pkg.version?.startsWith('3.') && pkg.version !== '3.3.18') {
+              throw new Error(`${path} still resolves nanoid ${pkg.version}`)
+            }
+            if (path.endsWith('/extract-zip') && pkg.version === '2.0.1') {
+              throw new Error(`${path} still resolves vulnerable extract-zip 2.0.1`)
+            }
+          }
+          NODE
+          python3 - <<'PY'
+          import re
+          lock = open('uv.lock', encoding='utf-8').read()
+          match = re.search(r'\[\[package\]\]\nname = "h2"\nversion = "([^"]+)"', lock)
+          if not match or match.group(1) != '4.4.1':
+              raise SystemExit(f"h2 lock is {match.group(1) if match else 'missing'}")
+          PY
+
+      - name: Commit verified remediation
+        run: |
+          git diff --check
+          git config user.name "Axl Ibiza"
+          git config user.email "andrexibiza@gmail.com"
+          git rm .github/workflows/ghsa-remediation-bootstrap.yml
+          git add .npmrc package.json package-lock.json website/package.json website/package-lock.json \
+            apps/desktop/package.json apps/desktop/scripts/test-desktop.mjs \
+            apps/desktop/scripts/packaged-app-layout.mjs \
+            apps/desktop/scripts/packaged-app-layout.test.mjs uv.lock
+          git commit -m "fix(deps): clear current GHSA findings"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
