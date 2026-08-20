@@ -1,0 +1,90 @@
+name: P0 dependency remediation artifact
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-remediation-artifact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: >-
+      github.event.pull_request.head.repo.full_name == 'andrexibiza/hermes-agent' &&
+      github.event.pull_request.head.ref == 'security/p0-dependency-remediation-20260820'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node 26
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install npm 12
+        run: npm install --global npm@12
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Materialize and verify exact delivered files
+        id: materialize
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          awk '/^git diff --check$/ { exit } { print }' .github/scripts/p0-remediate.sh > /tmp/p0-artifact.sh
+          bash /tmp/p0-artifact.sh 2>&1 | tee /tmp/p0-remediation.log
+
+      - name: Write exact-object receipt
+        if: always()
+        run: |
+          mkdir -p /tmp/p0-receipt
+          {
+            echo "source_head=${{ github.event.pull_request.head.sha }}"
+            echo "materialize_outcome=${{ steps.materialize.outcome }}"
+            echo "node=$(node --version 2>/dev/null || true)"
+            echo "npm=$(npm --version 2>/dev/null || true)"
+            echo "uv=$(uv --version 2>/dev/null || true)"
+            echo "generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > /tmp/p0-receipt/receipt.txt
+          cp /tmp/p0-remediation.log /tmp/p0-receipt/ 2>/dev/null || true
+
+      - name: Upload generated remediation files
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: p0-remediation-files
+          retention-days: 1
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .npmrc
+            package.json
+            package-lock.json
+            website/package.json
+            website/package-lock.json
+            apps/desktop/package.json
+            apps/desktop/scripts/test-desktop.mjs
+            apps/desktop/scripts/packaged-app-layout.mjs
+            apps/desktop/scripts/packaged-app-layout.test.mjs
+            .github/workflows/osv-scanner.yml
+            uv.lock
+            /tmp/p0-receipt
+
+      - name: Enforce verification result
+        if: always() && steps.materialize.outcome != 'success'
+        run: exit 1
