@@ -1,0 +1,442 @@
+name: Build #90623 SessionDB CANTOPEN repair
+
+on:
+  push:
+    branches: [fix/90623-sessiondb-cantopen-capability]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    if: github.repository == 'andrexibiza/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/90623-sessiondb-cantopen-capability
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Apply root-cause repair and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          path = Path("hermes_state.py")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one source match, found {count}: {old[:120]!r}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "        compression_deadline: Optional[float] = None\n\n"
+              "        # Transient engine-level error observed on contended WAL appends\n",
+              "        compression_deadline: Optional[float] = None\n"
+              "        # One differential retry for SQLITE_CANTOPEN raised from the\n"
+              "        # transaction body. The affected-host #90623 failure is specific\n"
+              "        # to trigger-fired writes under BEGIN IMMEDIATE; retrying with\n"
+              "        # temp_store=MEMORY preserves the exact transaction boundary while\n"
+              "        # removing statement-journal/temp-file placement as a failure axis.\n"
+              "        # Never replay a commit-stage failure: its outcome can be ambiguous.\n"
+              "        cantopen_memory_retry_attempted = False\n\n"
+              "        # Transient engine-level error observed on contended WAL appends\n",
+          )
+
+          replace_once(
+              dedent('''\
+                      while True:
+                          try:
+                              with self._lock:
+                                  self._conn.execute("BEGIN IMMEDIATE")
+                                  try:
+                                      result = fn(self._conn)
+                                      self._conn.commit()
+              '''),
+              dedent('''\
+                      while True:
+                          write_body_started = False
+                          write_body_completed = False
+                          try:
+                              with self._lock:
+                                  self._conn.execute("BEGIN IMMEDIATE")
+                                  try:
+                                      write_body_started = True
+                                      result = fn(self._conn)
+                                      write_body_completed = True
+                                      self._conn.commit()
+              '''),
+          )
+
+          replace_once(
+              dedent('''\
+                          except sqlite3.OperationalError as exc:
+                              err_msg = str(exc).lower()
+                              if "locked" in err_msg or "busy" in err_msg:
+              '''),
+              dedent('''\
+                          except sqlite3.OperationalError as exc:
+                              err_msg = str(exc).lower()
+                              sqlite_code = getattr(exc, "sqlite_errorcode", None)
+                              base_sqlite_code = (
+                                  sqlite_code & 0xFF if isinstance(sqlite_code, int) else None
+                              )
+                              is_cantopen = (
+                                  "unable to open database file" in err_msg
+                                  or base_sqlite_code == getattr(sqlite3, "SQLITE_CANTOPEN", 14)
+                              )
+                              if (
+                                  is_cantopen
+                                  and write_body_started
+                                  and not write_body_completed
+                                  and not cantopen_memory_retry_attempted
+                              ):
+                                  # The inner transaction handler already rolled the failed
+                                  # attempt back, so replaying fn is safe here. Keep BEGIN
+                                  # IMMEDIATE and change only SQLite temp storage; unlike the
+                                  # field workaround, this never degrades a multi-statement
+                                  # SessionDB mutation into partial autocommit writes.
+                                  cantopen_memory_retry_attempted = True
+                                  try:
+                                      with self._lock:
+                                          self._conn.execute("PRAGMA temp_store=MEMORY")
+                                  except sqlite3.Error as pragma_exc:
+                                      raise exc from pragma_exc
+                                  logger.warning(
+                                      "state.db write hit SQLITE_CANTOPEN inside a rolled-back "
+                                      "BEGIN IMMEDIATE transaction (code=%s name=%s); retrying "
+                                      "once with temp_store=MEMORY while preserving atomicity.",
+                                      sqlite_code,
+                                      getattr(exc, "sqlite_errorname", None),
+                                  )
+                                  continue
+                              if "locked" in err_msg or "busy" in err_msg:
+              '''),
+          )
+
+          replace_once(
+              dedent('''\
+                              if "no such tokenizer: cjk_unicode61" in msg:
+                                  # This probe process couldn't load the cjk extension while
+                                  # the DB carries the cjk index — capability gap, not
+                                  # corruption. A tokenizer-capable SessionDB serves it fine;
+                                  # a tokenizer-less one self-heals by dropping the triggers.
+                                  return None
+                              return str(exc)
+                          return None
+              '''),
+              dedent('''\
+                              if "no such tokenizer: cjk_unicode61" in msg:
+                                  # This probe process couldn't load the cjk extension while
+                                  # the DB carries the cjk index — capability gap, not
+                                  # corruption. A tokenizer-capable SessionDB serves it fine;
+                                  # a tokenizer-less one self-heals by dropping the triggers.
+                                  return None
+                              sqlite_code = getattr(exc, "sqlite_errorcode", None)
+                              base_sqlite_code = (
+                                  sqlite_code & 0xFF if isinstance(sqlite_code, int) else None
+                              )
+                              is_cantopen = (
+                                  "unable to open database file" in msg
+                                  or base_sqlite_code == getattr(sqlite3, "SQLITE_CANTOPEN", 14)
+                              )
+                              if is_cantopen:
+                                  # Mirror SessionDB._execute_write's one-shot differential
+                                  # retry. If MEMORY temp storage makes the identical rolled-
+                                  # back transaction succeed, the database is healthy and the
+                                  # runtime can serve it without schema surgery. If it still
+                                  # fails, classify the result as capability-unavailable rather
+                                  # than pretending SQLITE_CANTOPEN proves FTS corruption.
+                                  try:
+                                      conn.execute("PRAGMA temp_store=MEMORY")
+                                      conn.execute("BEGIN IMMEDIATE")
+                                      conn.execute(
+                                          "INSERT INTO sessions (id, source, started_at) "
+                                          "VALUES (?, ?, ?)",
+                                          (probe_session_id, "_health_probe", time.time()),
+                                      )
+                                      conn.execute(
+                                          "INSERT INTO messages "
+                                          "(session_id, role, content, timestamp) "
+                                          "VALUES (?, ?, ?, ?)",
+                                          (
+                                              probe_session_id,
+                                              "user",
+                                              "_fts_health_probe",
+                                              time.time(),
+                                          ),
+                                      )
+                                      conn.execute("ROLLBACK")
+                                      return None
+                                  except sqlite3.Error as memory_exc:
+                                      try:
+                                          conn.execute("ROLLBACK")
+                                      except sqlite3.Error:
+                                          pass
+                                      return (
+                                          "runtime capability unavailable: state.db write probe "
+                                          "raised SQLITE_CANTOPEN under BEGIN IMMEDIATE even "
+                                          f"with temp_store=MEMORY: {memory_exc}"
+                                      )
+                              return str(exc)
+                          return None
+              '''),
+          )
+
+          replace_once(
+              dedent('''\
+                  if _db_opens_cleanly(db_path) is None:
+                      report["repaired"] = True
+                      report["strategy"] = "already_healthy"
+                      return report
+
+                  if backup:
+              '''),
+              dedent('''\
+                  initial_reason = _db_opens_cleanly(db_path)
+                  if initial_reason is None:
+                      report["repaired"] = True
+                      report["strategy"] = "already_healthy"
+                      return report
+                  lowered_initial_reason = initial_reason.lower()
+                  if (
+                      "runtime capability unavailable:" in lowered_initial_reason
+                      or "unable to open database file" in lowered_initial_reason
+                  ):
+                      # SQLITE_CANTOPEN is a runtime/VFS/temp-placement capability
+                      # failure, not evidence that canonical rows or FTS shadow
+                      # tables are corrupt. Never let an inconclusive write probe
+                      # authorize REINDEX/writable_schema/drop-FTS/VACUUM surgery.
+                      report["error"] = (
+                          "state.db write capability is unavailable; refusing "
+                          "schema/FTS repair because the probe did not establish "
+                          f"database corruption: {initial_reason}"
+                      )
+                      logger.error("state.db repair refused: %s", report["error"])
+                      return report
+
+                  if backup:
+              '''),
+          )
+
+          path.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/state/test_sessiondb_cantopen_capability.py")
+          test_path.write_text(dedent(r'''\
+              """Regression coverage for #90623 SQLite CANTOPEN classification."""
+
+              import sqlite3
+
+              import pytest
+
+              import hermes_state
+              from hermes_state import SessionDB
+
+
+              class _CantOpenProxy:
+                  def __init__(
+                      self,
+                      inner,
+                      *,
+                      fail_state_meta_until_memory=False,
+                      fail_state_meta_always=False,
+                      fail_messages_until_memory=False,
+                  ):
+                      self._inner = inner
+                      self.fail_state_meta_until_memory = fail_state_meta_until_memory
+                      self.fail_state_meta_always = fail_state_meta_always
+                      self.fail_messages_until_memory = fail_messages_until_memory
+                      self.temp_store_memory = False
+                      self.temp_store_sets = 0
+                      self.begin_immediate_count = 0
+
+                  def execute(self, sql, parameters=()):
+                      normalized = " ".join(str(sql).split()).upper()
+                      if normalized == "BEGIN IMMEDIATE":
+                          self.begin_immediate_count += 1
+                      if normalized == "PRAGMA TEMP_STORE=MEMORY":
+                          self.temp_store_memory = True
+                          self.temp_store_sets += 1
+                      if normalized.startswith("INSERT INTO STATE_META"):
+                          if self.fail_state_meta_always or (
+                              self.fail_state_meta_until_memory
+                              and not self.temp_store_memory
+                          ):
+                              raise sqlite3.OperationalError("unable to open database file")
+                      if (
+                          normalized.startswith("INSERT INTO MESSAGES ")
+                          and self.fail_messages_until_memory
+                          and not self.temp_store_memory
+                      ):
+                          raise sqlite3.OperationalError("unable to open database file")
+                      return self._inner.execute(sql, parameters)
+
+                  def __getattr__(self, name):
+                      return getattr(self._inner, name)
+
+
+              @pytest.fixture
+              def db(tmp_path):
+                  instance = SessionDB(db_path=tmp_path / "state.db")
+                  yield instance
+                  instance.close()
+
+
+              def _upsert(conn, key, value="ok"):
+                  conn.execute(
+                      "INSERT INTO state_meta (key, value) VALUES (?, ?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                      (key, value),
+                  )
+                  return value
+
+
+              def test_execute_write_retries_body_cantopen_with_memory_temp_store(db):
+                  proxy = _CantOpenProxy(
+                      db._conn,
+                      fail_state_meta_until_memory=True,
+                  )
+                  db._conn = proxy
+
+                  assert db._execute_write(lambda conn: _upsert(conn, "cantopen")) == "ok"
+                  assert db.get_meta("cantopen") == "ok"
+                  assert proxy.temp_store_sets == 1
+                  assert proxy.begin_immediate_count == 2
+
+                  # temp_store is connection-scoped. A later write uses the repaired
+                  # capability directly instead of paying another failed transaction.
+                  assert db._execute_write(lambda conn: _upsert(conn, "later")) == "ok"
+                  assert proxy.temp_store_sets == 1
+                  assert proxy.begin_immediate_count == 3
+
+
+              def test_cantopen_retry_keeps_multi_statement_write_atomic(db):
+                  proxy = _CantOpenProxy(
+                      db._conn,
+                      fail_state_meta_until_memory=True,
+                  )
+                  db._conn = proxy
+
+                  def partial_then_fail(conn):
+                      _upsert(conn, "must_rollback")
+                      raise RuntimeError("second statement failed")
+
+                  with pytest.raises(RuntimeError, match="second statement failed"):
+                      db._execute_write(partial_then_fail)
+
+                  assert db.get_meta("must_rollback") is None
+                  assert proxy.temp_store_sets == 1
+                  assert proxy.begin_immediate_count == 2
+
+
+              def test_cantopen_that_survives_memory_retry_propagates(db):
+                  proxy = _CantOpenProxy(
+                      db._conn,
+                      fail_state_meta_always=True,
+                  )
+                  db._conn = proxy
+
+                  with pytest.raises(sqlite3.OperationalError, match="unable to open"):
+                      db._execute_write(lambda conn: _upsert(conn, "still_broken"))
+
+                  assert proxy.temp_store_sets == 1
+                  assert proxy.begin_immediate_count == 2
+                  assert db.get_meta("still_broken") is None
+
+
+              def test_health_probe_accepts_same_transaction_after_memory_fallback(
+                  tmp_path, monkeypatch
+              ):
+                  db_path = tmp_path / "state.db"
+                  instance = SessionDB(db_path=db_path)
+                  instance.close()
+
+                  original_connect = sqlite3.connect
+                  proxies = []
+
+                  def connect(*args, **kwargs):
+                      proxy = _CantOpenProxy(
+                          original_connect(*args, **kwargs),
+                          fail_messages_until_memory=True,
+                      )
+                      proxies.append(proxy)
+                      return proxy
+
+                  monkeypatch.setattr(hermes_state.sqlite3, "connect", connect)
+
+                  assert hermes_state._db_opens_cleanly(db_path) is None
+                  assert proxies
+                  assert proxies[0].temp_store_sets == 1
+                  assert proxies[0].begin_immediate_count == 2
+
+
+              def test_repair_refuses_schema_surgery_for_runtime_cantopen(
+                  tmp_path, monkeypatch
+              ):
+                  db_path = tmp_path / "state.db"
+                  instance = SessionDB(db_path=db_path)
+                  instance.close()
+
+                  monkeypatch.setattr(
+                      hermes_state,
+                      "_db_opens_cleanly",
+                      lambda _path: (
+                          "runtime capability unavailable: state.db write probe raised "
+                          "SQLITE_CANTOPEN under BEGIN IMMEDIATE even with "
+                          "temp_store=MEMORY: unable to open database file"
+                      ),
+                  )
+                  backup_called = {"value": False}
+
+                  def forbidden_backup(_path):
+                      backup_called["value"] = True
+                      raise AssertionError("repair must stop before backup/surgery")
+
+                  monkeypatch.setattr(hermes_state, "_backup_db_file", forbidden_backup)
+
+                  report = hermes_state.repair_state_db_schema(db_path, backup=True)
+
+                  assert report["repaired"] is False
+                  assert report["strategy"] is None
+                  assert "refusing schema/FTS repair" in report["error"]
+                  assert backup_called["value"] is False
+          '''), encoding="utf-8")
+          PY
+          git diff --check
+
+      - name: Verify focused persistence boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --with ruff==0.15.10 ruff check hermes_state.py tests/state/test_sessiondb_cantopen_capability.py
+          uv run pytest -q \
+            tests/state/test_sessiondb_cantopen_capability.py \
+            tests/state/test_fts_runtime_rebuild.py \
+            tests/test_state_db_malformed_repair.py
+          python -m py_compile hermes_state.py
+          git diff --check
+
+      - name: Publish verified source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Andrex Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+          git rm -- .github/workflows/zz-fix-90623-source.yml
+          git add -- hermes_state.py tests/state/test_sessiondb_cantopen_capability.py
+          git diff --cached --check
+          git commit -m "fix(state): fail closed on SQLite CANTOPEN capability (#90623)"
+          git push origin HEAD:fix/90623-sessiondb-cantopen-capability
