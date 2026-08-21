@@ -1,8 +1,10 @@
-name: Apply Windows update generation barrier (temporary)
+name: Materialize verified Windows update generation barrier
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-windows-generation-barrier-temp.yml
   schedule:
     - cron: '*/5 * * * *'
 
@@ -10,167 +12,128 @@ permissions:
   contents: write
 
 jobs:
-  apply:
-    name: Apply and verify Windows generation barrier
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/windows-update-generation-barrier')
+  materialize:
+    name: Publish exact six-file product source
+    if: github.repository == 'andrexibiza/hermes-agent'
     runs-on: windows-latest
     timeout-minutes: 40
+    env:
+      TARGET_BRANCH: fix/windows-update-generation-barrier
+      SOURCE_BRANCH: ci/windows-generation-source-artifact
+      ARTIFACT_BASE: 23a64a97ec928945b49389e8dfb6d06a11cb0132
+      PATCH_BLOB: 576af882db8851413af01f4e89195ffe858dbaab
+      PATCH_SHA256: 418dcfb39d3edd4ed29b8cc7435eda010bef3ed8e6925837dafa8e42754118a9
+      PATCH_BYTES: '79046'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: fix/windows-update-generation-barrier
           fetch-depth: 0
 
-      - name: Compose, verify, and publish generation barrier
+      - name: Reconstruct, verify, and publish exact product source
         shell: bash
         run: |
           set -euo pipefail
 
-          source_branch='fix/windows-update-generation-barrier'
-          diagnostic_branch='tmp/windows-generation-merge-diagnostic'
-          reviewed_base='8794e5a21c980a0f26532cb4883284b786cb3f25'
-          receipt_base='533886c8b8eb67ff8b389b7f48e7d5e5d9c575b9'
-          receipt_head='8209854a7040e64ddc1d64b07e740c8faaf89c22'
-
-          if [[ ! -d .hermes-patches/windows-generation ]]; then
-            echo 'Patch already applied; nothing to do.'
-            exit 0
-          fi
-
-          cat .hermes-patches/windows-generation/part*.patch > /tmp/windows-generation.patch
-          echo 'cf060137934b3fef3add8022a785bfd372160414364f158b37c1aae621c51865  /tmp/windows-generation.patch' | sha256sum -c -
-
-          git config core.autocrlf false
-          git config core.longpaths true
-          git config user.name 'Axl Ibiza'
-          git config user.email '84248988+andrexibiza@users.noreply.github.com'
-          git fetch https://github.com/NousResearch/hermes-agent.git main
-          upstream_main=$(git rev-parse FETCH_HEAD)
-          echo "Current upstream main: ${upstream_main}"
-          git reset --hard "${upstream_main}"
-
-          # #91283 is now part of repository truth. The generation barrier is
-          # composed with its receipt/fleet-generation work, never substituted
-          # for it or applied from a stale preimage.
-          git merge-base --is-ancestor "${receipt_head}" "${upstream_main}"
-          git show "${receipt_base}:hermes_cli/update_cmd.py" > /tmp/update_cmd.base.py
-          cp hermes_cli/update_cmd.py /tmp/update_cmd.current.py
-          test "$(git hash-object /tmp/update_cmd.base.py)" = '1b8c967dd757a3e8cb43d64510b1926f46bc6bb0'
-          test "$(git hash-object hermes_cli/update_lock.py)" = '964638df05636ee5cfa96e5a651ac84964b34df6'
-          test "$(git hash-object tests/hermes_cli/test_update_lock.py)" = '912d217d898eb12665a25f3bb417731a7f73c2ab'
-          git merge-base --is-ancestor "${reviewed_base}" "${upstream_main}"
-
-          # Reconstruct the reviewed generation candidate against its exact
-          # update_cmd preimage, then three-way compose it with current main.
-          cp /tmp/update_cmd.base.py hermes_cli/update_cmd.py
-          git apply --check /tmp/windows-generation.patch
-          git apply /tmp/windows-generation.patch
-          cp hermes_cli/update_cmd.py /tmp/update_cmd.generation.py
-
-          set +e
-          git merge-file -p \
-            /tmp/update_cmd.generation.py \
-            /tmp/update_cmd.base.py \
-            /tmp/update_cmd.current.py \
-            > /tmp/update_cmd.merged.py
-          merge_status=$?
-          set -e
-
-          if [[ ${merge_status} -ne 0 ]]; then
-            git checkout -B "${diagnostic_branch}" "${upstream_main}"
-            cp /tmp/update_cmd.merged.py hermes_cli/update_cmd.py
-            mkdir -p .hermes-control
-            printf 'Three-way composition conflict against upstream %s\n' "${upstream_main}" \
-              > .hermes-control/windows-generation-merge-status.txt
-            git add -- \
-              hermes_cli/update_cmd.py \
-              .hermes-control/windows-generation-merge-status.txt
-            git commit -m 'diagnostic: expose Windows generation composition conflict'
-            git push --force origin HEAD:"${diagnostic_branch}"
-            echo 'Three-way composition conflicted; diagnostic branch published.' >&2
-            exit 1
-          fi
-
-          cp /tmp/update_cmd.merged.py hermes_cli/update_cmd.py
-          if grep -nE '^(<<<<<<<|=======|>>>>>>>)' hermes_cli/update_cmd.py; then
-            echo 'Unexpected conflict markers survived a clean merge.' >&2
-            exit 1
-          fi
-          git diff --check
-
-          expected=$(printf '%s\n' \
+          expected_paths=$(printf '%s\n' \
             hermes_cli/update_cmd.py \
             hermes_cli/update_generation.py \
             hermes_cli/update_generation_worker.py \
             hermes_cli/update_lock.py \
             tests/hermes_cli/test_update_generation.py \
             tests/hermes_cli/test_update_lock.py | sort)
-          actual=$(git diff --name-only | sort)
-          test "$actual" = "$expected"
 
+          exact_postimage_present() {
+            [[ -f hermes_cli/update_generation.py ]] || return 1
+            [[ -f hermes_cli/update_generation_worker.py ]] || return 1
+            echo '822f3e94e9b9aa6d6c16d0472e25ec28a31b0529090bed7fc55bd9185aaf1cb1  hermes_cli/update_cmd.py' | sha256sum -c - >/dev/null || return 1
+            echo '0bf28b51602b8c2937354b41aa924194732ea3d182fc91e4e34914e0c0548504  hermes_cli/update_generation.py' | sha256sum -c - >/dev/null || return 1
+            echo 'efeddc8c2f22edec1e142b75ccb48688a33f0930cbaa1eb1d4a74b0c6bb8234a  hermes_cli/update_generation_worker.py' | sha256sum -c - >/dev/null || return 1
+            echo 'd69ed5fb7e213cd12ca68d70c69d79e20433c828d1caf9805bb93f9af82a18c9  hermes_cli/update_lock.py' | sha256sum -c - >/dev/null || return 1
+            echo '2dc10f31117abc86cc3d74839ce4b7ecdb710e8301c2cd2bffab9290e0e97777  tests/hermes_cli/test_update_generation.py' | sha256sum -c - >/dev/null || return 1
+            echo 'a5f39160c4346081ef630f34fdfc34da7e2bea09d2dc9de8f0ad3079340b191c  tests/hermes_cli/test_update_lock.py' | sha256sum -c - >/dev/null || return 1
+          }
+
+          if exact_postimage_present; then
+            echo 'Exact reviewed source is already the branch head; no mutation required.'
+            exit 0
+          fi
+
+          git config core.autocrlf false
+          git config core.longpaths true
+          git config user.name 'Axl Ibiza'
+          git config user.email '84248988+andrexibiza@users.noreply.github.com'
+
+          original_head=$(git rev-parse HEAD)
+          git fetch --no-tags origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          git show "refs/remotes/origin/${SOURCE_BRANCH}:.hermes-patches/windows-generation/source.patch" > /tmp/windows-generation.patch
+          test "$(git hash-object /tmp/windows-generation.patch)" = "${PATCH_BLOB}"
+          test "$(sha256sum /tmp/windows-generation.patch | cut -d' ' -f1)" = "${PATCH_SHA256}"
+          test "$(wc -c < /tmp/windows-generation.patch)" -eq "${PATCH_BYTES}"
+
+          git fetch --no-tags https://github.com/NousResearch/hermes-agent.git main
+          upstream_main=$(git rev-parse FETCH_HEAD)
+          echo "Current upstream main: ${upstream_main}"
+          git merge-base --is-ancestor "${ARTIFACT_BASE}" "${upstream_main}"
+
+          touched=(
+            hermes_cli/update_cmd.py
+            hermes_cli/update_generation.py
+            hermes_cli/update_generation_worker.py
+            hermes_cli/update_lock.py
+            tests/hermes_cli/test_update_generation.py
+            tests/hermes_cli/test_update_lock.py
+          )
+          if ! git diff --quiet "${ARTIFACT_BASE}" "${upstream_main}" -- "${touched[@]}"; then
+            echo 'Current main changed a reviewed source path; refusing automatic composition.' >&2
+            git diff --name-status "${ARTIFACT_BASE}" "${upstream_main}" -- "${touched[@]}" >&2
+            exit 1
+          fi
+
+          git reset --hard "${upstream_main}"
+          git apply --index --check /tmp/windows-generation.patch
+          git apply --index /tmp/windows-generation.patch
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort)" = "${expected_paths}"
+          exact_postimage_present
+
+          python -m pip install --disable-pip-version-check -q \
+            pytest==9.1.1 psutil==7.2.2 python-dotenv==1.2.2 pyyaml==6.0.3 ruff==0.15.10
           python -m py_compile \
             hermes_cli/update_cmd.py \
             hermes_cli/update_generation.py \
             hermes_cli/update_generation_worker.py \
             hermes_cli/update_lock.py \
+            hermes_cli/update_receipt.py \
             tests/hermes_cli/test_update_generation.py \
             tests/hermes_cli/test_update_lock.py \
-            hermes_cli/update_receipt.py \
             tests/hermes_cli/test_update_receipt.py
-
-          python -m pip install --disable-pip-version-check -q pytest psutil pyyaml
-          set +e
+          python -m ruff check \
+            hermes_cli/update_cmd.py \
+            hermes_cli/update_generation.py \
+            hermes_cli/update_generation_worker.py \
+            hermes_cli/update_lock.py \
+            tests/hermes_cli/test_update_generation.py \
+            tests/hermes_cli/test_update_lock.py
           python -m pytest -q \
             tests/hermes_cli/test_update_generation.py \
             tests/hermes_cli/test_update_lock.py \
-            tests/hermes_cli/test_update_receipt.py \
-            2>&1 | tee /tmp/windows-generation-tests.log
-          test_status=${PIPESTATUS[0]}
-          set -e
-
-          if [[ ${test_status} -ne 0 ]]; then
-            git checkout -B "${diagnostic_branch}" "${upstream_main}"
-            cp /tmp/update_cmd.merged.py hermes_cli/update_cmd.py
-            git apply /tmp/windows-generation.patch --include='hermes_cli/update_generation.py' \
-              --include='hermes_cli/update_generation_worker.py' \
-              --include='hermes_cli/update_lock.py' \
-              --include='tests/hermes_cli/test_update_generation.py' \
-              --include='tests/hermes_cli/test_update_lock.py'
-            mkdir -p .hermes-control
-            cp /tmp/windows-generation-tests.log \
-              .hermes-control/windows-generation-test-status.txt
-            git add -- \
-              hermes_cli/update_cmd.py \
-              hermes_cli/update_generation.py \
-              hermes_cli/update_generation_worker.py \
-              hermes_cli/update_lock.py \
-              tests/hermes_cli/test_update_generation.py \
-              tests/hermes_cli/test_update_lock.py \
-              .hermes-control/windows-generation-test-status.txt
-            git commit -m 'diagnostic: expose Windows generation test failure'
-            git push --force origin HEAD:"${diagnostic_branch}"
-            exit "${test_status}"
-          fi
-
-          echo 'Postimage blobs:'
-          git hash-object \
+            tests/hermes_cli/test_update_receipt.py
+          python scripts/check-windows-footguns.py \
             hermes_cli/update_cmd.py \
             hermes_cli/update_generation.py \
             hermes_cli/update_generation_worker.py \
             hermes_cli/update_lock.py \
             tests/hermes_cli/test_update_generation.py \
             tests/hermes_cli/test_update_lock.py
-          git diff --stat
 
-          git add -- \
-            hermes_cli/update_cmd.py \
-            hermes_cli/update_generation.py \
-            hermes_cli/update_generation_worker.py \
-            hermes_cli/update_lock.py \
-            tests/hermes_cli/test_update_generation.py \
-            tests/hermes_cli/test_update_lock.py
-          git commit -m 'fix(update): cross Windows dependency generation barrier (#88683)'
-          git push --force-with-lease origin HEAD:"${source_branch}"
+          git commit -m 'feat(update): enforce Windows dependency generations (#88683)' \
+            -m 'Materializes the exact six-file source verified by #91327.' \
+            -m "Current upstream base: ${upstream_main}" \
+            -m "Reviewed patch blob: ${PATCH_BLOB}" \
+            -m 'Receipt substrate: #91283.' \
+            -m 'Refs #88683; Part of #91277.'
+          published_head=$(git rev-parse HEAD)
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${original_head}" \
+            origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "Published exact product head: ${published_head}"
