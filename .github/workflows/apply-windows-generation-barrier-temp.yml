@@ -1,0 +1,94 @@
+name: Apply Windows update generation barrier (temporary)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply and verify Windows generation barrier
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/windows-update-generation-barrier'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/windows-update-generation-barrier
+          fetch-depth: 0
+
+      - name: Apply, verify, and publish generation barrier
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -d .hermes-patches/windows-generation ]]; then
+            echo 'Patch already applied; nothing to do.'
+            exit 0
+          fi
+
+          cat .hermes-patches/windows-generation/part*.patch > /tmp/windows-generation.patch
+          echo 'cf060137934b3fef3add8022a785bfd372160414364f158b37c1aae621c51865  /tmp/windows-generation.patch' | sha256sum -c -
+
+          git config core.autocrlf false
+          git config core.longpaths true
+          git fetch https://github.com/NousResearch/hermes-agent.git main
+          test "$(git rev-parse FETCH_HEAD)" = '8794e5a21c980a0f26532cb4883284b786cb3f25'
+          git reset --hard FETCH_HEAD
+
+          test "$(git hash-object hermes_cli/update_cmd.py)" = '1b8c967dd757a3e8cb43d64510b1926f46bc6bb0'
+          test "$(git hash-object hermes_cli/update_lock.py)" = '964638df05636ee5cfa96e5a651ac84964b34df6'
+          test "$(git hash-object tests/hermes_cli/test_update_lock.py)" = '912d217d898eb12665a25f3bb417731a7f73c2ab'
+
+          git apply --check /tmp/windows-generation.patch
+          git apply /tmp/windows-generation.patch
+          git diff --check
+
+          expected=$(printf '%s\n' \
+            hermes_cli/update_cmd.py \
+            hermes_cli/update_generation.py \
+            hermes_cli/update_generation_worker.py \
+            hermes_cli/update_lock.py \
+            tests/hermes_cli/test_update_generation.py \
+            tests/hermes_cli/test_update_lock.py | sort)
+          actual=$(git diff --name-only | sort)
+          test "$actual" = "$expected"
+
+          python -m py_compile \
+            hermes_cli/update_cmd.py \
+            hermes_cli/update_generation.py \
+            hermes_cli/update_generation_worker.py \
+            hermes_cli/update_lock.py \
+            tests/hermes_cli/test_update_generation.py \
+            tests/hermes_cli/test_update_lock.py
+
+          python -m pip install --disable-pip-version-check -q pytest psutil
+          python -m pytest -q \
+            tests/hermes_cli/test_update_generation.py \
+            tests/hermes_cli/test_update_lock.py
+
+          echo 'Postimage blobs:'
+          git hash-object \
+            hermes_cli/update_cmd.py \
+            hermes_cli/update_generation.py \
+            hermes_cli/update_generation_worker.py \
+            hermes_cli/update_lock.py \
+            tests/hermes_cli/test_update_generation.py \
+            tests/hermes_cli/test_update_lock.py
+          git diff --stat
+
+          git config user.name 'Axl Ibiza'
+          git config user.email 'andrexibiza@users.noreply.github.com'
+          git add \
+            hermes_cli/update_cmd.py \
+            hermes_cli/update_generation.py \
+            hermes_cli/update_generation_worker.py \
+            hermes_cli/update_lock.py \
+            tests/hermes_cli/test_update_generation.py \
+            tests/hermes_cli/test_update_lock.py
+          git commit -m 'fix(update): cross Windows dependency generation barrier (#88683)'
+          git push --force-with-lease origin HEAD:fix/windows-update-generation-barrier
