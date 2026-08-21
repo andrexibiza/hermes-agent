@@ -3,6 +3,8 @@ name: Apply Windows update generation barrier (temporary)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
@@ -11,8 +13,9 @@ jobs:
   apply:
     name: Apply and verify Windows generation barrier
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/windows-update-generation-barrier'
+      github.event_name == 'schedule' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/windows-update-generation-barrier')
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
