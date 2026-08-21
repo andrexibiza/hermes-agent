@@ -32,13 +32,61 @@ jobs:
           STAGING_HEAD: 58ee2f25e98b9d431300ed22f40534789cfe7796
           SOURCE_BRANCH: fix/89719-authoritative-connection-id
           SOURCE_HEAD: 95659ed2fae7e7592e76bfa6ba667cb5714fb3a6
+          STATUS_BRANCH: automation/pr90913-publisher-status
           TARGET_BRANCH: fix/connection-id-authority-followup
         shell: bash
         run: |
           set -euo pipefail
 
+          LOG_FILE=/tmp/pr90913-publisher.log
+          : > "$LOG_FILE"
+          exec > >(tee -a "$LOG_FILE") 2>&1
+
           git config user.name "Axl Ibiza"
           git config user.email "84248988+andrexibiza@users.noreply.github.com"
+
+          publish_marker() {
+            local state="$1"
+            local rc="$2"
+            local target_head=''
+            local upstream_head="${UPSTREAM_MAIN:-}"
+
+            target_head=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}' || true)
+            {
+              printf 'state=%s\n' "$state"
+              printf 'exit_code=%s\n' "$rc"
+              printf 'run_commit=%s\n' "${GITHUB_SHA:-}"
+              printf 'upstream_main=%s\n' "$upstream_head"
+              printf 'target_head=%s\n' "$target_head"
+              printf 'recorded_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            } > /tmp/pr90913-publisher-status.txt
+
+            local log_blob status_blob tree_sha marker_commit
+            log_blob=$(git hash-object -w "$LOG_FILE")
+            status_blob=$(git hash-object -w /tmp/pr90913-publisher-status.txt)
+            tree_sha=$(
+              printf '100644 blob %s\tlog.txt\n100644 blob %s\tstatus.txt\n' "$log_blob" "$status_blob" |
+                git mktree
+            )
+            marker_commit=$(printf 'ci: record pr90913 publisher %s\n' "$state" | git commit-tree "$tree_sha")
+            git push --force origin "$marker_commit:refs/heads/$STATUS_BRANCH"
+          }
+
+          finish() {
+            local rc=$?
+            trap - EXIT
+            set +e
+            local state=failed
+            if [[ "$rc" -eq 0 ]]; then
+              state=success
+            fi
+            publish_marker "$state" "$rc"
+            exit "$rc"
+          }
+          trap finish EXIT
+
+          publish_marker running 0
+
           git fetch origin \
             "+refs/heads/$STAGING_BRANCH:refs/remotes/origin/$STAGING_BRANCH" \
             "+refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
