@@ -1,0 +1,16 @@
+name: Materialize P0 dependency remediation
+
+on:
+  push:
+    branches:
+      - security/p0-dependency-remediation-20260820
+
+permissions:
+  contents: write
+
+jobs:
+  registration:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo registered
