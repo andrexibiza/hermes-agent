@@ -180,16 +180,20 @@ def test_rollback_promotion_failure_restores_candidate_and_preserves_backup(tmp_
 
 def main() -> None:
     original_head = run("git", "rev-parse", "HEAD", capture=True)
-    original_parent = run("git", "rev-parse", "HEAD^", capture=True)
-    patch_product()
+    expected_head = os.environ.get("EXPECTED_SOURCE_HEAD", "").strip()
+    if expected_head and original_head != expected_head:
+        print(f"target already moved: expected {expected_head}, found {original_head}; nothing to do")
+        return
 
+    patch_product()
     archive = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "pr91079-files.tar"
     run("tar", "-cf", str(archive), *OWNED)
 
     subprocess.run(["git", "remote", "add", "upstream", "https://github.com/NousResearch/hermes-agent.git"], check=False)
     run("git", "fetch", "--no-tags", "upstream", "main")
+    merge_base = run("git", "merge-base", original_head, "upstream/main", capture=True)
 
-    overlap = run("git", "diff", "--name-only", f"{original_parent}..upstream/main", "--", *OWNED, capture=True)
+    overlap = run("git", "diff", "--name-only", f"{merge_base}..upstream/main", "--", *OWNED, capture=True)
     if overlap:
         raise SystemExit(f"upstream changed owned path(s):\n{overlap}")
 
