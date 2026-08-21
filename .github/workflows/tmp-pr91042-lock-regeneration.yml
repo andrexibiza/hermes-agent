@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - tmp/91042-lock-regeneration
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
