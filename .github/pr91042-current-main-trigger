@@ -1,2 +1,2 @@
-source=security/p0-dependency-remediation-20260820
-purpose=current-main-security-rebuild
+target=89479
+purpose=current-main-security-convergence
