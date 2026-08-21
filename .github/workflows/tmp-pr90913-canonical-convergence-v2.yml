@@ -1,0 +1,88 @@
+name: tmp-pr90913-canonical-convergence-v2
+
+on:
+  push:
+    branches:
+      - tmp/pr90913-canonical-convergence
+
+permissions:
+  contents: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+
+      - name: Build, verify, and publish the canonical head
+        env:
+          SOURCE_BRANCH: fix/89719-authoritative-connection-id
+          TARGET_BRANCH: fix/connection-id-authority-followup
+          UPSTREAM_MAIN: 76f6ba37064614a703ce2d19ade6bb5fbbf4fcf8
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp .tmp/pr90913/rewrite.py /tmp/pr90913-rewrite.py
+          cp .tmp/pr90913/connection-registry-authority.test.ts /tmp/connection-registry-authority.test.ts
+
+          git config user.name "Axl Ibiza"
+          git config user.email "84248988+andrexibiza@users.noreply.github.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch upstream main
+          git fetch origin "$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
+
+          test "$(git rev-parse upstream/main)" = "$UPSTREAM_MAIN"
+          git checkout --detach "$UPSTREAM_MAIN"
+
+          git show "origin/$SOURCE_BRANCH:apps/desktop/electron/connection-route-identity.ts" \
+            > apps/desktop/electron/connection-route-identity.ts
+          git show "origin/$SOURCE_BRANCH:apps/desktop/electron/desktop-remote-route.ts" \
+            > apps/desktop/electron/desktop-remote-route.ts
+          python /tmp/pr90913-rewrite.py
+          cp /tmp/connection-registry-authority.test.ts \
+            apps/desktop/electron/connection-registry-authority.test.ts
+
+          npm ci --ignore-scripts --no-audit --no-fund
+
+          cd apps/desktop
+          npx vitest run --project electron \
+            electron/connection-registry.test.ts \
+            electron/connection-registry-authority.test.ts \
+            electron/desktop-remote-route.test.ts
+          npx tsc -p tsconfig.electron.json --noEmit
+          npx eslint \
+            electron/connection-registry.ts \
+            electron/connection-registry-authority.test.ts \
+            electron/connection-route-identity.ts \
+            electron/desktop-remote-route.ts
+          cd ../..
+
+          git diff --check
+          git add \
+            apps/desktop/electron/connection-registry-authority.test.ts \
+            apps/desktop/electron/connection-registry.ts \
+            apps/desktop/electron/connection-route-identity.ts \
+            apps/desktop/electron/desktop-remote-route.ts
+
+          printf '%s\n' \
+            apps/desktop/electron/connection-registry-authority.test.ts \
+            apps/desktop/electron/connection-registry.ts \
+            apps/desktop/electron/connection-route-identity.ts \
+            apps/desktop/electron/desktop-remote-route.ts \
+            | sort > /tmp/expected-files
+          git diff --cached --name-only "$UPSTREAM_MAIN" | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+          git commit -m "fix(desktop): unify authoritative route identity" \
+            -m "Keep explicit connection identity authoritative only while its registry entry is live, and route every legacy compatibility inference through the same complete pre-dial auth and transport envelope used by Desktop route selection.\n\nAbsorbs the full matcher and collision matrix from #90198 into the stricter current-registration contract in #90913."
+          git push --force origin "HEAD:refs/heads/$TARGET_BRANCH"
