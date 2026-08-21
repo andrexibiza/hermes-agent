@@ -19,10 +19,14 @@ test('isolated native recovery remains inside the canonical package transaction'
   // packaged generation and writes its rollback-session identity.
   assert.match(recoveryHook, /import beforePack from '\.\/before-pack\.mjs'/)
   assert.match(recoveryHook, /isMissingGetWindowsPackageError/)
-  assert.match(recoveryHook, /stageGetWindowsWithRecovery/)
+  const canonicalCall = recoveryHook.indexOf('return await beforePack(context)')
+  const recoveryCall = recoveryHook.indexOf(
+    'stageGetWindowsWithRecovery({ platform, arch })'
+  )
+  assert.ok(canonicalCall >= 0, 'canonical beforePack invocation must remain wired')
+  assert.ok(recoveryCall >= 0, 'bounded recovery invocation must remain wired')
   assert.ok(
-    recoveryHook.indexOf('beforePack(context)') <
-      recoveryHook.indexOf('stageGetWindowsWithRecovery'),
+    canonicalCall < recoveryCall,
     'canonical staging and rollback acquisition must run before bounded recovery'
   )
 
@@ -32,10 +36,15 @@ test('isolated native recovery remains inside the canonical package transaction'
 
   // The terminal builder result—not the recovery helper—owns commit/restore.
   assert.match(builderWrapper, /settleDesktopPack/)
-  assert.match(builderWrapper, /builderSucceeded/)
   assert.match(builderWrapper, /PACK_SESSION_ENV/)
+  const builderVerdict = builderWrapper.indexOf('const builderSucceeded =')
+  const settlementCall = builderWrapper.indexOf(
+    'const settlement = settleDesktopPack('
+  )
+  assert.ok(builderVerdict >= 0, 'builder verdict must remain explicit')
+  assert.ok(settlementCall >= 0, 'terminal transaction settlement must remain wired')
   assert.ok(
-    builderWrapper.indexOf('builderSucceeded') < builderWrapper.indexOf('settleDesktopPack'),
+    builderVerdict < settlementCall,
     'the actual builder result must be known before transaction settlement'
   )
 })
