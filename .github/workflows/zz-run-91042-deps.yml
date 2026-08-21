@@ -1,0 +1,279 @@
+name: Rebuild and publish #91042 dependency closure
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr91042-current-main-runner
+  cancel-in-progress: false
+
+jobs:
+  rebuild-publish:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'trigger/91042-current-main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      TARGET_BRANCH: security/p0-dependency-remediation-20260820
+    steps:
+      - name: Checkout exact source authority
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node 26
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Rebuild exact security object on live upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_HEAD=$(git rev-parse HEAD)
+          echo "SOURCE_HEAD=$SOURCE_HEAD" >> "$GITHUB_ENV"
+
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git || true
+          git fetch --no-tags upstream main
+          UPSTREAM_MAIN=$(git rev-parse FETCH_HEAD)
+          echo "UPSTREAM_MAIN=$UPSTREAM_MAIN" >> "$GITHUB_ENV"
+          git checkout --detach "$UPSTREAM_MAIN"
+
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          def load(path: str):
+              return json.loads(Path(path).read_text(encoding='utf-8'))
+
+          def write(path: str, data):
+              Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+          root = load('package.json')
+          overrides = root.setdefault('overrides', {})
+          overrides.pop('nanoid@^3', None)
+          overrides['nanoid@^6'] = '6.0.0'
+
+          postcss = overrides.get('postcss', '8.5.23')
+          postcss_version = postcss if isinstance(postcss, str) else postcss.get('.', '8.5.23')
+          overrides['postcss'] = {'.': postcss_version, 'nanoid': '3.3.18'}
+
+          # npm can keep semver-valid nested NanoID v3 entries when only the
+          # PostCSS override topology changes. Bind the two currently affected
+          # parent subgraphs explicitly so canonical lock regeneration cannot
+          # preserve 3.3.17 under either path.
+          for parent in ('sanitize-html', 'vite'):
+              current = overrides.get(parent)
+              if current is None:
+                  current = {}
+              elif isinstance(current, str):
+                  current = {'.': current}
+              else:
+                  current = dict(current)
+              current['nanoid'] = '3.3.18'
+              overrides[parent] = current
+
+          allow_scripts = root.setdefault('allowScripts', {})
+          allow_scripts.pop('electron@40.10.2', None)
+          allow_scripts['electron@41.10.3'] = True
+          write('package.json', root)
+
+          website = load('website/package.json')
+          website.setdefault('overrides', {})['nanoid'] = '3.3.18'
+          write('website/package.json', website)
+
+          desktop = load('apps/desktop/package.json')
+          desktop['devDependencies']['electron'] = '41.10.3'
+          desktop['build']['electronVersion'] = '41.10.3'
+          write('apps/desktop/package.json', desktop)
+
+          npmrc = Path('.npmrc')
+          text = npmrc.read_text(encoding='utf-8')
+          text = re.sub(
+              r'# nanoid 3\.3\.17 includes fixes for GHSA-2v37-7h3g-55p8\.[^\n]*',
+              '# nanoid 3.3.18 fixes GHSA-2v37-7h3g-55p8. remove when > 2wks old (rel 2026-08-07)',
+              text,
+          )
+          npmrc.write_text(text, encoding='utf-8')
+
+          Path('apps/desktop/scripts/packaged-app-layout.mjs').write_text(
+              "export function resolveLinuxUnpackedDirName(arch) {\n"
+              "  return arch === 'x64' ? 'linux-unpacked' : `linux-${arch}-unpacked`\n"
+              "}\n",
+              encoding='utf-8',
+          )
+          Path('apps/desktop/scripts/packaged-app-layout.test.mjs').write_text(
+              "import assert from 'node:assert/strict'\n"
+              "import { test } from 'vitest'\n\n"
+              "import { resolveLinuxUnpackedDirName } from './packaged-app-layout.mjs'\n\n"
+              "test('uses electron-builder default directory on Linux x64', () => {\n"
+              "  assert.equal(resolveLinuxUnpackedDirName('x64'), 'linux-unpacked')\n"
+              "})\n\n"
+              "test('includes architecture in electron-builder Linux ARM64 directory', () => {\n"
+              "  assert.equal(resolveLinuxUnpackedDirName('arm64'), 'linux-arm64-unpacked')\n"
+              "})\n",
+              encoding='utf-8',
+          )
+
+          target = Path('apps/desktop/scripts/test-desktop.mjs')
+          text = target.read_text(encoding='utf-8')
+          anchor = "import PACKAGE_JSON from '../package.json' with { type: 'json' }"
+          helper_import = "import { resolveLinuxUnpackedDirName } from './packaged-app-layout.mjs'"
+          if helper_import not in text:
+              if anchor not in text:
+                  raise SystemExit('test-desktop import anchor not found')
+              text = text.replace(anchor, helper_import + '\n' + anchor, 1)
+          old = "  // linux unpacked layout matches windows but with different binary name\n  const unpacked = path.join(RELEASE_ROOT, 'linux-unpacked')"
+          new = "  // electron-builder includes the architecture suffix for non-x64 Linux output.\n  const unpacked = path.join(RELEASE_ROOT, resolveLinuxUnpackedDirName(ARCH))"
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('test-desktop Linux layout anchor not found')
+          target.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Canonically regenerate npm and Python locks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --version | grep -q '^12\.' || npm install --global npm@12
+          npm install --package-lock-only --ignore-scripts --include=optional --no-audit --no-fund
+          npm --prefix website install --package-lock-only --ignore-scripts --include=optional --no-audit --no-fund
+          uv lock --upgrade-package h2
+          uv lock --check
+
+      - name: Prove resolved security and current-main contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs')
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const root = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          const desktopManifest = JSON.parse(fs.readFileSync('apps/desktop/package.json', 'utf8'))
+          const website = JSON.parse(fs.readFileSync('website/package.json', 'utf8'))
+          const packages = lock.packages || {}
+          const desktop = packages['apps/desktop'] || {}
+          const failures = []
+          const expect = (condition, message) => { if (!condition) failures.push(message) }
+
+          expect(root.overrides?.['nanoid@^3'] === undefined, 'obsolete flat NanoID v3 override remains')
+          expect(root.overrides?.['nanoid@^6'] === '6.0.0', 'NanoID v6 isolation changed')
+          expect(root.overrides?.postcss?.nanoid === '3.3.18', 'PostCSS NanoID floor is not 3.3.18')
+          expect(root.overrides?.['sanitize-html']?.nanoid === '3.3.18', 'sanitize-html NanoID floor missing')
+          expect(root.overrides?.vite?.nanoid === '3.3.18', 'Vite NanoID floor missing')
+          expect(website.overrides?.nanoid === '3.3.18', 'standalone website NanoID floor is not 3.3.18')
+          expect(desktopManifest.devDependencies?.electron === '41.10.3', 'Desktop Electron manifest is not 41.10.3')
+          expect(desktopManifest.build?.electronVersion === '41.10.3', 'Desktop Electron build version is not 41.10.3')
+          expect(root.allowScripts?.['electron@40.10.2'] === undefined, 'old Electron install-script grant remains')
+          expect(root.allowScripts?.['electron@41.10.3'] === true, 'new Electron install-script grant missing')
+          expect(desktop.devDependencies?.electron === '41.10.3', 'Desktop lock declaration is not Electron 41.10.3')
+          expect(packages['node_modules/electron']?.version === '41.10.3', `resolved Electron is ${packages['node_modules/electron']?.version}`)
+          expect(packages['node_modules/@electron/get']?.version === '5.1.0', `resolved @electron/get is ${packages['node_modules/@electron/get']?.version}`)
+          expect(packages['node_modules/@electron-internal/extract-zip']?.version === '1.0.5', `internal extractor is ${packages['node_modules/@electron-internal/extract-zip']?.version}`)
+
+          for (const [path, pkg] of Object.entries(packages)) {
+            if ((path === 'node_modules/nanoid' || path.endsWith('/node_modules/nanoid')) && pkg.version?.startsWith('3.')) {
+              expect(pkg.version === '3.3.18', `${path} still resolves NanoID ${pkg.version}`)
+            }
+            if ((path === 'node_modules/extract-zip' || path.endsWith('/node_modules/extract-zip')) && pkg.version === '2.0.1') {
+              failures.push(`${path} still resolves legacy extract-zip 2.0.1`)
+            }
+          }
+
+          for (const dep of ['@babel/core', '@rolldown/plugin-babel', 'babel-plugin-react-compiler']) {
+            expect(desktopManifest.devDependencies?.[dep], `current-main Desktop dependency ${dep} missing from manifest`)
+            expect(desktop.devDependencies?.[dep] === desktopManifest.devDependencies?.[dep], `current-main Desktop dependency ${dep} missing from lock declaration`)
+          }
+
+          if (failures.length) {
+            console.error(failures.join('\n'))
+            process.exit(1)
+          }
+          console.log(JSON.stringify({
+            upstreamMain: process.env.UPSTREAM_MAIN,
+            electron: packages['node_modules/electron'].version,
+            electronGet: packages['node_modules/@electron/get'].version,
+            extractor: packages['node_modules/@electron-internal/extract-zip'].version,
+            compiler: desktop.devDependencies['babel-plugin-react-compiler']
+          }, null, 2))
+          NODE
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          lock = Path('uv.lock').read_text(encoding='utf-8')
+          match = re.search(r'\[\[package\]\]\nname = "h2"\nversion = "([^"]+)"', lock)
+          if not match:
+              raise SystemExit('h2 missing from uv.lock')
+          if match.group(1) == '4.3.0':
+              raise SystemExit('vulnerable h2 4.3.0 remains')
+          print('h2=' + match.group(1))
+          PY
+
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { resolveLinuxUnpackedDirName } from './apps/desktop/scripts/packaged-app-layout.mjs'
+          assert.equal(resolveLinuxUnpackedDirName('x64'), 'linux-unpacked')
+          assert.equal(resolveLinuxUnpackedDirName('arm64'), 'linux-arm64-unpacked')
+          NODE
+          git diff --check
+
+      - name: Prove clean installs and active npm advisory set
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix website ci --ignore-scripts --no-audit --no-fund
+          npm audit --workspaces=false --audit-level=moderate
+          npm audit --workspace web --audit-level=moderate
+          npm audit --workspace ui-tui --audit-level=moderate
+          npm audit --workspace apps/desktop --audit-level=moderate
+          npm --prefix website audit --audit-level=moderate
+
+      - name: Publish one exact rebased security object
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_HEAD=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          if [ "$REMOTE_HEAD" != "$SOURCE_HEAD" ]; then
+            echo "::error::Source branch moved during verification: expected $SOURCE_HEAD, found $REMOTE_HEAD"
+            exit 1
+          fi
+
+          git config user.name 'Axl Ibiza, MBA'
+          git config user.email 'andrexibiza@gmail.com'
+          git add .npmrc package.json package-lock.json website/package.json website/package-lock.json \
+            apps/desktop/package.json apps/desktop/scripts/test-desktop.mjs \
+            apps/desktop/scripts/packaged-app-layout.mjs \
+            apps/desktop/scripts/packaged-app-layout.test.mjs uv.lock
+          git diff --cached --check
+          git commit \
+            -m 'fix(deps): remediate active dependency advisories' \
+            -m "Rebuild the dependency-security closure directly on upstream main $UPSTREAM_MAIN, preserve current-main dependency movement, and canonically regenerate the npm and Python lock graphs." \
+            -m 'Co-authored-by: schmitzi8 <281458983+schmitzi8@users.noreply.github.com>' \
+            -m 'Co-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
+          NEW_HEAD=$(git rev-parse HEAD)
+          echo "NEW_HEAD=$NEW_HEAD" >> "$GITHUB_ENV"
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$SOURCE_HEAD" origin "$NEW_HEAD:refs/heads/$TARGET_BRANCH"
+
+      - name: Emit exact receipt
+        shell: bash
+        run: |
+          echo "source_head=$SOURCE_HEAD"
+          echo "upstream_main=$UPSTREAM_MAIN"
+          echo "published_head=$NEW_HEAD"
