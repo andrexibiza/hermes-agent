@@ -1,0 +1,281 @@
+name: Refresh PR 60233 on current updater architecture
+
+on:
+  push:
+    branches:
+      - fix/windows-update-venv-native-locks
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-pr-60233
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    if: ${{ contains(github.event.head_commit.message, '[refresh-60233]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rebuild branch from exact upstream main
+        env:
+          BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
+          BRANCH: fix/windows-update-venv-native-locks
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags upstream main
+          git cat-file -e "$BASE_SHA^{commit}"
+          git checkout -B "$BRANCH" "$BASE_SHA"
+
+          git apply --whitespace=error-all <<'PATCH'
+          --- a/hermes_cli/update_cmd.py
+          +++ b/hermes_cli/update_cmd.py
+          @@ -3577,6 +3577,40 @@
+                       pass
+               return survivors
+           
+          +
+          +_VENV_CORE_IMPORT_PROBES: tuple[tuple[str, tuple[str, ...]], ...] = (
+          +    ("fastapi", ()),
+          +    ("uvicorn", ()),
+          +    ("pydantic", ()),
+          +    ("openai", ()),
+          +    # Importability alone is insufficient for PyYAML. A failed Windows wheel
+          +    # replacement can leave an empty ``yaml`` namespace behind, which imports
+          +    # successfully but cannot load config at the next startup.
+          +    ("yaml", ("__file__", "__version__", "SafeDumper")),
+          +)
+          +
+          +
+          +def _venv_core_import_probe_code() -> str:
+          +    """Render the child-process probe from one explicit module contract."""
+          +    return (
+          +        "import importlib\n"
+          +        f"probes = {_VENV_CORE_IMPORT_PROBES!r}\n"
+          +        "missing = []\n"
+          +        "for module_name, required_attrs in probes:\n"
+          +        "    try:\n"
+          +        "        module = importlib.import_module(module_name)\n"
+          +        "        absent = [attr for attr in required_attrs "
+          +        "if not getattr(module, attr, None)]\n"
+          +        "        if absent:\n"
+          +        "            missing.append(\n"
+          +        "                f\"{module_name}: missing {', '.join(absent)}\"\n"
+          +        "            )\n"
+          +        "    except Exception as exc:\n"
+          +        "        missing.append(f'{module_name}: {exc}')\n"
+          +        "print('\\n'.join(missing))\n"
+          +    )
+          +
+          +
+           def _venv_core_imports_healthy() -> tuple[bool, str]:
+               """Probe the project venv for the core imports the backend needs to boot.
+           
+          @@ -3612,18 +3646,10 @@
+                       return False, f"venv python missing ({venv_python})"
+                   return True, ""
+           
+          -    # Core web/serve imports plus their newest transitive deps. Import (not
+          -    # just metadata) — a package can have intact dist-info but a missing
+          -    # module after an interrupted uninstall/install cycle.
+          -    check = (
+          -        "import importlib\n"
+          -        "mods = ['fastapi', 'uvicorn', 'pydantic', 'openai', 'yaml']\n"
+          -        "missing = []\n"
+          -        "for m in mods:\n"
+          -        "    try: importlib.import_module(m)\n"
+          -        "    except Exception as e: missing.append(f'{m}: {e}')\n"
+          -        "print('\\n'.join(missing))\n"
+          -    )
+          +    # Import (not just metadata) because a package can retain intact dist-info
+          +    # while its module files are missing. Required attributes additionally
+          +    # reject importable namespace shells that cannot satisfy the runtime API.
+          +    check = _venv_core_import_probe_code()
+               try:
+                   result = subprocess.run(
+                       [str(venv_python), "-c", check],
+          --- a/tests/hermes_cli/test_update_venv_health.py
+          +++ b/tests/hermes_cli/test_update_venv_health.py
+          @@ -15,6 +15,7 @@
+           
+           from __future__ import annotations
+           
+          +import os
+           import subprocess
+           import sys
+           import types
+          @@ -24,6 +25,7 @@
+           import pytest
+           
+           from hermes_cli import main as cli_main
+          +from hermes_cli import update_cmd
+           
+           
+           # ---------------------------------------------------------------------------
+          @@ -31,9 +33,9 @@
+           # ---------------------------------------------------------------------------
+           
+           
+          -
+          -
+          -def _fake_venv_python(tmp_path, *, windows: bool = False):
+          +def _fake_venv_python(tmp_path, *, windows: bool | None = None):
+          +    if windows is None:
+          +        windows = cli_main._is_windows()
+               bin_dir = tmp_path / "venv" / ("Scripts" if windows else "bin")
+               bin_dir.mkdir(parents=True)
+               py = bin_dir / ("python.exe" if windows else "python")
+          @@ -41,6 +43,65 @@
+               return py
+           
+           
+          +def _run_core_import_probe(
+          +    tmp_path, *, yaml_source: str
+          +) -> subprocess.CompletedProcess:
+          +    for module_name in ("fastapi", "uvicorn", "pydantic", "openai"):
+          +        (tmp_path / f"{module_name}.py").write_text("SENTINEL = True\n")
+          +    (tmp_path / "yaml.py").write_text(yaml_source)
+          +    env = os.environ.copy()
+          +    env["PYTHONPATH"] = str(tmp_path)
+          +    return subprocess.run(
+          +        [sys.executable, "-S", "-c", update_cmd._venv_core_import_probe_code()],
+          +        cwd=tmp_path,
+          +        env=env,
+          +        capture_output=True,
+          +        text=True,
+          +        check=False,
+          +    )
+          +
+          +
+          +def test_venv_core_probe_accepts_complete_pyyaml_shape(tmp_path):
+          +    result = _run_core_import_probe(
+          +        tmp_path,
+          +        yaml_source=(
+          +            '__version__ = "test"\n'
+          +            "class SafeDumper:\n"
+          +            "    pass\n"
+          +        ),
+          +    )
+          +
+          +    assert result.returncode == 0
+          +    assert result.stdout == "\n"
+          +
+          +
+          +def test_venv_core_probe_rejects_importable_empty_pyyaml_shape(tmp_path):
+          +    result = _run_core_import_probe(
+          +        tmp_path,
+          +        yaml_source="del __file__\n",
+          +    )
+          +
+          +    assert result.returncode == 0
+          +    assert result.stdout.strip() == (
+          +        "yaml: missing __file__, __version__, SafeDumper"
+          +    )
+          +
+          +
+          +def test_venv_health_rejects_incomplete_pyyaml_probe_result(tmp_path):
+          +    _fake_venv_python(tmp_path)
+          +    probe_result = SimpleNamespace(
+          +        returncode=0,
+          +        stdout="yaml: missing __file__, __version__, SafeDumper\n",
+          +        stderr="",
+          +    )
+          +    with patch.object(cli_main, "PROJECT_ROOT", tmp_path), patch.object(
+          +        update_cmd.subprocess, "run", return_value=probe_result
+          +    ) as run:
+          +        healthy, detail = cli_main._venv_core_imports_healthy()
+          +
+          +    assert healthy is False
+          +    assert detail == "yaml: missing __file__, __version__, SafeDumper"
+          +    assert run.call_args.args[0][2] == update_cmd._venv_core_import_probe_code()
+           
+           
+           # ---------------------------------------------------------------------------
+          PATCH
+
+          python -m py_compile \
+            hermes_cli/update_cmd.py \
+            tests/hermes_cli/test_update_venv_health.py
+
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+          import os
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          
+          source = Path("hermes_cli/update_cmd.py").read_text()
+          tree = ast.parse(source)
+          nodes = []
+          for node in tree.body:
+              if (
+                  isinstance(node, ast.AnnAssign)
+                  and isinstance(node.target, ast.Name)
+                  and node.target.id == "_VENV_CORE_IMPORT_PROBES"
+              ):
+                  nodes.append(node)
+              if isinstance(node, ast.FunctionDef) and node.name == "_venv_core_import_probe_code":
+                  nodes.append(node)
+          namespace = {}
+          exec(compile(ast.Module(body=nodes, type_ignores=[]), "<probe-contract>", "exec"), namespace)
+          probe = namespace["_venv_core_import_probe_code"]()
+          compile(probe, "<venv-core-import-probe>", "exec")
+          
+          with tempfile.TemporaryDirectory() as temp_dir:
+              root = Path(temp_dir)
+              for module_name in ("fastapi", "uvicorn", "pydantic", "openai"):
+                  (root / f"{module_name}.py").write_text("SENTINEL = True\\n")
+              env = os.environ.copy()
+              env["PYTHONPATH"] = temp_dir
+          
+              (root / "yaml.py").write_text(
+                  '__version__ = "test"\\nclass SafeDumper:\\n    pass\\n'
+              )
+              complete = subprocess.run(
+                  [sys.executable, "-S", "-c", probe],
+                  cwd=root,
+                  env=env,
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              assert complete.returncode == 0, complete.stderr
+              assert complete.stdout == "\\n", complete.stdout
+          
+              (root / "yaml.py").write_text("del __file__\\n")
+              shutil.rmtree(root / "__pycache__", ignore_errors=True)
+              incomplete = subprocess.run(
+                  [sys.executable, "-S", "-c", probe],
+                  cwd=root,
+                  env=env,
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              assert incomplete.returncode == 0, incomplete.stderr
+              assert incomplete.stdout.strip() == (
+                  "yaml: missing __file__, __version__, SafeDumper"
+              ), incomplete.stdout
+          PY
+
+          git add \
+            hermes_cli/update_cmd.py \
+            tests/hermes_cli/test_update_venv_health.py
+          git diff --cached --check
+          git config user.name "Axl Ibiza"
+          git config user.email "84248988+andrexibiza@users.noreply.github.com"
+          git commit \
+            -m "fix(update): reject incomplete PyYAML during venv repair" \
+            -m "Rebuild PR #60233 on current main. Preserve the surviving PyYAML health invariant while leaving self-lock deferral and transaction authority with their modern owners."
+          git push \
+            --force-with-lease="refs/heads/$BRANCH:$EXPECTED_HEAD" \
+            origin "HEAD:refs/heads/$BRANCH"
