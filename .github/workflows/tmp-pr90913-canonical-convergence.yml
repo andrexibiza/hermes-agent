@@ -1,0 +1,544 @@
+name: tmp-pr90913-canonical-convergence
+
+on:
+  push:
+    branches:
+      - tmp/pr90913-canonical-convergence
+
+permissions:
+  contents: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+
+      - name: Build, verify, and publish the canonical head
+        env:
+          SOURCE_BRANCH: fix/89719-authoritative-connection-id
+          TARGET_BRANCH: fix/connection-id-authority-followup
+          UPSTREAM_MAIN: 76f6ba37064614a703ce2d19ade6bb5fbbf4fcf8
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "Axl Ibiza"
+          git config user.email "84248988+andrexibiza@users.noreply.github.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch upstream main
+          git fetch origin "$SOURCE_BRANCH"
+
+          test "$(git rev-parse upstream/main)" = "$UPSTREAM_MAIN"
+          git checkout --detach "$UPSTREAM_MAIN"
+
+          git show "origin/$SOURCE_BRANCH:apps/desktop/electron/connection-route-identity.ts" \
+            > apps/desktop/electron/connection-route-identity.ts
+          git show "origin/$SOURCE_BRANCH:apps/desktop/electron/desktop-remote-route.ts" \
+            > apps/desktop/electron/desktop-remote-route.ts
+
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path('apps/desktop/electron/connection-registry.ts')
+          text = path.read_text()
+          import_line = "import { matchingConnectionId, type StoredRoute } from './connection-route-identity'\n"
+          anchor = "} from './connection-config'\n"
+
+          if import_line not in text:
+              if anchor not in text:
+                  raise SystemExit('connection-config import anchor not found')
+              text = text.replace(anchor, anchor + import_line, 1)
+
+          start = text.index('export interface ResolvedConnectionDescriptor {')
+          end = text.index("/**\n * How the registry's 'local' entry", start)
+          replacement = r'''export interface ResolvedConnectionSshDescriptor {
+            host?: string
+            keyPath?: string
+            port?: number
+            remoteHermesPath?: string
+            remoteProfile?: string
+            user?: string
+          }
+
+          export interface ResolvedConnectionDescriptor {
+            authMode?: unknown
+            baseUrl?: string
+            /** Present on registry-qualified routes. Presence is authoritative even
+             * when the value is invalid: only descriptors with no such property may
+             * use legacy transport inference. */
+            connectionId?: null | string
+            headers?: Record<string, unknown>
+            mode?: 'local' | 'remote'
+            org?: unknown
+            remoteHost?: string
+            remoteKind?: 'cloud' | 'ssh' | 'url'
+            ssh?: null | ResolvedConnectionSshDescriptor
+            token?: unknown
+          }
+
+          /**
+           * Recover registry identity for a descriptor resolved through the legacy v1
+           * profile path. Registry-scoped routes already carry `connectionId`; that
+           * exact identity is authoritative only while it names a current registration.
+           * Only genuinely unqualified legacy descriptors infer, and inference uses the
+           * same complete pre-dial envelope as Desktop route selection.
+           */
+          export function resolvedConnectionId(
+            registry: ConnectionRegistry,
+            descriptor: ResolvedConnectionDescriptor
+          ): null | string {
+            if (Object.prototype.hasOwnProperty.call(descriptor, 'connectionId')) {
+              const connectionId = descriptor.connectionId
+
+              if (typeof connectionId !== 'string' || !connectionId) {
+                return null
+              }
+
+              return registry.connections.some(connection => connection.id === connectionId) ? connectionId : null
+            }
+
+            if (descriptor.mode === 'local') {
+              const localConnections = registry.connections.filter(connection => connection.kind === 'local')
+
+              return localConnections.length === 1 ? localConnections[0].id : null
+            }
+
+            if (descriptor.mode !== 'remote') {
+              return null
+            }
+
+            if (descriptor.remoteKind === 'ssh') {
+              if (Object.prototype.hasOwnProperty.call(descriptor, 'ssh')) {
+                if (!descriptor.ssh || typeof descriptor.ssh !== 'object') {
+                  return null
+                }
+
+                return matchingConnectionId(registry, { ...descriptor.ssh, kind: 'ssh' }, 'unique') ?? null
+              }
+
+              // Old descriptors expose only user@host after the tunnel has discarded
+              // port/key/path/profile. That weak shape is compatible only when exactly
+              // one registered SSH source shares the target and its defaulted route
+              // still satisfies the canonical full-envelope matcher.
+              const ssh = normalizeSshConfig({ mode: 'ssh', host: descriptor.remoteHost })
+
+              if (!ssh) {
+                return null
+              }
+
+              const target = normalizedSshTarget(ssh)
+              const coarseMatches = registry.connections.filter(
+                connection => connection.kind === 'ssh' && normalizedSshTarget(connection) === target
+              )
+
+              if (!target || coarseMatches.length !== 1) {
+                return null
+              }
+
+              return matchingConnectionId(registry, { kind: 'ssh', ...ssh }, 'unique') ?? null
+            }
+
+            const kind = descriptor.remoteKind === 'cloud' ? 'cloud' : descriptor.remoteKind === 'url' ? 'remote' : null
+
+            if (!kind) {
+              return null
+            }
+
+            let url = ''
+
+            try {
+              url = normalizeRemoteBaseUrl(descriptor.baseUrl)
+            } catch {
+              return null
+            }
+
+            const authMode = normAuthMode(descriptor.authMode)
+            const route: StoredRoute = {
+              authMode,
+              headers: descriptor.headers,
+              kind,
+              org: descriptor.org,
+              token: descriptor.token,
+              url
+            }
+            const hasExactEnvelope =
+              Object.prototype.hasOwnProperty.call(descriptor, 'authMode') &&
+              Object.prototype.hasOwnProperty.call(descriptor, 'headers') &&
+              (authMode === 'oauth' || Object.prototype.hasOwnProperty.call(descriptor, 'token')) &&
+              (kind === 'remote' || Object.prototype.hasOwnProperty.call(descriptor, 'org'))
+
+            if (!hasExactEnvelope) {
+              // A URL alone cannot choose among legal registrations that differ by
+              // auth, headers, Cloud organization, or account. Require one coarse
+              // candidate before the shared full-envelope matcher may accept legacy
+              // defaults; zero or multiple candidates fail closed.
+              const coarseMatches = registry.connections.filter(connection => {
+                if (connection.kind !== kind) {
+                  return false
+                }
+
+                try {
+                  return normalizeRemoteBaseUrl(connection.url) === url
+                } catch {
+                  return false
+                }
+              })
+
+              if (coarseMatches.length !== 1) {
+                return null
+              }
+            }
+
+            return matchingConnectionId(registry, route, 'unique') ?? null
+          }
+
+          function normalizedSshTarget(route: {
+            host?: unknown
+            port?: unknown
+            user?: unknown
+          }): null | string {
+            const ssh = normalizeSshConfig({ ...route, mode: 'ssh' })
+
+            if (!ssh) {
+              return null
+            }
+
+            const host = String(ssh.host || '')
+              .trim()
+              .toLowerCase()
+            const user = String(ssh.user || '')
+              .trim()
+              .toLowerCase()
+
+            return user ? `${user}@${host}` : host
+          }
+
+          '''
+          # The heredoc is indented with the workflow block. Normalize the replacement
+          # back to repository indentation before writing it.
+          replacement = '\n'.join(line[10:] if line.startswith('          ') else line for line in replacement.splitlines())
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+          PY
+
+          cat > apps/desktop/electron/connection-registry-authority.test.ts <<'EOF'
+          import assert from 'node:assert/strict'
+
+          import { test } from 'vitest'
+
+          import type { ConnectionRegistry, RegistryConnection } from './connection-registry'
+          import { LOCAL_CONNECTION_ID, REGISTRY_VERSION, resolvedConnectionId } from './connection-registry'
+
+          function registryWith(...connections: RegistryConnection[]): ConnectionRegistry {
+            return {
+              version: REGISTRY_VERSION,
+              primary: connections[0]?.id ?? LOCAL_CONNECTION_ID,
+              launchMode: 'primary',
+              lastUsed: connections[0]?.id ?? LOCAL_CONNECTION_ID,
+              connections
+            }
+          }
+
+          const local: RegistryConnection = { id: LOCAL_CONNECTION_ID, kind: 'local', label: 'This device' }
+
+          test('resolvedConnectionId accepts only a current explicit registration id', () => {
+            const remoteA: RegistryConnection = {
+              id: 'remote-a',
+              kind: 'remote',
+              label: 'Remote A',
+              url: 'https://shared.example',
+              authMode: 'token',
+              token: { encoding: 'safeStorage', value: 'token-a' },
+              headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-a' } }
+            }
+            const remoteB: RegistryConnection = {
+              id: 'remote-b',
+              kind: 'remote',
+              label: 'Remote B',
+              url: 'https://shared.example',
+              authMode: 'oauth',
+              headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-b' } }
+            }
+            const registry = registryWith(local, remoteA, remoteB)
+
+            assert.equal(
+              resolvedConnectionId(registry, {
+                authMode: 'token',
+                baseUrl: remoteA.url,
+                connectionId: remoteB.id,
+                headers: remoteA.headers,
+                mode: 'remote',
+                remoteKind: 'url',
+                token: remoteA.token
+              }),
+              remoteB.id
+            )
+
+            const misleadingLegacyShape = {
+              authMode: 'token',
+              baseUrl: remoteA.url,
+              headers: remoteA.headers,
+              mode: 'remote' as const,
+              remoteKind: 'url' as const,
+              token: remoteA.token
+            }
+            const invalidIds: Array<null | string | undefined> = ['retired-source', '', null, undefined]
+
+            for (const connectionId of invalidIds) {
+              assert.equal(resolvedConnectionId(registry, { ...misleadingLegacyShape, connectionId }), null)
+            }
+          })
+
+          test('resolvedConnectionId matches the complete URL and Cloud envelope', () => {
+            const sharedUrl = 'https://shared.example/gateway'
+            const remoteToken: RegistryConnection = {
+              id: 'remote-token',
+              kind: 'remote',
+              label: 'Token remote',
+              url: sharedUrl,
+              authMode: 'token',
+              token: { encoding: 'safeStorage', value: 'token-a' },
+              headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-a' } }
+            }
+            const remoteOauth: RegistryConnection = {
+              id: 'remote-oauth',
+              kind: 'remote',
+              label: 'OAuth remote',
+              url: `${sharedUrl}/`,
+              authMode: 'oauth',
+              headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-b' } }
+            }
+            const cloudNous: RegistryConnection = {
+              id: 'cloud-nous',
+              kind: 'cloud',
+              label: 'Nous cloud',
+              url: sharedUrl,
+              authMode: 'oauth',
+              headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-cloud' } },
+              org: 'nous'
+            }
+            const cloudLabs: RegistryConnection = { ...cloudNous, id: 'cloud-labs', label: 'Labs cloud', org: 'labs' }
+            const registry = registryWith(local, remoteToken, remoteOauth, cloudNous, cloudLabs)
+
+            assert.equal(
+              resolvedConnectionId(registry, {
+                authMode: 'token',
+                baseUrl: sharedUrl,
+                headers: { 'cf-access-client-id': { encoding: 'safeStorage', value: 'header-a' } },
+                mode: 'remote',
+                remoteKind: 'url',
+                token: { value: 'token-a', encoding: 'safeStorage' }
+              }),
+              remoteToken.id
+            )
+            assert.equal(
+              resolvedConnectionId(registry, {
+                authMode: 'oauth',
+                baseUrl: sharedUrl,
+                headers: { 'CF-ACCESS-CLIENT-ID': { value: 'header-b', encoding: 'safeStorage' } },
+                mode: 'remote',
+                remoteKind: 'url'
+              }),
+              remoteOauth.id
+            )
+            assert.equal(
+              resolvedConnectionId(registry, {
+                authMode: 'oauth',
+                baseUrl: sharedUrl,
+                headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-cloud' } },
+                mode: 'remote',
+                org: 'nous',
+                remoteKind: 'cloud'
+              }),
+              cloudNous.id
+            )
+            assert.equal(
+              resolvedConnectionId(registry, {
+                authMode: 'oauth',
+                baseUrl: sharedUrl,
+                headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-cloud' } },
+                mode: 'remote',
+                org: 'labs',
+                remoteKind: 'cloud'
+              }),
+              cloudLabs.id
+            )
+
+            assert.equal(resolvedConnectionId(registry, { baseUrl: sharedUrl, mode: 'remote', remoteKind: 'url' }), null)
+            assert.equal(
+              resolvedConnectionId(registry, { baseUrl: sharedUrl, mode: 'remote', remoteKind: 'cloud' }),
+              null
+            )
+
+            const duplicate = registryWith(
+              ...registry.connections,
+              { ...remoteToken, id: 'remote-token-copy', label: 'Token remote copy' }
+            )
+
+            assert.equal(
+              resolvedConnectionId(duplicate, {
+                authMode: 'token',
+                baseUrl: sharedUrl,
+                headers: remoteToken.headers,
+                mode: 'remote',
+                remoteKind: 'url',
+                token: remoteToken.token
+              }),
+              null
+            )
+          })
+
+          test('resolvedConnectionId preserves unique default legacy inference only', () => {
+            const legacyRemote: RegistryConnection = {
+              id: 'legacy-remote',
+              kind: 'remote',
+              label: 'Legacy remote',
+              url: 'https://legacy.example:9443'
+            }
+            const legacySsh: RegistryConnection = {
+              id: 'legacy-ssh',
+              kind: 'ssh',
+              label: 'Legacy SSH',
+              host: 'work-host',
+              user: 'root'
+            }
+            const registry = registryWith(local, legacyRemote, legacySsh)
+
+            assert.equal(resolvedConnectionId(registry, { mode: 'local' }), local.id)
+            assert.equal(
+              resolvedConnectionId(registry, {
+                baseUrl: 'https://legacy.example:9443/',
+                mode: 'remote',
+                remoteKind: 'url'
+              }),
+              legacyRemote.id
+            )
+            assert.equal(
+              resolvedConnectionId(registry, {
+                mode: 'remote',
+                remoteHost: 'ROOT@WORK-HOST',
+                remoteKind: 'ssh'
+              }),
+              legacySsh.id
+            )
+
+            const duplicateRemote = { ...legacyRemote, id: 'legacy-remote-copy', label: 'Legacy remote copy' }
+            assert.equal(
+              resolvedConnectionId(registryWith(local, legacyRemote, duplicateRemote), {
+                baseUrl: legacyRemote.url,
+                mode: 'remote',
+                remoteKind: 'url'
+              }),
+              null
+            )
+            assert.equal(
+              resolvedConnectionId(
+                registryWith(local, { id: 'local-copy', kind: 'local', label: 'Local copy' }),
+                { mode: 'local' }
+              ),
+              null
+            )
+          })
+
+          test('resolvedConnectionId keeps full SSH routes distinct', () => {
+            const base = {
+              host: 'work-host',
+              keyPath: '/keys/a',
+              kind: 'ssh' as const,
+              remoteHermesPath: '/srv/hermes',
+              remoteProfile: 'alpha',
+              user: 'root'
+            }
+            const registry = registryWith(
+              local,
+              { ...base, id: 'ssh-base', label: 'SSH base' },
+              { ...base, id: 'ssh-port', label: 'SSH port', port: 2222 },
+              { ...base, id: 'ssh-key', keyPath: '/keys/b', label: 'SSH key' },
+              { ...base, id: 'ssh-path', label: 'SSH path', remoteHermesPath: '/opt/hermes' },
+              { ...base, id: 'ssh-profile', label: 'SSH profile', remoteProfile: 'beta' }
+            )
+            const resolve = (ssh: NonNullable<Parameters<typeof resolvedConnectionId>[1]['ssh']>) =>
+              resolvedConnectionId(registry, { mode: 'remote', remoteKind: 'ssh', ssh })
+
+            assert.equal(resolve(base), 'ssh-base')
+            assert.equal(resolve({ ...base, port: 2222 }), 'ssh-port')
+            assert.equal(resolve({ ...base, keyPath: '/keys/b' }), 'ssh-key')
+            assert.equal(resolve({ ...base, remoteHermesPath: '/opt/hermes' }), 'ssh-path')
+            assert.equal(resolve({ ...base, remoteProfile: 'beta' }), 'ssh-profile')
+            assert.equal(
+              resolvedConnectionId(registry, {
+                mode: 'remote',
+                remoteHost: 'ROOT@WORK-HOST',
+                remoteKind: 'ssh'
+              }),
+              null
+            )
+            assert.equal(
+              resolvedConnectionId(registry, {
+                mode: 'remote',
+                remoteHost: 'ROOT@WORK-HOST',
+                remoteKind: 'ssh',
+                ssh: undefined
+              }),
+              null
+            )
+
+            const duplicate = registryWith(
+              ...registry.connections,
+              { ...base, id: 'ssh-base-copy', label: 'SSH base copy' }
+            )
+
+            assert.equal(
+              resolvedConnectionId(duplicate, { mode: 'remote', remoteKind: 'ssh', ssh: base }),
+              null
+            )
+          })
+          EOF
+
+          sed -i 's/^          //' apps/desktop/electron/connection-registry-authority.test.ts
+
+          npm ci --ignore-scripts --no-audit --no-fund
+          cd apps/desktop
+          npx vitest run --project electron \
+            electron/connection-registry.test.ts \
+            electron/connection-registry-authority.test.ts \
+            electron/desktop-remote-route.test.ts
+          npx tsc -p tsconfig.electron.json --noEmit
+          npx eslint \
+            electron/connection-registry.ts \
+            electron/connection-registry-authority.test.ts \
+            electron/connection-route-identity.ts \
+            electron/desktop-remote-route.ts
+          cd ../..
+
+          git diff --check
+          git diff --exit-code "$UPSTREAM_MAIN" -- . ':(exclude).github/workflows/tmp-pr90913-canonical-convergence.yml' >/dev/null || true
+
+          printf '%s\n' \
+            apps/desktop/electron/connection-registry-authority.test.ts \
+            apps/desktop/electron/connection-registry.ts \
+            apps/desktop/electron/connection-route-identity.ts \
+            apps/desktop/electron/desktop-remote-route.ts \
+            > /tmp/expected-files
+          git diff --name-only "$UPSTREAM_MAIN" | sort > /tmp/actual-files
+          sort -o /tmp/expected-files /tmp/expected-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+          git add \
+            apps/desktop/electron/connection-registry-authority.test.ts \
+            apps/desktop/electron/connection-registry.ts \
+            apps/desktop/electron/connection-route-identity.ts \
+            apps/desktop/electron/desktop-remote-route.ts
+          git commit -m "fix(desktop): unify authoritative route identity" \
+            -m "Keep explicit connection identity authoritative only while its registry entry is live, and route every legacy compatibility inference through the same complete pre-dial auth and transport envelope used by Desktop route selection.\n\nAbsorbs the full matcher and collision matrix from #90198 into the stricter current-registration contract in #90913."
+          git push --force origin "HEAD:refs/heads/$TARGET_BRANCH"
