@@ -47,12 +47,25 @@ export function clearRollbackSession(backupDir) {
   }
 }
 
+/**
+ * Preliminary PE structure check for the builder boundary.
+ *
+ * This deliberately does not claim Windows launchability. The canonical
+ * `_ensure_desktop_exe_launchable` gate in hermes_cli/main.py owns host-machine
+ * compatibility and final rollback retirement. This check only rejects output
+ * that is already provably incomplete before control returns to that gate.
+ */
 export function isWindowsPeExecutable(filePath) {
   let fd
   try {
-    if (!filePath || !existsSync(filePath) || !statSync(filePath).isFile()) {
+    if (!filePath || !existsSync(filePath)) {
       return false
     }
+    const stat = statSync(filePath)
+    if (!stat.isFile() || stat.size < 64) {
+      return false
+    }
+
     fd = openSync(filePath, 'r')
     const dosHeader = Buffer.alloc(64)
     if (readSync(fd, dosHeader, 0, dosHeader.length, 0) !== dosHeader.length) {
@@ -61,17 +74,48 @@ export function isWindowsPeExecutable(filePath) {
     if (dosHeader[0] !== 0x4d || dosHeader[1] !== 0x5a) {
       return false
     }
+
     const peOffset = dosHeader.readUInt32LE(0x3c)
     // Keep malformed or absurd offsets from turning a verification read into
-    // unbounded filesystem work. Real PE headers are close to the DOS stub.
-    if (peOffset < 64 || peOffset > 16 * 1024 * 1024) {
+    // unbounded filesystem work. A complete COFF header must also fit.
+    if (peOffset < 64 || peOffset > 16 * 1024 * 1024 || peOffset + 24 > stat.size) {
       return false
     }
-    const signature = Buffer.alloc(4)
-    if (readSync(fd, signature, 0, signature.length, peOffset) !== signature.length) {
+
+    const coff = Buffer.alloc(24)
+    if (readSync(fd, coff, 0, coff.length, peOffset) !== coff.length) {
       return false
     }
-    return signature.equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))
+    if (!coff.subarray(0, 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))) {
+      return false
+    }
+
+    const sectionCount = coff.readUInt16LE(6)
+    const optionalHeaderSize = coff.readUInt16LE(20)
+    if (sectionCount < 1 || sectionCount > 96) {
+      return false
+    }
+
+    const sectionTableOffset = peOffset + 24 + optionalHeaderSize
+    const sectionTableSize = sectionCount * 40
+    if (sectionTableOffset + sectionTableSize > stat.size) {
+      return false
+    }
+
+    const section = Buffer.alloc(40)
+    for (let index = 0; index < sectionCount; index += 1) {
+      const offset = sectionTableOffset + index * section.length
+      if (readSync(fd, section, 0, section.length, offset) !== section.length) {
+        return false
+      }
+      const rawSize = section.readUInt32LE(16)
+      const rawOffset = section.readUInt32LE(20)
+      if (rawSize > 0 && (rawOffset === 0 || rawOffset + rawSize > stat.size)) {
+        return false
+      }
+    }
+
+    return true
   } catch {
     return false
   } finally {
@@ -114,13 +158,14 @@ function restoreBackup(backupDir, originalDir) {
 }
 
 /**
- * Close the transaction opened by before-pack.mjs.
+ * Close the builder-owned part of the transaction opened by before-pack.mjs.
  *
- * A failed builder restores the last verified unpacked app. A successful
- * builder may delete rollback material only after the replacement contains a
- * structurally valid Windows PE executable. If electron-builder reports zero
- * but leaves a missing/truncated executable, the old build is restored and
- * the wrapper converts that false success into a failure.
+ * A failed builder restores the last packaged app. A successful builder may
+ * reject and roll back output that is already structurally incomplete, but it
+ * must retain the rollback generation for the canonical Python launchability
+ * gate. Builder exit zero plus a plausible PE is not authority to delete the
+ * last known-good app: host architecture and full launchability are decided
+ * later by `_ensure_desktop_exe_launchable`.
  */
 export function settleDesktopPack({
   releaseDir,
@@ -129,6 +174,7 @@ export function settleDesktopPack({
   sessionId
 }) {
   const restored = []
+  const retained = []
   const discarded = []
   const failures = []
 
@@ -145,9 +191,10 @@ export function settleDesktopPack({
 
     try {
       if (builderSucceeded && replacementValid) {
-        removeTree(backupDir)
-        clearRollbackSessionBestEffort(backupDir)
-        discarded.push(backupDir)
+        // Preserve both the rollback tree and its generation marker. The
+        // Python launchability gate owns wrong-architecture detection, final
+        // commit, and rollback retirement.
+        retained.push(backupDir)
         continue
       }
 
@@ -155,8 +202,8 @@ export function settleDesktopPack({
         failures.push({
           backupDir,
           reason: builderSucceeded
-            ? `replacement ${originalExe} is invalid and rollback ${backupExe} is not a valid PE`
-            : `rollback ${backupExe} is not a valid PE`
+            ? `replacement ${originalExe} is invalid and rollback ${backupExe} is not a structurally complete PE`
+            : `rollback ${backupExe} is not a structurally complete PE`
         })
         continue
       }
@@ -166,7 +213,7 @@ export function settleDesktopPack({
       if (builderSucceeded) {
         failures.push({
           backupDir,
-          reason: `electron-builder exited successfully but replacement ${originalExe} was missing or invalid; restored previous build`
+          reason: `electron-builder exited successfully but replacement ${originalExe} was missing or structurally incomplete; restored previous build`
         })
       }
     } catch (error) {
@@ -180,6 +227,7 @@ export function settleDesktopPack({
   return {
     ok: failures.length === 0,
     restored,
+    retained,
     discarded,
     failures
   }

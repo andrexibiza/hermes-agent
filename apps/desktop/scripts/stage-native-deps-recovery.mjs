@@ -21,6 +21,11 @@ import { isMain } from './utils.mjs'
 const require = createRequire(import.meta.url)
 
 export const GET_WINDOWS_RECOVERY_VERSION = '9.3.0'
+export const GET_WINDOWS_RECOVERY_RESOLVED =
+  'https://registry.npmjs.org/get-windows/-/get-windows-9.3.0.tgz'
+export const GET_WINDOWS_RECOVERY_INTEGRITY =
+  'sha512-DrOfQSmIcsFax28FfSUjbLTfeOkAG7yeh6NCb/9zzRkDuClXaqYqHuQBPUqcqd1uYS70ygYERSooacMAwvbyVw=='
+export const GET_WINDOWS_RECOVERY_TAR_VERSION = '7.5.22'
 export const GET_WINDOWS_MISSING_ROOT_MARKER =
   '[stage-native-deps] get-windows is not installed; cannot stage its '
 
@@ -74,6 +79,58 @@ function cleanupRecoveryRoot(recoveryRoot) {
   }
 }
 
+function assertNpmResult(result, phase) {
+  if (result.error) {
+    throw new Error(
+      `[stage-native-deps] isolated get-windows recovery could not start npm during ${phase}: ${result.error.message}`
+    )
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[stage-native-deps] isolated get-windows recovery ${phase} exited with ${result.status}`
+    )
+  }
+}
+
+export function verifyRecoveryLock(recoveryRoot) {
+  let lock
+  try {
+    lock = JSON.parse(readFileSync(join(recoveryRoot, 'package-lock.json'), 'utf8'))
+  } catch (error) {
+    throw new Error(
+      `[stage-native-deps] isolated get-windows recovery did not produce a readable lockfile: ${errorMessage(error)}`
+    )
+  }
+
+  const packages = lock && typeof lock.packages === 'object' ? lock.packages : undefined
+  const getWindows = packages && packages['node_modules/get-windows']
+  if (
+    !getWindows ||
+    getWindows.version !== GET_WINDOWS_RECOVERY_VERSION ||
+    getWindows.resolved !== GET_WINDOWS_RECOVERY_RESOLVED ||
+    getWindows.integrity !== GET_WINDOWS_RECOVERY_INTEGRITY
+  ) {
+    throw new Error(
+      '[stage-native-deps] isolated get-windows recovery lock does not match the repository version, tarball, and integrity authority'
+    )
+  }
+
+  const tarEntries = Object.entries(packages).filter(
+    ([packagePath]) =>
+      packagePath === 'node_modules/tar' || packagePath.endsWith('/node_modules/tar')
+  )
+  if (
+    tarEntries.length === 0 ||
+    tarEntries.some(([, entry]) => entry.version !== GET_WINDOWS_RECOVERY_TAR_VERSION)
+  ) {
+    throw new Error(
+      `[stage-native-deps] isolated get-windows recovery did not preserve tar override ${GET_WINDOWS_RECOVERY_TAR_VERSION}`
+    )
+  }
+
+  return true
+}
+
 export function recoverGetWindowsPackage({
   platform = process.platform,
   arch = process.arch,
@@ -98,6 +155,9 @@ export function recoverGetWindowsPackage({
       dependencies: {
         'get-windows': GET_WINDOWS_RECOVERY_VERSION
       },
+      overrides: {
+        tar: GET_WINDOWS_RECOVERY_TAR_VERSION
+      },
       allowScripts: {
         [`get-windows@${GET_WINDOWS_RECOVERY_VERSION}`]: true
       }
@@ -108,41 +168,41 @@ export function recoverGetWindowsPackage({
       'utf8'
     )
 
-    const result = run(
-      process.execPath,
-      [
-        npmExecPath,
-        'install',
-        '--workspaces=false',
-        '--include=optional',
-        '--ignore-scripts=false',
-        '--no-audit',
-        '--no-fund',
-        '--package-lock=false',
-        '--prefer-online'
-      ],
-      {
-        cwd: recoveryRoot,
-        env: {
-          ...process.env,
-          npm_config_arch: arch,
-          npm_config_platform: platform,
-          npm_config_target_arch: arch
-        },
-        stdio: 'inherit'
-      }
-    )
+    const npmOptions = {
+      cwd: recoveryRoot,
+      env: {
+        ...process.env,
+        npm_config_arch: arch,
+        npm_config_platform: platform,
+        npm_config_target_arch: arch
+      },
+      stdio: 'inherit'
+    }
+    const commonArgs = [
+      '--workspaces=false',
+      '--include=optional',
+      '--no-audit',
+      '--no-fund'
+    ]
 
-    if (result.error) {
-      throw new Error(
-        `[stage-native-deps] isolated get-windows recovery could not start npm: ${result.error.message}`
-      )
-    }
-    if (result.status !== 0) {
-      throw new Error(
-        `[stage-native-deps] isolated get-windows recovery install exited with ${result.status}`
-      )
-    }
+    // Resolve metadata without running package code, then attest the generated
+    // lock against the repository's exact tarball digest and root tar override.
+    // Only that verified lock is allowed to drive the lifecycle-enabled ci.
+    const lockResult = run(
+      process.execPath,
+      [npmExecPath, 'install', '--package-lock-only', '--ignore-scripts', ...commonArgs],
+      npmOptions
+    )
+    assertNpmResult(lockResult, 'lock resolution')
+    verifyRecoveryLock(recoveryRoot)
+
+    const installResult = run(
+      process.execPath,
+      [npmExecPath, 'ci', '--ignore-scripts=false', ...commonArgs],
+      npmOptions
+    )
+    assertNpmResult(installResult, 'install')
+    verifyRecoveryLock(recoveryRoot)
 
     let packageRoot
     try {

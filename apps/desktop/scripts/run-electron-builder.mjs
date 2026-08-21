@@ -106,6 +106,11 @@ const settlement = settleDesktopPack({ releaseDir, builderSucceeded, sessionId: 
 for (const restoredDir of settlement.restored) {
   console.warn(`[run-electron-builder] restored previous packaged app: ${restoredDir}`)
 }
+for (const retainedDir of settlement.retained) {
+  console.log(
+    `[run-electron-builder] retained rollback for canonical launchability verification: ${retainedDir}`
+  )
+}
 for (const discardedDir of settlement.discarded) {
   console.log(`[run-electron-builder] discarded verified rollback backup: ${discardedDir}`)
 }

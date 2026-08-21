@@ -18,12 +18,14 @@ import {
   settleDesktopPack
 } from './desktop-pack-transaction.mjs'
 
+const PE_AMD64 = 0x8664
+
 function tempRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-pack-transaction-'))
 }
 
-function writePe(filePath, marker = 0x42) {
-  const payload = Buffer.alloc(256, marker)
+function writePe(filePath, marker = 0x42, { machine = PE_AMD64, truncateTo } = {}) {
+  const payload = Buffer.alloc(0x400)
   payload[0] = 0x4d
   payload[1] = 0x5a
   payload.writeUInt32LE(0x80, 0x3c)
@@ -31,20 +33,30 @@ function writePe(filePath, marker = 0x42) {
   payload[0x81] = 0x45
   payload[0x82] = 0x00
   payload[0x83] = 0x00
+  payload.writeUInt16LE(machine, 0x84)
+  payload.writeUInt16LE(1, 0x86)
+  payload.writeUInt16LE(0, 0x94)
+  payload.writeUInt16LE(0x0002, 0x96)
+  payload.writeUInt32LE(0x200, 0xa8)
+  payload.writeUInt32LE(0x200, 0xac)
+  payload.fill(marker, 0x200)
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  fs.writeFileSync(filePath, payload)
+  fs.writeFileSync(filePath, truncateTo === undefined ? payload : payload.subarray(0, truncateTo))
 }
 
-test('PE verification rejects a filename or MZ prefix without a PE signature', () => {
+test('PE verification rejects prefix-only and section-truncated executables', () => {
   const root = tempRoot()
   try {
     const valid = path.join(root, 'valid.exe')
     const truncated = path.join(root, 'truncated.exe')
+    const prefixOnly = path.join(root, 'prefix-only.exe')
     writePe(valid)
-    fs.writeFileSync(truncated, 'MZ-not-a-complete-pe', 'utf8')
+    writePe(truncated, 0x42, { truncateTo: 0x300 })
+    fs.writeFileSync(prefixOnly, 'MZ-not-a-complete-pe', 'utf8')
 
     assert.equal(isWindowsPeExecutable(valid), true)
     assert.equal(isWindowsPeExecutable(truncated), false)
+    assert.equal(isWindowsPeExecutable(prefixOnly), false)
     assert.equal(isWindowsPeExecutable(path.join(root, 'missing.exe')), false)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
@@ -79,7 +91,7 @@ test('failed builder restores the last valid packaged app over partial output', 
   }
 })
 
-test('successful builder discards rollback only after validating replacement PE', () => {
+test('successful builder retains rollback for the canonical launchability gate', () => {
   const root = tempRoot()
   try {
     const releaseDir = path.join(root, 'release')
@@ -96,9 +108,10 @@ test('successful builder discards rollback only after validating replacement PE'
     })
 
     assert.equal(result.ok, true)
-    assert.deepEqual(result.discarded, [backupDir])
-    assert.equal(fs.existsSync(backupDir), false)
-    assert.equal(fs.existsSync(`${backupDir}.session`), false)
+    assert.deepEqual(result.retained, [backupDir])
+    assert.deepEqual(result.discarded, [])
+    assert.equal(fs.existsSync(backupDir), true)
+    assert.equal(fs.existsSync(`${backupDir}.session`), true)
     assert.equal(isWindowsPeExecutable(path.join(appOutDir, 'Hermes.exe')), true)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
@@ -113,8 +126,7 @@ test('false builder success restores previous app and becomes a failure', () => 
     const backupDir = `${appOutDir}.bak`
     writePe(path.join(backupDir, 'Hermes.exe'), 0x11)
     fs.writeFileSync(`${backupDir}.session`, 'session-a\n', 'utf8')
-    fs.mkdirSync(appOutDir, { recursive: true })
-    fs.writeFileSync(path.join(appOutDir, 'Hermes.exe'), 'MZ-truncated', 'utf8')
+    writePe(path.join(appOutDir, 'Hermes.exe'), 0x22, { truncateTo: 0x300 })
 
     const result = settleDesktopPack({
       releaseDir,
@@ -124,7 +136,7 @@ test('false builder success restores previous app and becomes a failure', () => 
 
     assert.equal(result.ok, false)
     assert.deepEqual(result.restored, [appOutDir])
-    assert.match(result.failures[0].reason, /exited successfully.*missing or invalid/)
+    assert.match(result.failures[0].reason, /exited successfully.*structurally incomplete/)
     assert.equal(isWindowsPeExecutable(path.join(appOutDir, 'Hermes.exe')), true)
     assert.equal(fs.existsSync(backupDir), false)
   } finally {
@@ -221,7 +233,6 @@ test('retry adopts a valid interrupted rollback into its current generation', ()
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
-
 
 test('Windows package scripts re-exec with the Node runtime that launched npm', () => {
   const selected = selectNpmNodeRuntime({

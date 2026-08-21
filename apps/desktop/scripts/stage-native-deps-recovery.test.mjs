@@ -6,20 +6,49 @@ import { test } from 'node:test'
 
 import {
   GET_WINDOWS_MISSING_ROOT_MARKER,
+  GET_WINDOWS_RECOVERY_INTEGRITY,
+  GET_WINDOWS_RECOVERY_RESOLVED,
+  GET_WINDOWS_RECOVERY_TAR_VERSION,
   GET_WINDOWS_RECOVERY_VERSION,
   canRecoverGetWindowsPackage,
   recoverGetWindowsPackage,
-  stageGetWindowsWithRecovery
+  stageGetWindowsWithRecovery,
+  verifyRecoveryLock
 } from './stage-native-deps-recovery.mjs'
 
 function tempParent() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-get-windows-recovery-test-'))
 }
 
-test('isolated recovery installs the exact get-windows package outside active node_modules', () => {
+function writeRecoveryLock(root, { integrity = GET_WINDOWS_RECOVERY_INTEGRITY } = {}) {
+  fs.writeFileSync(
+    path.join(root, 'package-lock.json'),
+    JSON.stringify({
+      name: 'hermes-get-windows-recovery',
+      version: '0.0.0',
+      lockfileVersion: 3,
+      packages: {
+        '': {
+          dependencies: { 'get-windows': GET_WINDOWS_RECOVERY_VERSION },
+          overrides: { tar: GET_WINDOWS_RECOVERY_TAR_VERSION }
+        },
+        'node_modules/get-windows': {
+          version: GET_WINDOWS_RECOVERY_VERSION,
+          resolved: GET_WINDOWS_RECOVERY_RESOLVED,
+          integrity
+        },
+        'node_modules/tar': {
+          version: GET_WINDOWS_RECOVERY_TAR_VERSION
+        }
+      }
+    })
+  )
+}
+
+test('isolated recovery attests a lock before running the exact package lifecycle', () => {
   const parent = tempParent()
   try {
-    let invocation
+    const invocations = []
 
     const recovery = recoverGetWindowsPackage({
       arch: 'x64',
@@ -27,7 +56,12 @@ test('isolated recovery installs the exact get-windows package outside active no
       platform: 'win32',
       tempParent: parent,
       run(command, args, options) {
-        invocation = { args, command, options }
+        invocations.push({ args, command, options })
+        if (args[1] === 'install') {
+          writeRecoveryLock(options.cwd)
+          return { status: 0 }
+        }
+        assert.equal(args[1], 'ci')
         const packageRoot = path.join(options.cwd, 'node_modules', 'get-windows')
         fs.mkdirSync(path.join(packageRoot, 'lib'), { recursive: true })
         fs.writeFileSync(
@@ -39,14 +73,19 @@ test('isolated recovery installs the exact get-windows package outside active no
       }
     })
 
-    assert.equal(invocation.command, process.execPath)
-    assert.equal(invocation.args[0], '/fake/npm-cli.js')
-    assert.equal(invocation.args[1], 'install')
-    assert.ok(invocation.args.includes('--workspaces=false'))
-    assert.ok(invocation.args.includes('--include=optional'))
-    assert.equal(invocation.options.cwd, recovery.recoveryRoot)
-    assert.equal(invocation.options.env.npm_config_platform, 'win32')
-    assert.equal(invocation.options.env.npm_config_arch, 'x64')
+    assert.equal(invocations.length, 2)
+    assert.equal(invocations[0].command, process.execPath)
+    assert.equal(invocations[0].args[0], '/fake/npm-cli.js')
+    assert.equal(invocations[0].args[1], 'install')
+    assert.ok(invocations[0].args.includes('--package-lock-only'))
+    assert.ok(invocations[0].args.includes('--ignore-scripts'))
+    assert.equal(invocations[1].args[1], 'ci')
+    assert.ok(invocations[1].args.includes('--ignore-scripts=false'))
+    assert.ok(invocations[1].args.includes('--workspaces=false'))
+    assert.ok(invocations[1].args.includes('--include=optional'))
+    assert.equal(invocations[1].options.cwd, recovery.recoveryRoot)
+    assert.equal(invocations[1].options.env.npm_config_platform, 'win32')
+    assert.equal(invocations[1].options.env.npm_config_arch, 'x64')
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(recovery.recoveryRoot, 'package.json'), 'utf8')
@@ -54,9 +93,13 @@ test('isolated recovery installs the exact get-windows package outside active no
     assert.deepEqual(manifest.dependencies, {
       'get-windows': GET_WINDOWS_RECOVERY_VERSION
     })
+    assert.deepEqual(manifest.overrides, {
+      tar: GET_WINDOWS_RECOVERY_TAR_VERSION
+    })
     assert.deepEqual(manifest.allowScripts, {
       [`get-windows@${GET_WINDOWS_RECOVERY_VERSION}`]: true
     })
+    assert.equal(verifyRecoveryLock(recovery.recoveryRoot), true)
     assert.equal(
       recovery.packageRoot,
       path.join(recovery.recoveryRoot, 'node_modules', 'get-windows')
@@ -71,7 +114,31 @@ test('isolated recovery installs the exact get-windows package outside active no
   }
 })
 
-test('failed isolated install is removed and cannot poison a later update', () => {
+test('digest or root override drift is rejected before lifecycle scripts run', () => {
+  const parent = tempParent()
+  try {
+    let calls = 0
+    assert.throws(
+      () =>
+        recoverGetWindowsPackage({
+          npmExecPath: '/fake/npm-cli.js',
+          run(_command, _args, options) {
+            calls += 1
+            writeRecoveryLock(options.cwd, { integrity: 'sha512-wrong' })
+            return { status: 0 }
+          },
+          tempParent: parent
+        }),
+      /lock does not match the repository version, tarball, and integrity authority/
+    )
+    assert.equal(calls, 1)
+    assert.deepEqual(fs.readdirSync(parent), [])
+  } finally {
+    fs.rmSync(parent, { force: true, recursive: true })
+  }
+})
+
+test('failed lock resolution is removed and cannot poison a later update', () => {
   const parent = tempParent()
   try {
     assert.throws(
@@ -81,8 +148,35 @@ test('failed isolated install is removed and cannot poison a later update', () =
           run: () => ({ status: 1 }),
           tempParent: parent
         }),
-      /isolated get-windows recovery install exited with 1/
+      /isolated get-windows recovery lock resolution exited with 1/
     )
+    assert.deepEqual(fs.readdirSync(parent), [])
+  } finally {
+    fs.rmSync(parent, { force: true, recursive: true })
+  }
+})
+
+test('failed lifecycle install is removed after a verified lock', () => {
+  const parent = tempParent()
+  try {
+    let calls = 0
+    assert.throws(
+      () =>
+        recoverGetWindowsPackage({
+          npmExecPath: '/fake/npm-cli.js',
+          run(_command, _args, options) {
+            calls += 1
+            if (calls === 1) {
+              writeRecoveryLock(options.cwd)
+              return { status: 0 }
+            }
+            return { status: 2 }
+          },
+          tempParent: parent
+        }),
+      /isolated get-windows recovery install exited with 2/
+    )
+    assert.equal(calls, 2)
     assert.deepEqual(fs.readdirSync(parent), [])
   } finally {
     fs.rmSync(parent, { force: true, recursive: true })
