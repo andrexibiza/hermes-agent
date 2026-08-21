@@ -1,0 +1,109 @@
+name: Reconcile Windows ZIP safety
+
+on:
+  push:
+    branches:
+      - automation/reconcile-windows-zip-safety
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rebuild the ZIP-safety patch on current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Axl Ibiza"
+          git config user.email "84248988+andrexibiza@users.noreply.github.com"
+          git fetch origin main tmp/windows-zip-safety-original
+          git checkout -B fix/windows-zip-safety-current-main origin/main
+
+          git show origin/tmp/windows-zip-safety-original:hermes_cli/update_cmd.py > /tmp/old-update-cmd.py
+          git show origin/tmp/windows-zip-safety-original:tests/hermes_cli/test_update_zip_fallback_guards.py > tests/hermes_cli/test_update_zip_fallback_guards.py
+          git show origin/tmp/windows-zip-safety-original:tests/hermes_cli/test_update_zip_symlink_reject.py > tests/hermes_cli/test_update_zip_symlink_reject.py
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('hermes_cli/update_cmd.py')
+          current = path.read_text(encoding='utf-8')
+          old = Path('/tmp/old-update-cmd.py').read_text(encoding='utf-8')
+
+          helper_name = 'def _called_process_error_cmd_parts('
+          if helper_name not in current:
+              helper_start = old.index(helper_name)
+              helper_end = old.index('def _update_via_zip(', helper_start)
+              helpers = old[helper_start:helper_end]
+              insertion = current.index('def _update_via_zip(')
+              current = current[:insertion] + helpers + current[insertion:]
+
+          branch_marker = '        _m().sys.exit(1)\n    zip_url = ('
+          if '_abort_zip_update_if_dirty_tree()\n    zip_url = (' not in current:
+              assert branch_marker in current, 'ZIP branch gate changed; refusing a blind rewrite'
+              current = current.replace(
+                  branch_marker,
+                  '        _m().sys.exit(1)\n    _abort_zip_update_if_dirty_tree()\n    zip_url = (',
+                  1,
+              )
+
+          swap_marker = '        try:\n            _commit_staged_replacements(staged)\n        except Exception:'
+          if 'recheck_reason = _zip_overlay_block_reason(' not in current:
+              assert swap_marker in current, 'ZIP swap site changed; refusing a blind rewrite'
+              recheck = '''        try:
+              # Re-check the tree right before the swap (#87304 TOCTOU): the
+              # download + extract + staging window above can take minutes, and
+              # work created in it would be destroyed by the commit below. Our
+              # own phase-1 staging siblings are filtered out — they are the
+              # expected artifacts of getting here, not user work.
+              recheck_reason = _zip_overlay_block_reason(
+                  _m().PROJECT_ROOT, ignore_staging_artifacts=True
+              )
+              if recheck_reason is not None:
+                  _discard_staged(staged)
+                  print(f"✗ ZIP fallback aborted before the swap: {recheck_reason}.")
+                  print(
+                      "  Files appeared in the checkout while the update was "
+                      "downloading; committing the swap would delete them."
+                  )
+                  print("  Stash or commit your changes, then rerun `hermes update`.")
+                  _m().sys.exit(1)
+              _commit_staged_replacements(staged)
+          except Exception:'''
+              current = current.replace(swap_marker, recheck, 1)
+
+          exception_start = current.index('    except subprocess.CalledProcessError as e:\n')
+          exception_end_marker = '\n\n# --- Hoisted from the body of _cmd_update_impl'
+          exception_end = current.index(exception_end_marker, exception_start)
+          old_start = old.index('    except subprocess.CalledProcessError as e:\n')
+          old_end = old.index(exception_end_marker, old_start)
+          current = current[:exception_start] + old[old_start:old_end] + current[exception_end:]
+
+          path.write_text(current, encoding='utf-8')
+          PY
+
+          python -m compileall -q hermes_cli/update_cmd.py
+          pytest -q \
+            tests/hermes_cli/test_update_zip_fallback_guards.py \
+            tests/hermes_cli/test_update_zip_symlink_reject.py \
+            tests/hermes_cli/test_update_zip_two_phase.py
+
+          git add hermes_cli/update_cmd.py \
+            tests/hermes_cli/test_update_zip_fallback_guards.py \
+            tests/hermes_cli/test_update_zip_symlink_reject.py
+          git commit -m "fix(update): refuse destructive Windows ZIP fallback
+
+          Preserve the #87878/#87327 safety model on current main: ZIP fallback is
+          reserved for actual git failures, refuses dirty or unverifiable trees,
+          rechecks immediately before swap, and reports dependency-stage failures
+          without laundering them into a source overlay.
+
+          Credit: @HexLab98 for the original fix/tests and @JoaoMarcos44 for the
+          pre-swap TOCTOU observation."
+          git push --force origin HEAD:fix/windows-zip-safety-current-main
