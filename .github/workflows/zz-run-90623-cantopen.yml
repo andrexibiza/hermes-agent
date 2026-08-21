@@ -11,7 +11,7 @@ jobs:
   verify-publish:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/90623-sessiondb-cantopen-capability'
+      github.event.pull_request.head.ref == 'trigger/90623-cantopen'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
