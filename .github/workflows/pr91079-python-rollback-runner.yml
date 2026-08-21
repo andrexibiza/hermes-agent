@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - tmp/pr91079-python-rollback-runner
+  pull_request:
+    branches:
+      - tmp/pr91079-python-rollback-runner
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -183,7 +187,6 @@ jobs:
               tests = tests.replace(insertion_marker, insertion + insertion_marker, 1)
               tests_path.write_text(tests, encoding="utf-8")
 
-          # Deterministic source-level acceptance before the repository matrix.
           patched = source_path.read_text(encoding="utf-8")
           assert "shutil.rmtree(unpacked, ignore_errors=True)" not in patched
           assert "corrupt_dir.rename(unpacked)" in patched
