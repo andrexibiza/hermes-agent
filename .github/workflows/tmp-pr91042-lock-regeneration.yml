@@ -1,0 +1,77 @@
+name: Temporary PR 91042 lock regeneration
+
+on:
+  push:
+    branches:
+      - tmp/91042-lock-regeneration
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Select patched Desktop Electron generation
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const path = 'apps/desktop/package.json'
+          const manifest = JSON.parse(fs.readFileSync(path, 'utf8'))
+          manifest.devDependencies.electron = '41.10.3'
+          manifest.build.electronVersion = '41.10.3'
+          fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`)
+          NODE
+      - name: Regenerate committed npm graph
+        shell: bash
+        run: npm install --package-lock-only --ignore-scripts --include=optional
+      - name: Verify security and current-main graph coexist
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const packages = lock.packages || {}
+          const desktop = packages['apps/desktop'] || {}
+          const failures = []
+          const expect = (condition, message) => { if (!condition) failures.push(message) }
+          expect(desktop.devDependencies?.electron === '41.10.3', 'Desktop lock declaration is not Electron 41.10.3')
+          expect(desktop.devDependencies?.['@babel/core'] === '8.0.1', 'React Compiler Babel authority was lost')
+          expect(desktop.devDependencies?.['@rolldown/plugin-babel'] === '0.2.3', 'Rolldown Babel authority was lost')
+          expect(desktop.devDependencies?.['babel-plugin-react-compiler'] === '1.0.0', 'React Compiler package was lost')
+          expect(packages['node_modules/electron']?.version === '41.10.3', 'Resolved Electron package is not 41.10.3')
+          expect(packages['node_modules/@electron/get']?.version === '5.1.0', 'Resolved @electron/get is not 5.1.0')
+          expect(packages['node_modules/@electron-internal/extract-zip']?.version === '1.0.5', 'Electron internal extractor is not 1.0.5')
+          expect(!packages['node_modules/extract-zip'], 'Legacy extract-zip remains in the graph')
+          expect(packages['node_modules/sanitize-html/node_modules/nanoid']?.version === '3.3.18', 'sanitize-html Nano ID path is not 3.3.18')
+          expect(packages['node_modules/vite/node_modules/nanoid']?.version === '3.3.18', 'Vite Nano ID path is not 3.3.18')
+          if (failures.length) {
+            console.error(failures.join('\n'))
+            process.exit(1)
+          }
+          fs.writeFileSync('pr91042-lock-summary.json', `${JSON.stringify({
+            electron: packages['node_modules/electron'].version,
+            electronGet: packages['node_modules/@electron/get'].version,
+            extractor: packages['node_modules/@electron-internal/extract-zip'].version,
+            reactCompiler: desktop.devDependencies['babel-plugin-react-compiler'],
+            babel: desktop.devDependencies['@babel/core'],
+            nanoidSanitizeHtml: packages['node_modules/sanitize-html/node_modules/nanoid'].version,
+            nanoidVite: packages['node_modules/vite/node_modules/nanoid'].version
+          }, null, 2)}\n`)
+          NODE
+          git diff --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr91042-generated-lock
+          path: |
+            package-lock.json
+            apps/desktop/package.json
+            pr91042-lock-summary.json
+          if-no-files-found: error
+          retention-days: 1
