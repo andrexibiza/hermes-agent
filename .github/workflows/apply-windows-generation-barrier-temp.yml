@@ -37,9 +37,12 @@ jobs:
           git config core.autocrlf false
           git config core.longpaths true
           git fetch https://github.com/NousResearch/hermes-agent.git main
-          test "$(git rev-parse FETCH_HEAD)" = '8794e5a21c980a0f26532cb4883284b786cb3f25'
-          git reset --hard FETCH_HEAD
+          upstream_main=$(git rev-parse FETCH_HEAD)
+          echo "Current upstream main: ${upstream_main}"
+          git reset --hard "${upstream_main}"
 
+          # The patch can move with main only while every touched preimage
+          # remains byte-identical to the reviewed implementation authority.
           test "$(git hash-object hermes_cli/update_cmd.py)" = '1b8c967dd757a3e8cb43d64510b1926f46bc6bb0'
           test "$(git hash-object hermes_cli/update_lock.py)" = '964638df05636ee5cfa96e5a651ac84964b34df6'
           test "$(git hash-object tests/hermes_cli/test_update_lock.py)" = '912d217d898eb12665a25f3bb417731a7f73c2ab'
@@ -82,8 +85,8 @@ jobs:
           git diff --stat
 
           git config user.name 'Axl Ibiza'
-          git config user.email 'andrexibiza@users.noreply.github.com'
-          git add \
+          git config user.email '84248988+andrexibiza@users.noreply.github.com'
+          git add -- \
             hermes_cli/update_cmd.py \
             hermes_cli/update_generation.py \
             hermes_cli/update_generation_worker.py \
