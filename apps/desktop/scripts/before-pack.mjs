@@ -61,6 +61,12 @@ import { existsSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
 import { stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
+import {
+  PACK_SESSION_ENV,
+  clearRollbackSession,
+  readRollbackSession,
+  writeRollbackSession
+} from './desktop-pack-transaction.mjs'
 
 export function cleanStaleAppOutDir(appOutDir) {
   if (!appOutDir || typeof appOutDir !== 'string') {
@@ -82,28 +88,73 @@ export function cleanStaleAppOutDir(appOutDir) {
  * exe (i.e. it is a previously-working build, not the corrupted partial state
  * cleanStaleAppOutDir exists to remove). If the fresh pack then produces a
  * Hermes.exe that Windows can't load (truncated PE from a corrupt cached
- * Electron zip, wrong arch), the updater's integrity gate in
- * `hermes desktop --build-only` (hermes_cli/main.py
- * `_ensure_desktop_exe_launchable`) restores this .bak instead of leaving the
- * user with "This app can't run on your computer".
+ * Electron zip, wrong arch), the builder transaction restores this .bak
+ * instead of leaving the user with "This app can't run on your computer".
  *
- * Returns true when the tree was preserved (appOutDir no longer exists), false
- * when there was nothing worth preserving (caller falls through to the wipe).
- * A rename failure (AV holding a handle) also returns false — the wipe is the
- * safe fallback and matches pre-#69179 behavior exactly.
+ * One electron-builder invocation may run beforePack more than once (multiple
+ * Windows targets/architectures). The wrapper supplies one pack-session ID.
+ * A matching `<appOutDir>.bak.session` proves the backup already belongs to
+ * this invocation, so later targets clean their intermediate output without
+ * overwriting the original rollback generation.
+ *
+ * Returns true when rollback material was preserved (appOutDir no longer
+ * exists), false when there was nothing worth preserving (caller falls
+ * through to the wipe). A rename failure (AV holding a handle) also returns
+ * false — the wipe is the safe fallback and matches pre-#69179 behavior.
  */
-export function preserveRollbackBackup(appOutDir, productExeName = 'Hermes.exe') {
-  if (!appOutDir || typeof appOutDir !== 'string' || !existsSync(appOutDir)) {
-    return false
-  }
-  if (!existsSync(path.join(appOutDir, productExeName))) {
-    // Partial/corrupt tree (interrupted prior pack) — not rollback material.
+export function preserveRollbackBackup(
+  appOutDir,
+  productExeName = 'Hermes.exe',
+  sessionId = process.env[PACK_SESSION_ENV]
+) {
+  if (!appOutDir || typeof appOutDir !== 'string') {
     return false
   }
   const backupDir = `${appOutDir}.bak`
+  if (!existsSync(path.join(appOutDir, productExeName))) {
+    // Partial/corrupt tree (interrupted prior pack) — not rollback material.
+    // A valid backup from an interrupted older invocation is still useful;
+    // adopt it into this generation so the wrapper can restore it if this
+    // retry also fails. The caller remains responsible for wiping appOutDir.
+    if (sessionId && existsSync(path.join(backupDir, productExeName))) {
+      try {
+        writeRollbackSession(backupDir, sessionId)
+      } catch {}
+    }
+    return false
+  }
   try {
+    const sameSessionBackup =
+      Boolean(sessionId) &&
+      existsSync(path.join(backupDir, productExeName)) &&
+      readRollbackSession(backupDir) === sessionId
+
+    if (sameSessionBackup) {
+      // Multi-target pack: keep the first (pre-build) generation as authority.
+      // The current tree is output from an earlier target in this same builder
+      // process and must not replace the rollback generation.
+      cleanStaleAppOutDir(appOutDir)
+      return true
+    }
+
+    // Refuse to start destructive replacement if the generation marker is
+    // itself locked. The current working app remains untouched in that case.
+    clearRollbackSession(backupDir)
     rmSync(backupDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     renameSync(appOutDir, backupDir)
+    if (sessionId) {
+      try {
+        writeRollbackSession(backupDir, sessionId)
+      } catch (error) {
+        // Without the generation marker a later target could overwrite the
+        // only last-good backup. Put the app back and decline preservation.
+        try {
+          clearRollbackSession(backupDir)
+        } catch {}
+        renameSync(backupDir, appOutDir)
+        throw error
+      }
+    }
     return true
   } catch {
     return false
@@ -115,9 +166,8 @@ export default async function beforePack(context) {
   const platformName = context && context.electronPlatformName
   try {
     // Windows: keep the previous working build as rollback material for the
-    // post-build integrity gate (#69179) instead of destroying it. Falls
-    // through to the plain wipe when the old tree is partial/corrupt or the
-    // rename fails.
+    // builder transaction instead of destroying it. Falls through to the
+    // plain wipe when the old tree is partial/corrupt or the rename fails.
     const productExe = `${(context && context.packager?.appInfo?.productFilename) || 'Hermes'}.exe`
     if (platformName === 'win32' && preserveRollbackBackup(appOutDir, productExe)) {
       console.log(`[before-pack] preserved previous unpacked dir for rollback: ${appOutDir}.bak`)
