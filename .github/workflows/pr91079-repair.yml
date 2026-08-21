@@ -1,0 +1,33 @@
+name: PR 91079 rollback repair
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'tmp/pr91079-repair-runner-mainpr'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out live PR 91079 branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: andrexibiza/hermes-agent
+          ref: fix/windows-desktop-pack-transaction
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Check out scoped repair code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: andrexibiza/hermes-agent
+          ref: tmp/pr91079-repair-runner-mainpr
+          path: _pr91079_runner
+          persist-credentials: false
+
+      - name: Apply repair and publish exact one-commit branch
+        run: python _pr91079_runner/scripts/pr91079_repair_runner.py
