@@ -1004,14 +1004,23 @@ def _assess_parked_branch_switch(
     autostashed, ran its post-update steps and printed "✓ Code updated!"
     while the running code stayed days behind main. The guard's contract:
 
-    - safe (True, "") only when the working tree + index are clean AND every
-      commit on the parked branch is already contained in
-      ``origin/<target_branch>`` (``git cherry`` reports no ``+`` lines).
-    - anything else — dirty tree, unmerged commits, git errors, or the
-      ``updates.auto_switch_parked_branch: false`` config opt-out — returns
-      (False, <reason>) and the caller must NOT touch the branch.
+    - (True, "") when the working tree + index are clean AND every commit on
+      the parked branch is already contained in ``origin/<target_branch>``
+      (``git cherry`` reports no ``+`` lines).
+    - (True, "unmerged:<count>") when the tree is clean but the branch has
+      commits not yet in the target. Switching is safe — ``git checkout``
+      never discards committed work and the branch keeps the commits — but
+      the caller must print a LOUD notice naming the branch and count so the
+      work is not forgotten. This is what non-interactive callers (desktop
+      update button, gateway /update, cron) rely on: they have no way to
+      resolve a skip, so a clean checkout must always reach the target.
+    - (False, <reason>) — dirty tree, git errors, or the
+      ``updates.auto_switch_parked_branch: false`` config opt-out — and the
+      caller must NOT touch the branch. A dirty tree is the one genuinely
+      unsafe case: uncommitted work would have to ride an autostash across
+      branches, which is how the 2026-08-17 incident started.
 
-    Reasons: "disabled", "dirty", "unmerged:<count>", "unverifiable".
+    Block reasons: "disabled", "dirty", "unverifiable".
     """
     try:
         from hermes_cli.config import load_config
@@ -1047,7 +1056,10 @@ def _assess_parked_branch_switch(
         line for line in cherry.stdout.splitlines() if line.startswith("+")
     ]
     if unmerged:
-        return False, f"unmerged:{len(unmerged)}"
+        # Clean tree: switching is safe (checkout keeps the commits on the
+        # branch). The reason string tells the caller to print the loud
+        # "branch kept with N unmerged commit(s)" notice.
+        return True, f"unmerged:{len(unmerged)}"
     return True, ""
 
 
@@ -1074,12 +1086,6 @@ def _print_parked_branch_skip_warning(
 
     if reason == "dirty":
         why = "the working tree has uncommitted changes"
-    elif reason.startswith("unmerged:"):
-        count = reason.split(":", 1)[1]
-        why = (
-            f"the branch has {count} commit(s) not merged into "
-            f"origin/{target_branch}"
-        )
     elif reason == "disabled":
         why = "updates.auto_switch_parked_branch is set to false in config.yaml"
     else:
@@ -1106,6 +1112,35 @@ def _print_parked_branch_skip_warning(
         "  (commit or stash your work on the branch first if you want to "
         "keep it)"
     )
+    print(bar)
+
+
+def _print_parked_branch_kept_notice(
+    current_branch: str, target_branch: str, unmerged_count: str
+) -> None:
+    """LOUD notice printed when a clean parked branch with unmerged commits
+    is auto-switched back to the update target.
+
+    Non-interactive callers (desktop update button, gateway /update, cron)
+    cannot resolve a skip, so a clean checkout always proceeds to the
+    target — but the unmerged work must be impossible to miss.  The commits
+    are untouched: ``git checkout`` never discards committed work; the
+    branch keeps them until the user returns.
+    """
+    bar = "=" * 68
+    print()
+    print(bar)
+    print(
+        f"⚠ Checkout was parked on '{current_branch}' with "
+        f"{unmerged_count} commit(s) not merged into origin/{target_branch}."
+    )
+    print(
+        f"  Switching to {target_branch} so the update can proceed — your "
+        f"commit(s) are safe on '{current_branch}'."
+    )
+    print()
+    print("  To pick the work back up later:")
+    print(f"    git checkout {current_branch}")
     print(bar)
 
 
@@ -3230,6 +3265,11 @@ def _ensure_acp_launcher() -> None:
         print(f"  ✓ Installed hermes-acp launcher → {acp_cmd}")
 
 _PRE_UPDATE_SNAPSHOT_KEEP = 1
+# Sibling-profile snapshot ids from the current run's pre-update backup
+# ({profile: snapshot_id}) — consumed by the post-update per-profile
+# cron-jobs safety net (#66140). Module-level because the snapshot and the
+# restore run in the same process but far apart in _cmd_update_impl.
+_LAST_SIBLING_SNAPSHOTS: dict = {}
 
 # Per-file size cap for the pre-update quick snapshot. Anything larger is
 # skipped with a warning: the snapshot exists to protect small, hard-to-
@@ -3379,6 +3419,40 @@ def _run_pre_update_backup(args) -> Optional[str]:
                     print()
         if snapshot_id:
             print(f"◆ Pre-update snapshot: {snapshot_id}")
+
+        # #66140: the code swap + fleet restart touch EVERY profile, so
+        # every profile gets the same snapshot (same set, same 1GiB cap,
+        # keep=1) under its own state-snapshots/. Best-effort per profile.
+        try:
+            from hermes_cli.backup import create_pre_update_snapshots_all_profiles
+
+            _sibling_snaps = create_pre_update_snapshots_all_profiles(
+                keep=_PRE_UPDATE_SNAPSHOT_KEEP,
+                max_file_size=_PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE,
+            )
+            if _sibling_snaps:
+                print(
+                    f"◆ Sibling profile snapshot(s): "
+                    + ", ".join(sorted(_sibling_snaps))
+                )
+                try:
+                    from hermes_cli.update_receipt import record_step
+
+                    record_step(
+                        "sibling_profile_snapshots",
+                        True,
+                        ", ".join(
+                            f"{k}={v}" for k, v in sorted(_sibling_snaps.items())
+                        ),
+                    )
+                except Exception:
+                    pass
+                global _LAST_SIBLING_SNAPSHOTS
+                _LAST_SIBLING_SNAPSHOTS = _sibling_snaps
+        except Exception as _sib_exc:
+            logging.getLogger(__name__).debug(
+                "Sibling profile snapshots failed: %s", _sib_exc
+            )
     except Exception as exc:
         # Never let a snapshot failure block an update.
         logging.getLogger(__name__).debug("Pre-update snapshot failed: %s", exc)
@@ -4497,8 +4571,123 @@ def _warn_incomplete_gateway_fleet_restart(failed_units: list) -> None:
     print("  Skipped units may still be running pre-update code (mixed")
     print("  sys.modules). Restart them manually, then verify:")
     print("    hermes gateway status")
-    print("    systemctl --user restart <unit>   # user-scope")
-    print("    sudo systemctl restart <unit>     # system-scope")
+    if any(not name.startswith("ai.hermes.") for name in ordered):
+        print("    systemctl --user restart <unit>   # user-scope")
+        print("    sudo systemctl restart <unit>     # system-scope")
+    if any(name.startswith("ai.hermes.") for name in ordered):
+        print("    launchctl kickstart -k gui/$UID/<label>   # macOS (or user/$UID)")
+
+
+def _restart_macos_launchd_gateways(
+    restarted_services: list,
+    failed_or_stale_units: list,
+    drain_budget: float,
+) -> None:
+    """Restart every launchd-managed gateway after an update (macOS).
+
+    The code update (git pull) is shared across all profiles, so every
+    ``ai.hermes.gateway*`` LaunchAgent must reload it — restarting only the
+    invoking profile's service leaves siblings on pre-update ``sys.modules``
+    until their next agent turn imports a symbol the old module generation
+    doesn't have (#41403).  Parity with the systemd fleet path.
+
+    The invoking profile keeps the existing ``launchd_restart()`` treatment
+    (self-restart request → graceful drain → kickstart).  Siblings get the
+    same drain-first sequence, with their launchd domain resolved per label:
+    a sibling bootstrapped in the other supported domain (``gui/<uid>`` vs
+    ``user/<uid>``) must not be kickstarted in the current profile's domain.
+    ``subprocess.TimeoutExpired`` is isolated per label so one wedged
+    launchctl call cannot leave the rest of the fleet on old code (#68523).
+    """
+    from hermes_cli.gateway import (
+        get_launchd_label,
+        get_launchd_plist_path,
+        launchd_restart,
+        launchd_gateway_labels_for_install,
+        _graceful_restart_via_sigusr1,
+        _launchd_kickstart,
+        _launchd_service_registered,
+        _locate_launchd_gateway_service,
+        _wait_for_launchd_service_pid,
+    )
+
+    # --- Current profile: unchanged single-service path ---------------------
+    # Gate order and predicate mirror the pre-fleet inline block exactly:
+    # plist first (no plist → zero launchctl calls), then the domain-agnostic
+    # `launchctl list` registration check — NOT a domain locate, which fails
+    # on macOS-26 hosts whose per-user domains reject service management
+    # even though launchd_restart() owns that fallback. Gate errors skip
+    # silently (best-effort, as before); only launchd_restart() itself
+    # failing counts toward the incomplete-update warning.
+    current_label = get_launchd_label()
+    try:
+        if get_launchd_plist_path().exists() and _launchd_service_registered(
+            current_label
+        ):
+            try:
+                launchd_restart()
+                restarted_services.append(current_label)
+            except subprocess.CalledProcessError as e:
+                stderr = (getattr(e, "stderr", "") or "").strip()
+                print(f"  ⚠ Gateway restart failed: {stderr}")
+                failed_or_stale_units.append(current_label)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # --- Sibling profiles ---------------------------------------------------
+    for label in launchd_gateway_labels_for_install():
+        if label == current_label:
+            continue
+        try:
+            # Locate = liveness + domain in one domain-explicit probe; the
+            # kickstart and fresh-PID verification below reuse the located
+            # domain, so a sibling in the other gui/user domain can never be
+            # probed in one domain and restarted in another.
+            domain, old_pid = _locate_launchd_gateway_service(label)
+            if domain is None:
+                # Installed but not bootstrapped (stopped/uninstalled
+                # mid-way) — nothing is running old code here.
+                continue
+            graceful_ok = False
+            if old_pid is not None and old_pid > 0:
+                print(f"  → {label}: draining (up to {int(drain_budget)}s)...")
+                graceful_ok = _graceful_restart_via_sigusr1(
+                    old_pid, drain_timeout=drain_budget
+                )
+            if graceful_ok and _wait_for_launchd_service_pid(
+                label, old_pid=old_pid, timeout=10.0, domain=domain
+            ):
+                # Unconditional KeepAlive already respawned it on the new
+                # code — a hard kickstart now would kill the fresh process.
+                restarted_services.append(label)
+                continue
+            try:
+                _launchd_kickstart(label, domain)
+            except subprocess.CalledProcessError as e:
+                stderr = (getattr(e, "stderr", "") or "").strip()
+                failed_or_stale_units.append(label)
+                print(
+                    f"  ⚠ Failed to restart {label}: {stderr}\n"
+                    f"    Recover manually: launchctl kickstart -k {domain}/{label}"
+                )
+                continue
+            if _wait_for_launchd_service_pid(
+                label, old_pid=old_pid, timeout=15.0, domain=domain
+            ):
+                restarted_services.append(label)
+            else:
+                failed_or_stale_units.append(label)
+                print(
+                    f"  ✗ {label} failed to come back after restart.\n"
+                    f"    Check logs, then: launchctl kickstart -k {domain}/{label}"
+                )
+        except subprocess.TimeoutExpired:
+            failed_or_stale_units.append(label)
+            print(
+                f"  ⚠ launchctl timed out restarting {label}; "
+                "continuing with remaining gateways"
+            )
+
 
 def _surviving_gateway_pids_after_failed_restart():
     """Best-effort PIDs of gateways still running after the restart phase died.
@@ -4980,6 +5169,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # stash. Only applies when an update actually landed; abort/no-op paths
     # still restore, since the tree they restore onto is unchanged.
     keep_stash = bool(getattr(args, "keep_stash", False))
+    # --switch-branch: on a branch carrying unmerged commits, prefer switching
+    # to the update target over an in-place merge, so the branch's history is
+    # never written to by an update (#89507 review feedback). Only meaningful
+    # when updates.parked_branch_strategy is "update_in_place".
+    switch_branch = bool(getattr(args, "switch_branch", False))
 
     # Whether this update is running without a human at the keyboard.
     # Interactive terminal updates always stash-and-ask (unchanged behavior);
@@ -5017,6 +5211,27 @@ def _cmd_update_impl(args, gateway_mode: bool):
         begin_update_receipt()
     except Exception as _receipt_exc:
         logger.debug("Update receipt unavailable: %s", _receipt_exc)
+
+    # Plan phase (#91277 Phase 2): snapshot the pre-update fleet — every
+    # running Hermes runtime, its supervisor, and its running code version —
+    # into the receipt, so a post-mortem can compare what the update SAW
+    # against what it did. Read-only; a probe failure records nothing.
+    try:
+        from hermes_cli.update_inventory import (
+            collect_runtime_inventory,
+            record_plan_in_receipt,
+        )
+
+        _pre_update_plan = collect_runtime_inventory()
+        record_plan_in_receipt(_pre_update_plan)
+        if _pre_update_plan.runtimes:
+            _n = len(_pre_update_plan.runtimes)
+            _profiles = ", ".join(
+                sorted({r.profile for r in _pre_update_plan.runtimes})
+            )
+            print(f"→ Fleet: {_n} running service(s) across profiles: {_profiles}")
+    except Exception as _plan_exc:
+        logger.debug("Update plan phase failed: %s", _plan_exc)
 
     # On Windows, abort early if another hermes.exe is holding the venv shim
     # open. Continuing would result in a string of WinError 32 warnings and
@@ -5298,48 +5513,105 @@ def _cmd_update_impl(args, gateway_mode: bool):
         )
         current_branch = result.stdout.strip()
 
-        # If user is on a different branch than the update target, switch
-        # to the target. When the target is "main" this is the historical
-        # "always update against main" behavior; for any other target it's
-        # the same thing — get HEAD onto the requested branch first, then
-        # fast-forward.
-        #
         # Parked-branch guard (2026-08-17 live incident): the checkout can be
         # left parked on a stale feature branch by earlier tooling. Blindly
         # stash-switch-pull-switch-back "updates" main while the running code
-        # stays days behind, then prints "✓ Code updated!". Only auto-switch
-        # when the parked branch is clean AND fully merged into the target;
-        # otherwise warn loudly, mark the code update SKIPPED, and stop
-        # before the post-update steps reinforce the stale tree.
+        # stays days behind, then prints "✓ Code updated!".
+        #
+        # What happens next is routed by what the branch carries (which is
+        # exactly what the guard measures) plus updates.parked_branch_strategy:
+        #
+        #   fully merged  -> a stale leftover with nothing to lose: switch
+        #                    back to the target.
+        #   unmerged: N   -> strategy "switch" (default): switch to the
+        #                    target anyway — committed work is safe on the
+        #                    branch (git checkout never discards commits) and
+        #                    a loud "kept" notice names the branch + count.
+        #                    Deterministic, so non-interactive callers
+        #                    (desktop update button, gateway /update, cron)
+        #                    always reach the target.
+        #                    strategy "update_in_place": a maintained custom
+        #                    branch (local patches on top of main) is updated
+        #                    IN PLACE from origin/<target> — the checkout
+        #                    never moves, local commits survive, the running
+        #                    code advances. --switch-branch overrides back to
+        #                    the switch path for one run.
+        #   anything else -> dirty / unverifiable / opted out: touch nothing,
+        #                    warn loudly, mark the code update SKIPPED, and
+        #                    stop before the post-update steps reinforce the
+        #                    stale tree.
         parked_branch_switched = False
-        if current_branch != branch:
-            if current_branch != "HEAD":
-                switch_safe, switch_block_reason = _m()._assess_parked_branch_switch(
-                    git_cmd, _m().PROJECT_ROOT, current_branch, branch
+        in_place_update = False
+        if current_branch != branch and current_branch != "HEAD":
+            switch_safe, switch_block_reason = _m()._assess_parked_branch_switch(
+                git_cmd, _m().PROJECT_ROOT, current_branch, branch
+            )
+            if not switch_safe:
+                _m()._print_parked_branch_skip_warning(
+                    git_cmd,
+                    _m().PROJECT_ROOT,
+                    current_branch,
+                    branch,
+                    switch_block_reason,
                 )
-                if not switch_safe:
-                    _m()._print_parked_branch_skip_warning(
-                        git_cmd,
-                        _m().PROJECT_ROOT,
+                print()
+                print(
+                    "⚠ Update finished — code update SKIPPED"
+                    f"{_branch_head_suffix(git_cmd, _m().PROJECT_ROOT)}"
+                )
+                _m()._resume_windows_gateways_after_update(
+                    _windows_gateway_resume
+                )
+                sys.exit(1)
+            if switch_block_reason.startswith("unmerged:"):
+                _in_place_configured = False
+                try:
+                    from hermes_cli.config import load_config as _load_cfg
+
+                    _upd_cfg = (_load_cfg() or {}).get("updates", {})
+                    _in_place_configured = (
+                        isinstance(_upd_cfg, dict)
+                        and _upd_cfg.get("parked_branch_strategy", "switch")
+                        == "update_in_place"
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Could not read updates.parked_branch_strategy: %s", exc
+                    )
+                if _in_place_configured and not switch_branch:
+                    # The merge source must exist upstream; --branch typos
+                    # previously surfaced through the checkout failing, which
+                    # does not run on this path.
+                    verify_ref = subprocess.run(
+                        git_cmd + ["rev-parse", "--verify", "--quiet", f"origin/{branch}"],
+                        cwd=_m().PROJECT_ROOT,
+                        capture_output=True,
+                        text=True, encoding="utf-8", errors="replace",
+                    )
+                    if verify_ref.returncode != 0:
+                        print(f"✗ Branch '{branch}' does not exist locally or on origin.")
+                        sys.exit(1)
+                    in_place_update = True
+                    print(
+                        f"  ℹ On branch '{current_branch}' — updating it in place from "
+                        f"origin/{branch} (no branch switch; local commits preserved)."
+                    )
+                else:
+                    parked_branch_switched = True
+                    _m()._print_parked_branch_kept_notice(
                         current_branch,
                         branch,
-                        switch_block_reason,
+                        switch_block_reason.split(":", 1)[1],
                     )
-                    print()
-                    print(
-                        "⚠ Update finished — code update SKIPPED"
-                        f"{_branch_head_suffix(git_cmd, _m().PROJECT_ROOT)}"
-                    )
-                    _m()._resume_windows_gateways_after_update(
-                        _windows_gateway_resume
-                    )
-                    sys.exit(1)
+            else:
                 parked_branch_switched = True
                 print(
                     f"  ⚠ Checkout was parked on '{current_branch}' "
                     f"(fully merged) — switching back to {branch}..."
                 )
-            else:
+
+        if not in_place_update and current_branch != branch:
+            if current_branch == "HEAD":
                 print(
                     f"  ⚠ Currently on detached HEAD — switching to {branch} "
                     "for update..."
@@ -5364,7 +5636,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     text=True, encoding="utf-8", errors="replace",
                 )
                 if track_result.returncode != 0:
-                    # Restore the user's prior branch + stash before bailing
+                    # Restore the user's prior stash before bailing
                     # so we don't leave them stranded in a weird state.
                     if auto_stash_ref is not None:
                         _m()._restore_stashed_changes(
@@ -5449,10 +5721,18 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     input_fn=gw_input_fn,
                 )
             if parked_branch_switched:
-                print(
-                    f"  ✓ Checkout was parked on '{current_branch}' (fully "
-                    f"merged) — switched back to {branch}."
-                )
+                if switch_block_reason.startswith("unmerged:"):
+                    _count = switch_block_reason.split(":", 1)[1]
+                    print(
+                        f"  ✓ Checkout was parked on '{current_branch}' — "
+                        f"switched back to {branch}; {_count} unmerged "
+                        f"commit(s) kept on '{current_branch}'."
+                    )
+                else:
+                    print(
+                        f"  ✓ Checkout was parked on '{current_branch}' (fully "
+                        f"merged) — switched back to {branch}."
+                    )
             elif current_branch not in {branch, "HEAD"}:
                 subprocess.run(
                     git_cmd + ["checkout", current_branch],
@@ -5599,26 +5879,80 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 text=True, encoding="utf-8", errors="replace",
             )
             if pull_result.returncode != 0:
-                # ff-only failed — local and remote have diverged (e.g. upstream
-                # force-pushed or rebase).  Since local changes are already
-                # stashed, reset to match the remote exactly.
-                print(
-                    "  ⚠ Fast-forward not possible (history diverged), resetting to match remote..."
-                )
-                reset_result = subprocess.run(
-                    git_cmd + ["reset", "--hard", f"origin/{branch}"],
-                    cwd=_m().PROJECT_ROOT,
-                    capture_output=True,
-                    text=True, encoding="utf-8", errors="replace",
-                )
-                if reset_result.returncode != 0:
-                    print(f"✗ Failed to reset to origin/{branch}.")
-                    if reset_result.stderr.strip():
-                        print(f"  {reset_result.stderr.strip()}")
+                # ff-only failed — local and remote have diverged. Before
+                # assuming an upstream force-push, check WHY: a checkout on a
+                # custom branch (local commits on top of origin/<branch>) also
+                # cannot fast-forward, and `reset --hard` here would silently
+                # discard that work. Merge instead and stop cleanly on
+                # conflict — an update must never destroy local commits.
+                _cur_branch = (
+                    subprocess.run(
+                        git_cmd + ["branch", "--show-current"],
+                        cwd=_m().PROJECT_ROOT,
+                        capture_output=True,
+                        text=True, encoding="utf-8", errors="replace",
+                    ).stdout
+                    or ""
+                ).strip()
+                if _cur_branch and _cur_branch != branch:
                     print(
-                        f"  Try manually: git fetch origin && git reset --hard origin/{branch}"
+                        f"  ⚠ Checkout is on custom branch '{_cur_branch}' — "
+                        f"merging origin/{branch} instead of resetting so local commits survive..."
                     )
-                    sys.exit(1)
+                    # Best-effort safety tag; recovery anchor if anything goes wrong.
+                    subprocess.run(
+                        git_cmd
+                        + ["tag", f"pre-update-{_time.strftime('%Y%m%d-%H%M%S')}"],
+                        cwd=_m().PROJECT_ROOT,
+                        capture_output=True,
+                        check=False,
+                    )
+                    merge_result = subprocess.run(
+                        git_cmd + ["merge", "--no-edit", f"origin/{branch}"],
+                        cwd=_m().PROJECT_ROOT,
+                        capture_output=True,
+                        text=True, encoding="utf-8", errors="replace",
+                    )
+                    if merge_result.returncode != 0:
+                        subprocess.run(
+                            git_cmd + ["merge", "--abort"],
+                            cwd=_m().PROJECT_ROOT,
+                            capture_output=True,
+                            check=False,
+                        )
+                        print(
+                            "✗ Merge conflict between local commits and upstream — "
+                            "update stopped, nothing was changed."
+                        )
+                        print(
+                            f"  Resolve manually: cd {_m().PROJECT_ROOT} && "
+                            f"git merge origin/{branch}"
+                        )
+                        print(
+                            "  Then re-run the update. Local work is untouched."
+                        )
+                        sys.exit(1)
+                else:
+                    # Same branch as the update target — a true upstream
+                    # force-push/rebase. Local changes are already stashed;
+                    # reset to match the remote exactly (original behaviour).
+                    print(
+                        "  ⚠ Fast-forward not possible (history diverged), resetting to match remote..."
+                    )
+                    reset_result = subprocess.run(
+                        git_cmd + ["reset", "--hard", f"origin/{branch}"],
+                        cwd=_m().PROJECT_ROOT,
+                        capture_output=True,
+                        text=True, encoding="utf-8", errors="replace",
+                    )
+                    if reset_result.returncode != 0:
+                        print(f"✗ Failed to reset to origin/{branch}.")
+                        if reset_result.stderr.strip():
+                            print(f"  {reset_result.stderr.strip()}")
+                        print(
+                            f"  Try manually: git fetch origin && git reset --hard origin/{branch}"
+                        )
+                        sys.exit(1)
 
             # Post-pull syntax guard: validate critical-path files actually
             # parse before declaring the update successful. If a bad commit
@@ -5725,13 +6059,23 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # branch guard above should make this unreachable, but if any path
         # leaves the checkout attached elsewhere, "✓ Code updated!" would be
         # a lie — refuse to claim success (2026-08-17 incident class).
+        #
+        # An IN-PLACE branch update is the one legitimate way to end on a
+        # non-target branch: origin/<target> was merged INTO the checked-out
+        # branch, so the running code *is* up to date and HEAD staying put is
+        # the whole point. Claiming failure there would make every update on a
+        # real working branch exit 1 after doing exactly the right thing.
         post_pull_branch = subprocess.run(
             git_cmd + ["rev-parse", "--abbrev-ref", "HEAD"],
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
         ).stdout.strip()
-        if post_pull_branch and post_pull_branch not in {branch, "HEAD"}:
+        if (
+            not in_place_update
+            and post_pull_branch
+            and post_pull_branch not in {branch, "HEAD"}
+        ):
             print()
             print(
                 f"✗ Update pulled origin/{branch}, but the checkout is on "
@@ -6298,6 +6642,25 @@ def _cmd_update_impl(args, gateway_mode: bool):
         except Exception as exc:
             # Never let the cron safety net break an otherwise-good update.
             logger.debug("Cron jobs auto-restore check failed: %s", exc)
+
+        # #66140: run the same cron-jobs safety net for every sibling
+        # profile against ITS OWN pre-update snapshot (same-generation by
+        # construction — both taken by this run).
+        try:
+            from hermes_cli.backup import restore_cron_jobs_all_profiles
+
+            for _restored in restore_cron_jobs_all_profiles(
+                _LAST_SIBLING_SNAPSHOTS
+            ):
+                print()
+                print(
+                    f"  ⚠️  Profile '{_restored['profile']}': cron/jobs.json "
+                    f"lost jobs during this update — restored "
+                    f"{_restored['job_count']} job(s) from pre-update "
+                    f"snapshot {_restored['snapshot_id']}."
+                )
+        except Exception as exc:
+            logger.debug("Sibling cron auto-restore check failed: %s", exc)
 
         _print_update_summary(
             node_failures=node_failures,
@@ -6966,37 +7329,24 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     )
 
             # --- Launchd services (macOS) ---
+            # Restart EVERY ai.hermes.gateway* LaunchAgent, not only the
+            # invoking profile's — parity with the systemd branch above
+            # (#41403). Per-label TimeoutExpired isolation happens inside.
             if is_macos():
                 try:
-                    from hermes_cli.gateway import (
-                        launchd_restart,
-                        get_launchd_label,
-                        get_launchd_plist_path,
+                    _restart_macos_launchd_gateways(
+                        restarted_services,
+                        failed_or_stale_units,
+                        _drain_budget,
                     )
-
-                    plist_path = get_launchd_plist_path()
-                    if plist_path.exists():
-                        check = subprocess.run(
-                            ["launchctl", "list", get_launchd_label()],
-                            capture_output=True,
-                            text=True, encoding="utf-8", errors="replace",
-                            timeout=5,
-                        )
-                        if check.returncode == 0:
-                            try:
-                                launchd_restart()
-                                restarted_services.append(get_launchd_label())
-                            except subprocess.CalledProcessError as e:
-                                stderr = (getattr(e, "stderr", "") or "").strip()
-                                print(f"  ⚠ Gateway restart failed: {stderr}")
-                except (FileNotFoundError, subprocess.TimeoutExpired, ImportError):
+                except (FileNotFoundError, ImportError):
                     pass
 
             # --- Manual (non-service) gateways ---
             # Kill any remaining gateway processes not managed by a service.
             # Exclude PIDs that belong to just-restarted services so we don't
             # immediately kill the process that systemd/launchd just spawned.
-            service_pids = _get_service_pids()
+            service_pids = _get_service_pids(all_profiles=True)
             manual_pids = find_gateway_pids(
                 exclude_pids=service_pids, all_profiles=True
             )
@@ -7149,7 +7499,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # manager can relaunch with fresh code.
             try:
                 _time.sleep(3.0)
-                _service_pids_after = _get_service_pids()
+                _service_pids_after = _get_service_pids(all_profiles=True)
                 _surviving = find_gateway_pids(
                     exclude_pids=_service_pids_after,
                     all_profiles=True,

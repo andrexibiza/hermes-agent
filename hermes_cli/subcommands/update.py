@@ -6,7 +6,50 @@ Handler injected to avoid importing ``main``.
 
 from __future__ import annotations
 
+import sys
+from functools import wraps
 from typing import Callable
+
+
+def _plan_bound_update_handler(cmd_update: Callable) -> Callable:
+    """Bind update admission to the authoritative deployment plan."""
+
+    @wraps(cmd_update)
+    def _handler(args):
+        from hermes_cli.deployment_plan import (
+            DeploymentPlanError,
+            admit_update,
+            load_deployment_plan,
+        )
+        from hermes_cli.update_deployment_guard import (
+            enforce_legacy_update_envelope,
+            validate_update_plan_source,
+        )
+
+        try:
+            validate_update_plan_source()
+            is_check = bool(getattr(args, "check", False))
+            is_plan = bool(getattr(args, "plan", False))
+            if is_plan:
+                # Existing --plan is an observation-only inventory path. Keep it
+                # outside mutation admission just like --check; it must work for
+                # image/external/remote deployments precisely so it can explain
+                # why mutation is unavailable.
+                plan = load_deployment_plan()
+                setattr(args, "_deployment_plan", plan)
+            else:
+                plan = admit_update(args)
+            # Test doubles may return None; production paths always attach a plan.
+            if plan is not None and not (is_check or is_plan):
+                enforce_legacy_update_envelope(plan)
+        except DeploymentPlanError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            if exc.remediation:
+                print(f"  {exc.remediation}", file=sys.stderr)
+            raise SystemExit(2) from exc
+        return cmd_update(args)
+
+    return _handler
 
 
 def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
@@ -30,6 +73,17 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         action="store_true",
         default=False,
         help="Check whether an update is available without installing anything",
+    )
+    update_parser.add_argument(
+        "--plan",
+        action="store_true",
+        default=False,
+        help=(
+            "Show the update plan and exit without changing anything: install "
+            "kind (git/docker/nix), every running Hermes service across all "
+            "profiles with its supervisor and running code version, and how "
+            "each will be restarted. Read-only; safe on a live fleet."
+        ),
     )
     update_parser.add_argument(
         "--no-backup",
@@ -74,6 +128,21 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         ),
     )
     update_parser.add_argument(
+        "--switch-branch",
+        action="store_true",
+        default=False,
+        help=(
+            "With updates.parked_branch_strategy: update_in_place configured, "
+            "override it for this run: switch to the update target and update "
+            "THERE instead of merging the target into the checked-out branch. "
+            "The branch is left exactly as it was — no merge commit is written "
+            "into its history. Use on long-lived feature branches where an "
+            "update-driven merge commit would pollute the branch. No effect "
+            "under the default strategy (switch), which already switches. "
+            "Still refuses to touch a dirty tree."
+        ),
+    )
+    update_parser.add_argument(
         "--force",
         action="store_true",
         default=False,
@@ -85,4 +154,4 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         default=False,
         help="Windows: mutate the venv even while other processes are running from its interpreter (desktop backend, gateway, terminals). Those processes keep native .pyd files locked, so the dependency sync will likely fail partway and strand the install half-updated. Use only if you know the detected holders are false positives.",
     )
-    update_parser.set_defaults(func=cmd_update)
+    update_parser.set_defaults(func=_plan_bound_update_handler(cmd_update))
