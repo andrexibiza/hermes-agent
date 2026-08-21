@@ -1,0 +1,2 @@
+trigger #90623 exact-branch verifier
+synchronize 2
