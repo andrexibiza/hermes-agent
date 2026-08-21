@@ -1,9 +1,8 @@
 name: PR 91079 rollback repair
 
 on:
-  push:
-    branches:
-      - tmp/pr91079-repair-execute
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
@@ -29,4 +28,6 @@ jobs:
           persist-credentials: false
 
       - name: Apply repair and publish exact one-commit branch
+        env:
+          EXPECTED_SOURCE_HEAD: df2a3b6bb2db9b817a855ea8bb479a077a8c7e78
         run: python _pr91079_runner/scripts/pr91079_repair_runner.py
