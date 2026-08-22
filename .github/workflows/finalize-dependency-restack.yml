@@ -1,17 +1,17 @@
 name: Finalize dependency-security restack
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/finalize-dependency-restack.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   finalize:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/finalize-dependency-restack-v2'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
