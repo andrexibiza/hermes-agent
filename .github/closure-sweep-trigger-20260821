@@ -1,1 +1,2 @@
 trigger closure sweep publisher
+synchronize after workflow install
