@@ -202,3 +202,5 @@ if __name__ == "__main__":
         apply()
     else:
         verify()
+
+# synchronization trigger for upstream publication probe
