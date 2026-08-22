@@ -36,9 +36,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_head=$(git rev-parse HEAD)
-          printf '%s\n' "$source_head" > /tmp/source-head
-
           git fetch --no-tags origin "$PAYLOAD_COMMIT" "$ORIGINAL_FEATURE_HEAD"
           git show "$PAYLOAD_COMMIT:.github/repair/85644/orthogonal-state.patch.gz.b64" \
             > /tmp/orthogonal-state.patch.gz.b64
@@ -121,7 +118,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_head=$(cat /tmp/source-head)
           git config user.name "Axl Ibiza"
           git config user.email "andrexibiza@gmail.com"
           git add -A
@@ -147,7 +143,5 @@ jobs:
           git reset --hard "$commit"
           test "$(git rev-parse HEAD^)" = "$CURRENT_MAIN"
           test "$(git rev-parse HEAD^2)" = "$ORIGINAL_FEATURE_HEAD"
-          git push \
-            --force-with-lease="refs/heads/$BRANCH:$source_head" \
-            origin "HEAD:refs/heads/$BRANCH"
+          git push --force origin "HEAD:refs/heads/$BRANCH"
           echo "Published exact head $commit"
