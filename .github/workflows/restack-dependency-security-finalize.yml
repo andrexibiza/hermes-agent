@@ -1,0 +1,62 @@
+name: Finalize dependency-security restack
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/restack-dependency-security-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exact verified artifact
+        env:
+          ARTIFACT_URL: 'https://sdmntprsoutheastus3.oaiusercontent.com/files/00000000-6e1c-820c-9279-b7d2a8fd3084/raw?se=2026-08-22T01%3A14%3A26Z&sp=r&sv=2026-02-06&sr=b&scid=237415e6-18d3-5cab-b3c7-f5d20047adf8&skoid=5c72dd08-68ae-4091-b4e1-40ccec0693ae&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-22T00%3A41%3A41Z&ske=2026-08-23T00%3A41%3A41Z&sks=b&skv=2026-02-06&sig=F5JjFzyFiIfFO5zuP3c6faJsRkDWz1irB2LZJtwxHNg%3D'
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 "$ARTIFACT_URL" -o /tmp/depsec.zip
+          echo 'c7b6139d646fb38f85133b9d90f1bf9a169beb6d8929d0ce639175ceb121322c  /tmp/depsec.zip' | sha256sum -c -
+          mkdir /tmp/depsec
+          unzip -q /tmp/depsec.zip -d /tmp/depsec
+          (cd /tmp/depsec && sha256sum -c SHA256SUMS)
+
+      - name: Build exact current-main delivery commit
+        env:
+          BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
+          BRANCH: restack/dependency-security-final-91906
+        run: |
+          set -euo pipefail
+          git fetch https://github.com/NousResearch/hermes-agent.git "$BASE_SHA"
+          git checkout --detach "$BASE_SHA"
+
+          cp /tmp/depsec/.npmrc .npmrc
+          cp /tmp/depsec/package.json package.json
+          cp /tmp/depsec/package-lock.json package-lock.json
+          cp /tmp/depsec/uv.lock uv.lock
+          mkdir -p apps/desktop/scripts
+          cp /tmp/depsec/apps/desktop/package.json apps/desktop/package.json
+          cp /tmp/depsec/apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.mjs
+          cp /tmp/depsec/apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/packaged-app-layout.test.mjs
+          cp /tmp/depsec/apps/desktop/scripts/test-desktop.mjs apps/desktop/scripts/test-desktop.mjs
+
+          git add -- .npmrc package.json package-lock.json uv.lock apps/desktop/package.json apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/test-desktop.mjs
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 8
+          git config user.name 'Andrex Ibiza, MBA'
+          git config user.email 'andrexibiza@gmail.com'
+          git commit -m 'fix(deps): close current advisory graph on current main' -m 'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.
+
+Co-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>
+Co-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          git rev-parse HEAD
