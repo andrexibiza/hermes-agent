@@ -153,3 +153,5 @@ jobs:
           git config user.email 'andrexibiza@gmail.com'
           git commit -m 'fix(deps): close current advisory graph on current main' -m 'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
           git push --force-with-lease="refs/heads/$BRANCH:$STAGING_SHA" origin "HEAD:refs/heads/$BRANCH"
+
+# trigger: exact fork finalizer
