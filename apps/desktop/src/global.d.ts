@@ -297,6 +297,8 @@ declare global {
       // resolved by Electron independently of the connected backend (#66899).
       // Created on demand; returns the normalized absolute path.
       desktopPluginsRoot?: () => Promise<string>
+      /** LOCAL `<HERMES_HOME>/logs` (profile-aware) — error card "Open Logs". */
+      logsRoot?: () => Promise<string>
       // Local AGENT-plugin root (<HERMES_HOME>/plugins), same Electron-local
       // resolution. The disk door also scans it for `<name>/desktop/plugin.js`
       // so one agent-plugin package can ship a desktop UI half. Optional:
@@ -1311,6 +1313,8 @@ export interface HermesSelectPathsOptions {
   defaultPath?: string
   directories?: boolean
   multiple?: boolean
+  /** Backend profile that produced defaultPath; Electron uses it for WSL gating. */
+  profile?: string
   filters?: Array<{ name: string; extensions: string[] }>
 }
 

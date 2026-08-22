@@ -800,12 +800,25 @@ function durableGroupChatRooms(all = $groupChats.get()) {
     if (!room || !Array.isArray(room.log)) {
       continue
     }
+    // Disband tombstones are runtime-only coordination state (they hold the
+    // epoch bump for an in-flight drive). Persisting one would resurrect the
+    // room as an empty record on the next load AND keep its name "taken" for
+    // same-name recreates. Mirrors updateGroupChat's inline durable map.
+    if (room.tombstone) {
+      continue
+    }
     durable[name] = {
       log: room.log,
       watermarks: room.watermarks || {},
       sessions: room.sessions || {},
       stranded: room.stranded || {},
       members: Array.isArray(room.members) ? room.members : [],
+      // Immutable room identity: without this, a room merged in via the
+      // remote-sync path (the only caller of this function) loses its
+      // roomId on the next cold hydrate and falls back to legacy
+      // name-keyed identity — same field updateGroupChat's inline map
+      // already carries.
+      roomId: typeof room.roomId === 'string' && room.roomId ? room.roomId : null,
       image: room.image || null,
       syncRevision: Math.max(0, Number(room.syncRevision || 0))
     }
@@ -4273,7 +4286,16 @@ async function openStoredBotChat(name, storedId, summary) {
     intent: 'main',
     awaitHydration: true,
     expectHistory,
-    keepAllProfilesScope: true,
+    // Move the WORKSPACE onto this bot, not just the transcript.
+    //
+    // With the default (true) the bot's chat opened against its own backend
+    // while `$activeGatewayProfile` stayed on whatever profile was active
+    // before — so "New session" from inside any bot was created on that other
+    // backend. Measured: four consecutive new chats started from different
+    // bots all landed in the `ops` profile's state.db. Clicking a bot is a
+    // workspace switch in this product (one bot = one workspace), so the
+    // chrome has to follow.
+    keepAllProfilesScope: false,
     retryHydrationTimeoutOnce: true
   })
 
@@ -4361,7 +4383,7 @@ function createCanonicalChat(name) {
 
     if (sid && typeof host.openSession === 'function') {
       try {
-        await host.openSession(sid, { profile: name, intent: 'main', keepAllProfilesScope: true })
+        await host.openSession(sid, { profile: name, intent: 'main', keepAllProfilesScope: false })
         opened = true
       } catch {
         // The stored row may not exist until the kickoff persists it. Retry
@@ -4376,7 +4398,7 @@ function createCanonicalChat(name) {
         await host.request('prompt.submit', { session_id: runtime, text: 'Hey, tell me about yourself!' })
 
         if (!opened && sid && typeof host.openSession === 'function') {
-          await host.openSession(sid, { profile: name, intent: 'main', keepAllProfilesScope: true })
+          await host.openSession(sid, { profile: name, intent: 'main', keepAllProfilesScope: false })
         }
       } catch {
         // The chat already exists. Keep the pin so the next click
@@ -4412,7 +4434,37 @@ function isCanonicalBotChatHistory(history) {
   return rootTitle === 'Bot Chat' || (!rootTitle && title === 'Bot Chat')
 }
 
-async function openBotCanonicalChat(name, pinned, history) {
+/** The bot's newest VISIBLE conversation when it should win over the pin, else
+ *  null.
+ *
+ *  A bot row is a workspace entry point, so it must land on what the user was
+ *  last saying to that bot — not on a pin frozen weeks ago. Guards, all of
+ *  which matter:
+ *   - the canonical Bot Chat itself is never "newer" (it IS the pin), so
+ *     plumbing can't shadow itself;
+ *   - an empty draft is skipped: clicking a bot right after a stray ⌘N would
+ *     otherwise open a blank chat instead of the conversation;
+ *   - identical ids mean the pin already points there — nothing to switch to.
+ *  Returns the stored id so callers keep using the normal open path. */
+function newerVisibleBotChat(pinned, history) {
+  const id = history?.id
+
+  if (!id || id === pinned || isCanonicalBotChatHistory(history)) {
+    return null
+  }
+
+  // `message_count` is absent on older gateways — treat unknown as real
+  // history rather than discarding a legitimate conversation.
+  const count = history?.message_count
+
+  if (typeof count === 'number' && count <= 0) {
+    return null
+  }
+
+  return id
+}
+
+async function openBotCanonicalChat(name, pinned, history, latestVisible) {
   if (!pinned) {
     // Grandfather only an actual Bot Chat. `last_session` is merely the most
     // recent row for the profile; adopting it blindly can claim an unrelated
@@ -4454,6 +4506,38 @@ async function openBotCanonicalChat(name, pinned, history) {
   }
 
   if (preferred && isCanonicalBotChatHistory(preferred)) {
+    // The pin is alive and healthy — but it is not necessarily where the user
+    // left off. Prefer their MOST RECENT real conversation with this bot.
+    //
+    // "One bot = one forever chat" welded each row to a single session: start
+    // a new chat with a bot, click another bot, click back, and the new chat
+    // was stranded behind the pinned transcript ("세션을 다시 만들어도 다른 봇
+    // 갔다가 다시 누르면 그 전 세션으로 돌아와"). A bot row is a workspace
+    // entry point here, so it should land on the live conversation. The pin
+    // keeps owning plumbing — creation, hide sweep, DM delivery — and stays
+    // untouched; it just stops overriding newer work.
+    //
+    // Deliberately AFTER the verification above: with a dead or unverified
+    // pin, adopting the profile's latest row would claim an unrelated user
+    // conversation as the bot's chat (see the "dead pin" safety tests).
+    //
+    // Uses `latestVisible` (the roster's freshest visible session), NOT
+    // `history` — the caller's `history` prefers the pin so preview identity
+    // matches click identity, which means it can never BE the newer chat.
+    // Falls back to `history` for callers that pass only three arguments.
+    const newer = newerVisibleBotChat(pinned, latestVisible ?? history)
+
+    if (newer) {
+      try {
+        await openStoredBotChat(name, newer, history)
+
+        return newer
+      } catch {
+        // Deleted or unreachable — fall back to the verified pin below so the
+        // row is never dead.
+      }
+    }
+
     try {
       await openStoredBotChat(name, preferred.resolved_id || preferred.id, preferred)
       return pinned
@@ -6346,7 +6430,13 @@ function BotRow({ bot, onDelete, onEdit, onGroup }) {
     }
 
     try {
-      const id = await openBotCanonicalChat(bot.name, pinnedChat, previewSession)
+      // `previewSession` prefers the PIN (preview identity must match click
+      // identity), so it can never carry the newer conversation. Pass the
+      // roster's freshest VISIBLE session (`last`) separately — that is what
+      // "open where I left off" needs. Without this the newer-chat preference
+      // was dead code: it always received the pin and short-circuited on
+      // "same id".
+      const id = await openBotCanonicalChat(bot.name, pinnedChat, previewSession, last)
 
       if (generation === botOpenGeneration && id) {
         return
@@ -8922,6 +9012,11 @@ function CreateRoutineDialog({ bot, open, onClose }) {
   const [instruction, setInstruction] = useState('')
   const [sched, setSched] = useState(defaultScheduleState())
   const [continuity, setContinuity] = useState(false)
+  // Where the run's output lands: 'history' = the run session only (Run
+  // history / cron page, today's behavior); 'bot-chat' = inject into this
+  // bot's canonical Bot Chat as a real message — the bot reads it, acts on
+  // it, and responds there (costs the bot one agent turn per run).
+  const [target, setTarget] = useState('history')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const activeProfile = useValue(host.state.profile)
@@ -8932,6 +9027,7 @@ function CreateRoutineDialog({ bot, open, onClose }) {
     setInstruction('')
     setSched(defaultScheduleState())
     setContinuity(false)
+    setTarget('history')
     setBusy(false)
     setError(null)
   }
@@ -8965,7 +9061,11 @@ function CreateRoutineDialog({ bot, open, onClose }) {
         prompt: routinePrompt(bot, title, task, activeProfile),
         ...(bot ? { profile: bot } : {}),
         ...(repeatN ? { repeat: repeatN } : {}),
-        ...(continuity ? { continuity: true } : {})
+        ...(continuity ? { continuity: true } : {}),
+        // 'bot-chat' (bare, no name): the job is created IN the bot's own
+        // cron store (profile scoping above), so the scheduler resolves the
+        // token to that profile — no cross-gateway name ambiguity possible.
+        ...(target === 'bot-chat' ? { deliver: 'bot-chat' } : {})
       })
       await invalidateRoutineOwner(bot)
       host.notify({ kind: 'success', message: `Cronjob "${title}" scheduled` })
@@ -9018,6 +9118,13 @@ function CreateRoutineDialog({ bot, open, onClose }) {
               })
             ),
             labeled('When to run', jsx(SchedulePicker, { state: sched, setState: setSched })),
+            labeled(
+              'Send results to',
+              pickerSelect(target, setTarget, [
+                { id: 'history', label: 'Run history only' },
+                { id: 'bot-chat', label: `${displayName({ name: bot }, $botMeta.get()[bot])}\u2019s chat (bot responds)` }
+              ])
+            ),
             jsxs('label', {
               className: 'flex items-center gap-2 text-xs text-(--ui-text-tertiary) cursor-pointer select-none',
               children: [
@@ -11827,7 +11934,7 @@ export default {
       // sessions pane collapses alone without this flag. The zone then keeps
       // a stranded BOTS tab on screen. The narrow edge overlay mirrors the
       // zone's tab strip, so the pane stays reachable while collapsed.
-      data: { placement: 'left', width: '260px', collapsible: true, showCloseButton: false, hideOnly: true, dock: { pane: 'sessions', pos: 'center', enforce: true } },
+      data: { placement: 'left', width: '260px', collapsible: true, hideOnly: true, dock: { pane: 'sessions', pos: 'center', enforce: true } },
       render: () => jsx(BotsPane, {})
     })
 
