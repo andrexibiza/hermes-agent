@@ -58,11 +58,53 @@ block_pattern = (
 )
 match = re.search(block_pattern, web_test, flags=re.DOTALL)
 if match:
-    block = match.group(1).replace(
+    block = match.group(1)
+    block = block.replace(
+        "def test_update_hermes_returns_docker_guidance_without_spawning(self, monkeypatch):",
+        "def test_update_hermes_returns_docker_guidance_without_spawning(self, monkeypatch, tmp_path):",
+        1,
+    )
+    block = block.replace(
+        "        import hermes_cli.web_server as web_server\n",
+        "        import hermes_cli.image_provenance as image_provenance\n"
+        "        import hermes_cli.web_server as web_server\n",
+        1,
+    )
+    legacy_setup = (
+        "        # Bypass the managed-externally gate so we reach the docker install check.\n"
+        "        monkeypatch.setattr(web_server, \"_dashboard_local_update_managed_externally\", lambda: False)\n"
+        "        monkeypatch.setattr(web_server, \"detect_install_method\", lambda _root: \"docker\")\n"
+    )
+    provenance_setup = (
+        "        # Image-managed refusal is authorized by the baked provenance marker,\n"
+        "        # not by legacy install-method heuristics.  Seed that exact authority\n"
+        "        # so this witness follows the shared perform_update() contract.\n"
+        "        marker = tmp_path / \"image-provenance.json\"\n"
+        "        marker.write_text(\n"
+        "            json.dumps(\n"
+        "                {\n"
+        "                    \"schema\": 1,\n"
+        "                    \"deployment_kind\": \"image\",\n"
+        "                    \"manager\": \"docker\",\n"
+        "                    \"image\": \"nousresearch/hermes-agent\",\n"
+        "                    \"version\": \"0.20.5\",\n"
+        "                    \"revision\": \"f\" * 40,\n"
+        "                }\n"
+        "            ),\n"
+        "            encoding=\"utf-8\",\n"
+        "        )\n"
+        "        monkeypatch.setattr(image_provenance, \"IMAGE_PROVENANCE_PATH\", marker)\n"
+    )
+    if legacy_setup not in block:
+        raise RuntimeError("test_web_server.py: legacy docker setup block not found")
+    block = block.replace(legacy_setup, provenance_setup, 1)
+    block = block.replace(
         'status_data["exit_code"] == 1',
         'status_data["exit_code"] == 2',
     )
     web_test = web_test[:match.start(1)] + block + web_test[match.end(1):]
+else:
+    raise RuntimeError("test_web_server.py: docker guidance test block not found")
 write("tests/hermes_cli/test_web_server.py", web_test)
 
 print("phase3 materialization complete")
