@@ -1,0 +1,4 @@
+source_pr=NousResearch/hermes-agent#76958
+source_head=f435f8baffac2a61a9954749807927eafd2e1fca
+upstream_main=261a4efb90d7dbe4e71786861858f721b4ab730c
+candidate_branch=automation/rebase-76958-candidate-20260822
