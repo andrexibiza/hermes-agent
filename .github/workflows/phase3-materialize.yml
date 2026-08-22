@@ -8,25 +8,40 @@ on:
       - opened
       - synchronize
       - reopened
+  push:
+    branches:
+      - phase3/baked-image-refusal-contract
 
 permissions:
   contents: read
 
 concurrency:
-  group: phase3-materialize-${{ github.event.pull_request.number }}
+  group: phase3-materialize-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   materialize:
-    if: github.head_ref == 'phase3/baked-image-refusal-contract'
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.head_ref == 'phase3/baked-image-refusal-contract') ||
+      (github.event_name == 'push' &&
+       github.ref_name == 'phase3/baked-image-refusal-contract')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Check out exact contributor head
+      - name: Check out exact contributor head for pull request
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Check out exact fork head for publication
+        if: github.event_name == 'push'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Install uv
@@ -56,8 +71,8 @@ jobs:
 
       - name: Verify exact generated path set and manifest
         env:
-          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
-          SOURCE_BASE: ${{ github.event.pull_request.base.sha }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_BASE: ${{ github.event.pull_request.base.sha || '987064caa4f8845f605ac7346fed5b72fddfb21c' }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -147,7 +162,7 @@ jobs:
       - name: Upload exact tested product source
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: phase3-image-refusal-source-${{ github.event.pull_request.head.sha }}
+          name: phase3-image-refusal-source-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             phase3-materialization-manifest.json
             Dockerfile
@@ -160,3 +175,110 @@ jobs:
             tests/hermes_cli/test_web_server.py
           retention-days: 7
           if-no-files-found: error
+
+  publish:
+    name: Publish exact tested product source
+    needs: materialize
+    if: >-
+      github.event_name == 'push' &&
+      github.ref_name == 'phase3/baked-image-refusal-contract'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Download exact tested source
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: phase3-image-refusal-source-${{ github.sha }}
+          path: /tmp/phase3-product
+
+      - name: Verify manifest and publish one product commit
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          artifact = Path("/tmp/phase3-product")
+          manifest = json.loads(
+              (artifact / "phase3-materialization-manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          if manifest.get("schema") != 1:
+              raise SystemExit("unexpected materialization manifest schema")
+          if manifest.get("source_head") != os.environ["EXPECTED_HEAD"]:
+              raise SystemExit(
+                  "materialization source head does not match publication head"
+              )
+
+          expected_paths = {
+              "Dockerfile",
+              "hermes_cli/main.py",
+              "hermes_cli/update_cmd.py",
+              "hermes_cli/update_inventory.py",
+              "hermes_cli/update_receipt.py",
+              "hermes_cli/web_server.py",
+              "tests/hermes_cli/test_cmd_update_docker.py",
+              "tests/hermes_cli/test_web_server.py",
+          }
+          rows = manifest.get("paths")
+          if not isinstance(rows, list):
+              raise SystemExit("materialization manifest paths are missing")
+          actual_paths = {row.get("path") for row in rows}
+          if actual_paths != expected_paths:
+              raise SystemExit(
+                  "unexpected manifest path set: "
+                  f"missing={sorted(expected_paths - actual_paths)} "
+                  f"extra={sorted(actual_paths - expected_paths)}"
+              )
+
+          for row in rows:
+              path = row["path"]
+              source = artifact / path
+              payload = source.read_bytes()
+              if len(payload) != row["bytes"]:
+                  raise SystemExit(f"{path}: byte length does not match manifest")
+              if hashlib.sha256(payload).hexdigest() != row["sha256"]:
+                  raise SystemExit(f"{path}: digest does not match manifest")
+              destination = Path(path)
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source, destination)
+          PY
+
+          git rm -- \
+            .github/workflows/phase3-materialize.yml \
+            .phase3-trigger \
+            .phase3-trigger-2 \
+            .phase3-trigger-3 \
+            .phase3_patch_1.py \
+            .phase3_patch_2.py \
+            .phase3_patch_3.py
+          git add -- \
+            Dockerfile \
+            hermes_cli/main.py \
+            hermes_cli/update_cmd.py \
+            hermes_cli/update_inventory.py \
+            hermes_cli/update_receipt.py \
+            hermes_cli/web_server.py \
+            tests/hermes_cli/test_cmd_update_docker.py \
+            tests/hermes_cli/test_web_server.py
+          git diff --cached --check
+          git config user.name "Axl Ibiza"
+          git config user.email "andrexibiza@gmail.com"
+          git commit -m "feat(update): enforce image-managed update refusal contract"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
