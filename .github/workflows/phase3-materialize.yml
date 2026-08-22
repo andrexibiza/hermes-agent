@@ -1,0 +1,92 @@
+name: phase3-materialize
+
+on:
+  push:
+    branches:
+      - phase3/baked-image-refusal-contract
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase3-materialize
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.event.head_commit.message == 'stage phase3 workflow materializer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e8a35333f2a663f654e263c9d42fdded51a6cd63
+
+      - name: Materialize scoped Phase 3 implementation
+        run: |
+          python .phase3_patch_1.py
+          python .phase3_patch_2.py
+          python .phase3_patch_3.py
+          python -m compileall -q \
+            hermes_cli/image_provenance.py \
+            hermes_cli/update_contract.py \
+            hermes_cli/update_inventory.py \
+            hermes_cli/update_receipt.py \
+            hermes_cli/update_cmd.py \
+            hermes_cli/main.py \
+            hermes_cli/web_server.py
+          git diff --check
+
+      - name: Install locked test environment
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Run focused lint
+        run: |
+          uv run ruff check \
+            hermes_cli/image_provenance.py \
+            hermes_cli/update_contract.py \
+            hermes_cli/update_inventory.py \
+            hermes_cli/update_receipt.py \
+            tests/hermes_cli/test_image_provenance.py \
+            tests/hermes_cli/test_update_inventory_image_provenance.py \
+            tests/hermes_cli/test_update_contract.py \
+            tests/hermes_cli/test_update_image_entrypoints.py \
+            tests/tools/test_dockerfile_image_provenance.py
+
+      - name: Run focused updater and image contracts
+        run: |
+          uv run pytest -q \
+            tests/hermes_cli/test_image_provenance.py \
+            tests/hermes_cli/test_update_inventory_image_provenance.py \
+            tests/hermes_cli/test_update_contract.py \
+            tests/hermes_cli/test_update_image_entrypoints.py \
+            tests/hermes_cli/test_cmd_update_docker.py \
+            tests/hermes_cli/test_update_inventory.py \
+            tests/hermes_cli/test_update_receipt.py \
+            tests/tools/test_dockerfile_image_provenance.py \
+            tests/tools/test_dockerfile_immutable_install.py
+          uv run pytest -q tests/hermes_cli/test_web_server.py \
+            -k 'update_hermes_returns_docker_guidance_without_spawning or update_hermes_returns_apt_guidance_without_spawning'
+
+      - name: Commit exact tested implementation
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name 'Axl Ibiza'
+          git config user.email '84248988+andrexibiza@users.noreply.github.com'
+          git add \
+            Dockerfile \
+            hermes_cli/main.py \
+            hermes_cli/update_cmd.py \
+            hermes_cli/update_inventory.py \
+            hermes_cli/update_receipt.py \
+            hermes_cli/web_server.py \
+            tests/hermes_cli/test_cmd_update_docker.py \
+            tests/hermes_cli/test_web_server.py
+          git commit -m 'fix(update): refuse mutation in image-managed runtimes'
+          git push origin HEAD:"${BRANCH}"
