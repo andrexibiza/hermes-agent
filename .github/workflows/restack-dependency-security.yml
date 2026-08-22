@@ -2,6 +2,9 @@ name: Restack dependency-security remediation
 
 on:
   pull_request:
+  push:
+    branches:
+      - restack/pr89479-current-main
 
 permissions:
   contents: write
@@ -18,7 +21,7 @@ jobs:
       - name: Check out exact restack object
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Set up Node
@@ -73,16 +76,16 @@ jobs:
       - name: Upload exact-object generation artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dependency-security-restack-${{ github.event.pull_request.head.sha }}
+          name: dependency-security-restack-${{ github.event.pull_request.head.sha || github.sha }}
           path: generated/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish exact final object to upstream staging branch
+      - name: Publish exact final object to fork branch
+        if: github.event_name == 'push'
         env:
           BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
-          BRANCH: axl/depsec-final-91906
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -92,7 +95,7 @@ jobs:
           cp apps/desktop/package.json "$tmp/apps/desktop/package.json"
           cp apps/desktop/scripts/packaged-app-layout.mjs "$tmp/apps/desktop/scripts/"
           cp apps/desktop/scripts/packaged-app-layout.test.mjs "$tmp/apps/desktop/scripts/"
-          cp apps/desktop/scripts/test-desktop.mjs "$tmp/apps/desktop/scripts/"
+          cp apps/desktop/scripts/test-desktop.mjs "$tmp/apps/desktop/scripts/test-desktop.mjs"
 
           git reset --hard "$BASE_SHA"
           cp "$tmp/.npmrc" .npmrc
@@ -110,5 +113,5 @@ jobs:
           git config user.name 'Andrex Ibiza, MBA'
           git config user.email 'andrexibiza@gmail.com'
           git commit -m 'fix(deps): close current advisory graph on current main' -m 'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/NousResearch/hermes-agent.git"
-          git push --force origin "HEAD:refs/heads/$BRANCH"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin "HEAD:${GITHUB_REF}"
