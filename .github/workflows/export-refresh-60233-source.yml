@@ -6,7 +6,7 @@ on:
       - tmp/refresh-60233-source
   pull_request:
     branches:
-      - architecture/deployment-transaction-authority
+      - tmp/refresh-60233-source
 
 permissions:
   contents: read
