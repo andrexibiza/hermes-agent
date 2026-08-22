@@ -2366,6 +2366,7 @@ class MCPServerTask:
         "_rpc_lock", "_pending_refresh_tasks",
         "_pending_call_context",
         "_inflight_tasks", "_reconnecting",
+        "_rpc_generation", "_admitting_generation",
         "_lifecycle_started_at", "_last_tool_call_at",
         "_idle_timeout_seconds", "_max_lifetime_seconds", "_recycled_reason",
         "initialize_result", "_ping_unsupported", "_list_cache_meta",
@@ -2437,6 +2438,39 @@ class MCPServerTask:
         # than a raw cancel.
         self._inflight_tasks: set[asyncio.Task] = set()
         self._reconnecting: bool = False
+        # Per-generation RPC admission gate (#48069 second-round rework).
+        #
+        # ``self.session`` publishes the CURRENTLY-USABLE ClientSession, but a
+        # non-None ``self.session`` alone does NOT mean the session still
+        # accepts new work: between the moment a reconnect/shutdown lifecycle
+        # event fires and the moment the outer ``run()`` finally clears
+        # ``self.session``, the transport async contexts are unwinding while
+        # the OLD session object is still published. A user RPC arriving in
+        # that teardown window would otherwise be admitted AFTER the only
+        # cancellation sweep and enqueue against a retiring transport that has
+        # no teardown owner (the #30268 orphan/strand defect class).
+        #
+        # ``_rpc_generation`` monotonically identifies the live session
+        # generation; it is bumped every time a fresh session is published.
+        # ``_admitting_generation`` names the generation that is currently
+        # ACCEPTING new RPCs. When a lifecycle transition begins draining a
+        # generation it sets ``_admitting_generation = None`` (or, on the way
+        # into the next healthy wait, to that next generation's id) BEFORE the
+        # cancellation sweep and BEFORE the transport unwinds. A handler that
+        # captures generation G at admission time and finds
+        # ``_admitting_generation != G`` must refuse to enqueue against the
+        # retiring session and instead rendezvous with the next generation
+        # (retryable reconnect result), so no call is ever admitted to a
+        # session that is already draining. Single-loop access, no lock.
+        #
+        # Default is OPEN (admitting generation 0) rather than None so a
+        # freshly-constructed server behaves exactly like the pre-gate code
+        # until a lifecycle transition explicitly drains it. Production
+        # handlers already guard on ``self.session is not None`` before
+        # entering ``_track_inflight_rpc``, so admission is only consulted once
+        # a real session has been published (generation >= 1).
+        self._rpc_generation: int = 0
+        self._admitting_generation: Optional[int] = 0
         now = time.monotonic()
         self._lifecycle_started_at: float = now
         self._last_tool_call_at: float = now
@@ -2608,6 +2642,10 @@ class MCPServerTask:
     def _mark_stdio_recycled(self, reason: str) -> None:
         """Mark a stdio session dormant before its transport finishes closing."""
         self._recycled_reason = reason
+        # Close RPC admission for the retiring generation before the session
+        # is unpublished, so a call racing the recycle cannot be admitted to
+        # the dormant transport (#48069). Mirrors the reconnect/shutdown exits.
+        self._close_rpc_admission()
         self.session = None
 
     # ----- Dynamic tool discovery (notifications/tools/list_changed) -----
@@ -2905,6 +2943,14 @@ class MCPServerTask:
         # prior cycle. New in-flight requests on this fresh session must not
         # be treated as reconnect casualties by their CancelledError handlers.
         self._reconnecting = False
+        # Re-open RPC admission for the live generation (#48069). A prior
+        # cycle's exit closed admission (``_admitting_generation = None``);
+        # arriving here means the session is established and serving, so the
+        # current generation must accept new RPCs again. ``_publish_session``
+        # already opens admission on the normal transport paths, but doing it
+        # here as well makes the gate robust to any path that (re)enters the
+        # healthy wait after a drain (e.g. a session swapped in directly).
+        self._admitting_generation = self._rpc_generation
 
         shutdown_task = asyncio.create_task(self._shutdown_event.wait())
         reconnect_task = asyncio.create_task(self._reconnect_event.wait())
@@ -2980,11 +3026,55 @@ class MCPServerTask:
                         pass
 
         if self._shutdown_event.is_set():
+            # Close RPC admission for THIS generation before the cancellation
+            # sweep and before the transport unwinds (#48069). A user RPC that
+            # arrives in the teardown window (self.session still published) is
+            # then refused by _track_inflight_rpc rather than admitted after
+            # the only sweep. This must happen even when there are zero active
+            # RPCs — the sharp case where _fail_inflight_calls would otherwise
+            # return immediately without flipping any teardown state.
+            self._close_rpc_admission()
             self._fail_inflight_calls("shutdown")
             return "shutdown"
         self._reconnect_event.clear()
+        self._close_rpc_admission()
         self._fail_inflight_calls("reconnect")
         return "reconnect"
+
+    def _publish_session(self, session: Any) -> None:
+        """Publish a freshly established ClientSession as a NEW generation.
+
+        Bumps ``_rpc_generation`` and opens admission for it BEFORE storing
+        ``self.session`` so a handler that observes the non-None session also
+        observes an admitting generation. Every transport path (stdio, SSE,
+        streamable-HTTP old/new) calls this instead of assigning
+        ``self.session`` directly, so the generation counter can never skew
+        from the published session. See the ``_rpc_generation`` /
+        ``_admitting_generation`` contract in ``__init__`` (#48069).
+        """
+        self._rpc_generation += 1
+        self._admitting_generation = self._rpc_generation
+        self.session = session
+
+    def _close_rpc_admission(self) -> None:
+        """Atomically stop admitting NEW RPCs to the current generation.
+
+        Called at the very start of a lifecycle transition (reconnect /
+        shutdown / recycle / transport-group drop), BEFORE the cancellation
+        sweep and BEFORE the transport async contexts unwind. Setting
+        ``_admitting_generation = None`` closes the admission gate that
+        ``_track_inflight_rpc`` checks: any user RPC arriving in the teardown
+        window (while ``self.session`` still publishes the retiring generation)
+        is refused and rendezvous with the next generation instead of
+        enqueuing against a session that has no teardown owner.
+
+        This runs synchronously (no ``await``), so it cannot interleave with
+        ``_track_inflight_rpc``'s own synchronous admit-and-register section:
+        a late call is therefore EITHER registered before this closes (and so
+        cancelled by the ensuing sweep) OR refused after it, never both
+        admitted and outside the sweep. Idempotent.
+        """
+        self._admitting_generation = None
 
     def _fail_inflight_calls(self, reason: str) -> None:
         """Cancel in-flight user-visible RPC tasks before the session tears down.
@@ -3214,7 +3304,7 @@ class MCPServerTask:
                     self.initialize_result = await self._negotiate_session(
                         session, connect_timeout
                     )
-                    self.session = session
+                    self._publish_session(session)
                     self._mark_lifecycle_started()
                     await self._discover_tools()
                     self._ready.set()
@@ -3437,6 +3527,13 @@ class MCPServerTask:
             "(%r) — reconnecting immediately instead of backing off",
             self.name, eg,
         )
+        # The transport TaskGroup failure escaped the ClientSession context, so
+        # _wait_for_lifecycle_event's normal exit (which closes admission and
+        # sweeps in-flight calls) did NOT run. Close admission for the retiring
+        # generation and sweep here so a call racing the dropped transport is
+        # refused rather than admitted after teardown (#48069).
+        self._close_rpc_admission()
+        self._fail_inflight_calls("reconnect")
         return "reconnect"
 
     async def _run_http(self, config: dict):
@@ -3586,7 +3683,7 @@ class MCPServerTask:
                         self.initialize_result = await self._negotiate_session(
                             session, float(connect_timeout)
                         )
-                        self.session = session
+                        self._publish_session(session)
                         await self._discover_tools()
                         self._ready.set()
                         # Session is live again: clear any breaker state from a
@@ -3651,7 +3748,7 @@ class MCPServerTask:
                             self.initialize_result = await self._negotiate_session(
                                 session, float(connect_timeout)
                             )
-                            self.session = session
+                            self._publish_session(session)
                             await self._discover_tools()
                             self._ready.set()
                             # Session is live again: clear any breaker state from
@@ -3698,7 +3795,7 @@ class MCPServerTask:
                         self.initialize_result = await self._negotiate_session(
                             session, float(connect_timeout)
                         )
-                        self.session = session
+                        self._publish_session(session)
                         await self._discover_tools()
                         self._ready.set()
                         # Session is live again: clear any breaker state from a
@@ -5813,6 +5910,19 @@ def _track_inflight_rpc(server, server_name: str, op: str):
     get/list) runs on the MCP event loop inside ``server._rpc_lock``. Wrapping
     the request in this context manager:
 
+      * enforces PER-GENERATION admission: the retiring ClientSession
+        generation stops accepting new RPCs the instant a lifecycle
+        transition begins (``_close_rpc_admission`` sets
+        ``_admitting_generation = None``), BEFORE the cancellation sweep and
+        BEFORE the transport unwinds. A call that arrives in that teardown
+        window (while ``server.session`` still publishes the old generation)
+        is REFUSED with a clean, retryable ``RuntimeError`` and never enqueued
+        against the draining session — closing the late-admission race
+        (#48069). The admission read and the ``_inflight_tasks`` registration
+        below run with NO ``await`` between them, so they cannot interleave
+        with the synchronous ``_close_rpc_admission`` on the same loop: a late
+        call is EITHER admitted-then-registered (and thus cancelled by the
+        ensuing sweep) OR refused, never both admitted and outside the sweep;
       * adds the current task to ``server._inflight_tasks`` so
         ``_wait_for_lifecycle_event`` skips the keepalive while the request is
         active and ``_fail_inflight_calls`` can cancel it on teardown; and
@@ -5827,9 +5937,35 @@ def _track_inflight_rpc(server, server_name: str, op: str):
 
     @contextlib.asynccontextmanager
     async def _cm():
+        # --- Synchronous admission gate (no await until after registration) ---
+        # ``_admitting_generation`` is None while a generation is draining
+        # (set by _close_rpc_admission at the start of every lifecycle
+        # transition). Legacy/synthetic servers that predate the generation
+        # gate leave the attribute absent → treat as admitting (open) so the
+        # bookkeeping-only tests and any external caller keep working.
+        admitting = getattr(server, "_admitting_generation", 0)
+        if admitting is None:
+            # The published session is retiring; do NOT enqueue against it.
+            # Surface the same retryable error a teardown-cancel produces so
+            # the agent retries on the next generation (controlled reconnect
+            # result, never a strand).
+            raise RuntimeError(
+                f"MCP server '{server_name}' reconnected during "
+                f"{op} (transport reset); retry the request."
+            )
+        # Pin the generation we were admitted to. If a drain starts after this
+        # point we are already in _inflight_tasks and the sweep cancels us
+        # (handled by the _reconnecting branch below); either way we never run
+        # against a session admitted for a different generation.
+        #
+        # ``_inflight_tasks`` is read defensively (getattr) for the same reason
+        # as the admission attribute: synthetic server doubles used in unit
+        # tests may not carry it, and a missing set simply means "no teardown
+        # bookkeeping" rather than an error.
+        inflight = getattr(server, "_inflight_tasks", None)
         task = asyncio.current_task()
-        if task is not None:
-            server._inflight_tasks.add(task)
+        if task is not None and inflight is not None:
+            inflight.add(task)
         try:
             yield
         except asyncio.CancelledError:
@@ -5844,8 +5980,8 @@ def _track_inflight_rpc(server, server_name: str, op: str):
                 ) from None
             raise
         finally:
-            if task is not None:
-                server._inflight_tasks.discard(task)
+            if task is not None and inflight is not None:
+                inflight.discard(task)
 
     return _cm()
 

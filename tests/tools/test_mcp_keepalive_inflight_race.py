@@ -432,3 +432,220 @@ def test_reconnecting_flag_reset_on_entry_to_healthy_wait():
     # Entry clears it; the shutdown exit only re-sets it if there were
     # in-flight tasks (there are none here), so it stays False.
     assert asyncio.run(drive()) is False
+
+
+# ---------------------------------------------------------------------------
+# Generation late-admission tests (#48069 second round). The prior fix left a
+# deterministic teardown window: `_wait_for_lifecycle_event` runs ONE
+# `_fail_inflight_calls` sweep then returns, but `self.session` still publishes
+# the OLD generation until run()'s outer finally clears it — AFTER the
+# transport async contexts unwind. With ZERO active RPCs the sweep returned
+# immediately (never flipping `_reconnecting`), so a user RPC arriving in that
+# window would see a non-None session and be admitted AFTER the only
+# cancellation sweep, racing a retiring transport with no teardown owner. These
+# tests prove the per-generation admission gate closes that window.
+# ---------------------------------------------------------------------------
+
+
+def test_reconnect_closes_admission_with_zero_active_rpcs():
+    """The sharp zero-active-RPC case: a reconnect fires with NO in-flight
+    tasks; the lifecycle exit must still CLOSE admission for the retiring
+    generation (``_admitting_generation is None``) even though
+    ``_fail_inflight_calls`` short-circuits and never flips ``_reconnecting``.
+    """
+    server = _make_lifecycle_server("gen-close-zero")
+    fake = _FakeSession()
+    # Publish a real generation the way the transport paths do.
+    server._publish_session(fake)
+    assert server._admitting_generation == server._rpc_generation == 1
+
+    async def drive():
+        # Reconnect with ZERO active RPCs.
+        server._reconnect_event.set()
+        reason = await asyncio.wait_for(
+            server._wait_for_lifecycle_event(), timeout=5.0
+        )
+        return reason
+
+    reason = asyncio.run(drive())
+    assert reason == "reconnect"
+    # Admission for the retiring generation is CLOSED even though there were
+    # no tasks to sweep (the zero-active-call case that never flips
+    # _reconnecting).
+    assert server._admitting_generation is None
+    assert server._reconnecting is False  # no tasks → flag never set
+
+
+def test_late_call_in_teardown_window_is_refused_not_admitted():
+    """Hold the retiring session PUBLISHED after the lifecycle event returns
+    (modelling the run() teardown window where the transport is still
+    unwinding), then submit a user RPC. The late call must be REFUSED by the
+    admission gate — never registered against the retiring generation — and the
+    caller must get a controlled, retryable reconnect result rather than a hang
+    or a strand.
+    """
+    from tools.mcp_tool import _track_inflight_rpc
+
+    server = _make_lifecycle_server("gen-late-refuse")
+
+    handler_invoked = {"count": 0}
+
+    class _RetiringSession:
+        """Its call_tool must NEVER run for the late call."""
+
+        async def call_tool(self, *a, **k):
+            handler_invoked["count"] += 1
+            return "should-never-happen"
+
+    retiring = _RetiringSession()
+    server._publish_session(retiring)
+    gen_before = server._rpc_generation
+
+    async def drive():
+        # --- Reconnect fires with zero active RPCs; lifecycle returns. ---
+        server._reconnect_event.set()
+        reason = await asyncio.wait_for(
+            server._wait_for_lifecycle_event(), timeout=5.0
+        )
+        assert reason == "reconnect"
+        # Barrier: the retiring session is STILL published (run()'s outer
+        # finally has not cleared it yet — transport is unwinding).
+        assert server.session is retiring
+        assert server._admitting_generation is None
+
+        # A NEW user RPC arrives in this teardown window. It observes a
+        # non-None session, but the admission gate must refuse it.
+        async def _late_call():
+            async with _track_inflight_rpc(server, server.name, "tools/call"):
+                # If admission were (wrongly) granted, this handler would run
+                # against the retiring session.
+                async with server._rpc_lock:
+                    return await server.session.call_tool("x")
+
+        outcome = {}
+        try:
+            await asyncio.wait_for(asyncio.create_task(_late_call()), timeout=2.0)
+            outcome["result"] = "admitted"
+        except RuntimeError as exc:
+            outcome["error"] = str(exc)
+        except asyncio.TimeoutError:
+            outcome["result"] = "hung"
+        return outcome
+
+    outcome = asyncio.run(drive())
+    # (a) The retiring session handler was NEVER invoked for the late call.
+    assert handler_invoked["count"] == 0
+    # (b) The caller did not hang or strand — it got the controlled retryable
+    #     reconnect error.
+    assert "error" in outcome, outcome
+    assert "reconnected during" in outcome["error"]
+    assert "retry the request" in outcome["error"]
+    # The late call was never registered as in-flight against the old gen.
+    assert server._inflight_tasks == set()
+    # Generation did not advance from the refusal itself (a real rebuild would
+    # publish a new generation via _publish_session).
+    assert server._rpc_generation == gen_before
+
+
+def test_next_generation_reopens_admission_for_new_calls():
+    """After the retiring generation drains, a rebuilt session (new
+    generation) must REOPEN admission so subsequent calls run normally. Proves
+    the gate is generation-scoped, not a stuck one-way latch.
+    """
+    from tools.mcp_tool import _track_inflight_rpc
+
+    server = _make_lifecycle_server("gen-reopen")
+    fake_old = _FakeSession()
+    server._publish_session(fake_old)
+
+    async def drive():
+        # Drain generation 1.
+        server._reconnect_event.set()
+        await asyncio.wait_for(server._wait_for_lifecycle_event(), timeout=5.0)
+        assert server._admitting_generation is None
+
+        # Rebuild: publish generation 2 the way a transport path does.
+        fake_new = _FakeSession()
+        server._publish_session(fake_new)
+        assert server._rpc_generation == 2
+        assert server._admitting_generation == 2
+
+        # A call on the fresh generation is admitted and runs to completion.
+        ran = {"ok": False}
+
+        async def _work():
+            async with _track_inflight_rpc(server, server.name, "tools/call"):
+                ran["ok"] = True
+
+        await asyncio.create_task(_work())
+        return ran["ok"]
+
+    assert asyncio.run(drive()) is True
+    assert server._inflight_tasks == set()
+
+
+def test_shutdown_closes_admission_with_zero_active_rpcs():
+    """Shutdown analogue of the zero-active-RPC teardown window: shutdown with
+    no in-flight tasks must also close admission for the retiring generation so
+    a call racing the shutdown is refused, not admitted to a session whose
+    transport is unwinding toward exit.
+    """
+    from tools.mcp_tool import _track_inflight_rpc
+
+    server = _make_lifecycle_server("gen-shutdown-zero")
+    retiring = _FakeSession()
+    server._publish_session(retiring)
+
+    handler_ran = {"count": 0}
+
+    async def drive():
+        server._shutdown_event.set()
+        reason = await asyncio.wait_for(
+            server._wait_for_lifecycle_event(), timeout=5.0
+        )
+        assert reason == "shutdown"
+        assert server._admitting_generation is None
+        # Session still published (outer teardown not yet run); a late call is
+        # refused rather than admitted.
+        assert server.session is retiring
+
+        async def _late_call():
+            async with _track_inflight_rpc(server, server.name, "tools/call"):
+                handler_ran["count"] += 1
+
+        error = None
+        try:
+            await asyncio.create_task(_late_call())
+        except RuntimeError as exc:
+            error = str(exc)
+        return error
+
+    error = asyncio.run(drive())
+    assert handler_ran["count"] == 0
+    assert error is not None and "reconnected during" in error
+
+
+def test_publish_session_bumps_generation_monotonically():
+    """Each transport (re)connect publishes a new, strictly increasing
+    generation and opens admission for exactly that generation.
+    """
+    server = _make_lifecycle_server("gen-monotonic")
+    assert server._rpc_generation == 0
+    assert server._admitting_generation == 0  # open pre-publish (legacy parity)
+
+    s1 = _FakeSession()
+    server._publish_session(s1)
+    assert server._rpc_generation == 1
+    assert server._admitting_generation == 1
+    assert server.session is s1
+
+    server._close_rpc_admission()
+    assert server._admitting_generation is None
+    assert server._rpc_generation == 1  # counter unchanged by a drain
+
+    s2 = _FakeSession()
+    server._publish_session(s2)
+    assert server._rpc_generation == 2
+    assert server._admitting_generation == 2
+    assert server.session is s2
+
