@@ -1,0 +1,33 @@
+name: tmp-pr89461-authority-repair
+
+on:
+  push:
+    branches:
+      - tmp/pr89461-authority-repair
+    paths:
+      - .github/workflows/tmp-pr89461-authority-repair.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect staged parent bytes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/browser_exec_egress_guard.py')
+          data = p.read_bytes()
+          print('length', len(data))
+          print('sha256', __import__('hashlib').sha256(data).hexdigest())
+          print('window', repr(data[14680:14780]))
+          try:
+              compile(data, str(p), 'exec')
+          except Exception as exc:
+              print('compile_error', repr(exc))
+              raise
+          PY
