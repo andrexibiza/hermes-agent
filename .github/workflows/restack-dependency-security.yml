@@ -2,9 +2,6 @@ name: Restack dependency-security remediation
 
 on:
   pull_request:
-  push:
-    branches:
-      - restack/pr89479-current-main
 
 permissions:
   contents: write
@@ -15,14 +12,13 @@ concurrency:
 
 jobs:
   generate-and-verify:
-    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - name: Check out exact restack object
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Set up Node
@@ -77,55 +73,17 @@ jobs:
       - name: Upload exact-object generation artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dependency-security-restack-${{ github.event.pull_request.head.sha || github.sha }}
+          name: dependency-security-restack-${{ github.event.pull_request.head.sha }}
           path: generated/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
-  finalize-on-fork:
-    if: github.repository == 'andrexibiza/hermes-agent' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - name: Check out exact staging head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.22.0
-
-      - name: Use repository-authorized npm
-        run: npm install --global npm@11.17.0
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Generate and verify final dependency graph
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/restack_dependency_security.py apply
-          npm install --package-lock-only --ignore-scripts --include=optional
-          npm update nanoid --package-lock-only --ignore-scripts --include=optional
-          uv lock --upgrade-package 'h2==4.4.1'
-          python3 .github/scripts/restack_dependency_security.py verify
-          node --test apps/desktop/scripts/packaged-app-layout.test.mjs
-          uv lock --check
-          git diff --check
-          npm audit --workspaces=false --audit-level=high
-          npm audit --workspace web --audit-level=high
-          npm audit --workspace ui-tui --audit-level=high
-          npm audit --workspace apps/desktop --audit-level=high
-
-      - name: Collapse staging lane to one exact current-main commit
+      - name: Publish exact final object to upstream staging branch
         env:
           BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
-          STAGING_SHA: ${{ github.sha }}
-          BRANCH: restack/pr89479-current-main
+          BRANCH: axl/depsec-final-91906
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
@@ -152,6 +110,5 @@ jobs:
           git config user.name 'Andrex Ibiza, MBA'
           git config user.email 'andrexibiza@gmail.com'
           git commit -m 'fix(deps): close current advisory graph on current main' -m 'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
-          git push --force-with-lease="refs/heads/$BRANCH:$STAGING_SHA" origin "HEAD:refs/heads/$BRANCH"
-
-# trigger: exact fork finalizer
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/NousResearch/hermes-agent.git"
+          git push --force origin "HEAD:refs/heads/$BRANCH"
