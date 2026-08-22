@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
 
       - name: Assert staging head
-        run: test "$(git rev-parse HEAD)" = "c35060427bbd1011604502e9d4a4a2121e03a500"
+        run: test "$(git rev-parse HEAD)" = "18eb288092b3230911454e822f10d93aef190d91"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -53,8 +53,8 @@ jobs:
 
       - name: Publish one exact current-main commit
         env:
-          BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
-          STAGING_SHA: c35060427bbd1011604502e9d4a4a2121e03a500
+          BASE_SHA: 7d6db4efb885856078e4d19f804035226df81e0d
+          STAGING_SHA: 18eb288092b3230911454e822f10d93aef190d91
           BRANCH: restack/pr89479-current-main
         run: |
           set -euo pipefail
@@ -79,7 +79,7 @@ jobs:
 
           git add -- .npmrc package.json package-lock.json uv.lock apps/desktop/package.json apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/test-desktop.mjs
           git diff --cached --check
-          git config user.name 'Andrex Ibiza, MBA'
+          git config user.name 'Axl Ibiza, MBA'
           git config user.email 'andrexibiza@gmail.com'
           git commit -m 'fix(deps): close current advisory graph on current main' -m 'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
           git push --force-with-lease="refs/heads/$BRANCH:$STAGING_SHA" origin "HEAD:refs/heads/$BRANCH"
