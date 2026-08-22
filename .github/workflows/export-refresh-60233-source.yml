@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - tmp/refresh-60233-source
+  pull_request:
+    branches:
+      - architecture/deployment-transaction-authority
 
 permissions:
   contents: read
