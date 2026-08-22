@@ -1,20 +1,24 @@
 name: phase3-materialize
 
 on:
-  push:
+  pull_request:
     branches:
-      - phase3/baked-image-refusal-contract
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
 
 concurrency:
-  group: phase3-materialize
+  group: phase3-materialize-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   materialize:
-    if: github.event.head_commit.message == 'stage phase3 workflow materializer'
+    if: github.head_ref == 'phase3/baked-image-refusal-contract'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -22,7 +26,7 @@ jobs:
         uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@e8a35333f2a663f654e263c9d42fdded51a6cd63
@@ -75,7 +79,7 @@ jobs:
 
       - name: Commit exact tested implementation
         env:
-          BRANCH: ${{ github.ref_name }}
+          BRANCH: ${{ github.head_ref }}
         run: |
           git config user.name 'Axl Ibiza'
           git config user.email '84248988+andrexibiza@users.noreply.github.com'
