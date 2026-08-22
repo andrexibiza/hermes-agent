@@ -1,0 +1,93 @@
+name: Publish PR 91906 from verified artifact bytes (temporary)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-pr91906-from-artifact-temp.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-pr91906-from-artifact
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: restack/pr89479-current-main
+      STAGING_SHA: 18eb288092b3230911454e822f10d93aef190d91
+      BASE_SHA: 7d6db4efb885856078e4d19f804035226df81e0d
+      ARTIFACT_URL: https://sdmntprjapaneast.oaiusercontent.com/files/00000000-d080-8209-9942-31d50e681718/raw?se=2026-08-22T04%3A09%3A28Z&sp=r&sv=2026-02-06&sr=b&scid=be1f2717-4c19-5205-bb40-9a1a9a035430&skoid=03727f49-62d3-42ac-8350-1c0e6559d238&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-22T02%3A53%3A47Z&ske=2026-08-23T02%3A53%3A47Z&sks=b&skv=2026-02-06&sig=w/Yd7tM5JHq74HszG3tQtPM%2BiONIO1gcNY91a83hzH4%3D
+    steps:
+      - name: Check out exact staging branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Gate exact staging object
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$STAGING_SHA"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+
+      - name: Download and verify the independently read-back artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --retry-all-errors "$ARTIFACT_URL" -o /tmp/payload.zip
+          rm -rf /tmp/payload
+          mkdir -p /tmp/payload
+          unzip -q /tmp/payload.zip -d /tmp/payload
+          cd /tmp/payload
+          sha256sum -c SHA256SUMS
+          test "$(sha256sum package-lock.json | cut -d' ' -f1)" = '025cdcc245dbccda191c41c001a57f6aa9dfcaefa4ccc19aed418f28d918e84a'
+          test "$(sha256sum uv.lock | cut -d' ' -f1)" = 'c72c4fe0e636f971564432599f60257e040b0d3396061fe733610575a48aaaa3'
+
+      - name: Publish one clean eight-file commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard "$BASE_SHA"
+          cp /tmp/payload/.npmrc .npmrc
+          cp /tmp/payload/package.json package.json
+          cp /tmp/payload/package-lock.json package-lock.json
+          cp /tmp/payload/uv.lock uv.lock
+          mkdir -p apps/desktop/scripts
+          cp /tmp/payload/apps/desktop/package.json apps/desktop/package.json
+          cp /tmp/payload/apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.mjs
+          cp /tmp/payload/apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/packaged-app-layout.test.mjs
+          cp /tmp/payload/apps/desktop/scripts/test-desktop.mjs apps/desktop/scripts/test-desktop.mjs
+
+          sha256sum -c /tmp/payload/SHA256SUMS
+          git add -- .npmrc package.json package-lock.json uv.lock apps/desktop/package.json apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/test-desktop.mjs
+          git diff --cached --check
+          cat > /tmp/expected-files <<'FILES'
+          .npmrc
+          apps/desktop/package.json
+          apps/desktop/scripts/packaged-app-layout.mjs
+          apps/desktop/scripts/packaged-app-layout.test.mjs
+          apps/desktop/scripts/test-desktop.mjs
+          package-lock.json
+          package.json
+          uv.lock
+          FILES
+          git diff --cached --name-only | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+          git config user.name 'Axl Ibiza'
+          git config user.email 'andrexibiza@gmail.com'
+          git commit -m 'fix(deps): close current advisory graph on current main' -m 'Consolidate the live Electron, Nano ID, and h2 advisory closure on the exact current-main dependency graph while preserving React Compiler movement, Nano ID v6 isolation, packaged Desktop architecture, and source provenance.\n\nRefs #89479\nRefs #90486\nRefs #91042\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>\nSigned-off-by: Axl Ibiza <andrexibiza@gmail.com>'
+          final_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = '1'
+          test "$(git diff --name-only "$BASE_SHA..HEAD" | wc -l | tr -d ' ')" = '8'
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$STAGING_SHA" origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Published $final_sha"
