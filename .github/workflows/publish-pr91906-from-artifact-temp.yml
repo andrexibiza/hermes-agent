@@ -22,7 +22,7 @@ jobs:
       TARGET_BRANCH: restack/pr89479-current-main
       STAGING_SHA: 18eb288092b3230911454e822f10d93aef190d91
       BASE_SHA: 7d6db4efb885856078e4d19f804035226df81e0d
-      ARTIFACT_URL: https://sdmntprjapaneast.oaiusercontent.com/files/00000000-d080-8209-9942-31d50e681718/raw?se=2026-08-22T04%3A09%3A28Z&sp=r&sv=2026-02-06&sr=b&scid=be1f2717-4c19-5205-bb40-9a1a9a035430&skoid=03727f49-62d3-42ac-8350-1c0e6559d238&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-22T02%3A53%3A47Z&ske=2026-08-23T02%3A53%3A47Z&sks=b&skv=2026-02-06&sig=w/Yd7tM5JHq74HszG3tQtPM%2BiONIO1gcNY91a83hzH4%3D
+      ARTIFACT_URL: https://sdmntpraustraliaeast.oaiusercontent.com/files/00000000-9678-81fa-843c-27e99d3c690b/raw?se=2026-08-22T04%3A10%3A48Z&sp=r&sv=2026-02-06&sr=b&scid=8227d178-e366-5ebf-91c8-1433eba49a5a&skoid=03727f49-62d3-42ac-8350-1c0e6559d238&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-22T00%3A38%3A21Z&ske=2026-08-23T00%3A38%3A21Z&sks=b&skv=2026-02-06&sig=z995o0ordhTpd7DmapmYRKWUxU8IHvPuibvvvjappSY%3D
     steps:
       - name: Check out exact staging branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
