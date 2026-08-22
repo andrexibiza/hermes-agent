@@ -11,7 +11,7 @@ jobs:
   finalize:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'automation/finalize-dependency-restack-v2'
+      github.event.pull_request.head.ref == 'automation/trigger-dependency-restack'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
