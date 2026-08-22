@@ -83,9 +83,10 @@ jobs:
           retention-days: 7
 
       - name: Publish exact final object to fork branch
-        if: github.event_name == 'push'
+        if: github.repository == 'andrexibiza/hermes-agent'
         env:
           BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
+          BRANCH: ${{ github.head_ref || github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -114,4 +115,4 @@ jobs:
           git config user.email 'andrexibiza@gmail.com'
           git commit -m 'fix(deps): close current advisory graph on current main' -m 'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push --force origin "HEAD:${GITHUB_REF}"
+          git push --force origin "HEAD:refs/heads/$BRANCH"
