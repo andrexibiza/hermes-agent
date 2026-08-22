@@ -12,42 +12,69 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
-      - name: Check out fork
+      - name: Check out fork control branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download exact verified artifact
-        env:
-          ARTIFACT_URL: 'https://sdmntprsoutheastus3.oaiusercontent.com/files/00000000-6e1c-820c-9279-b7d2a8fd3084/raw?se=2026-08-22T01%3A14%3A26Z&sp=r&sv=2026-02-06&sr=b&scid=237415e6-18d3-5cab-b3c7-f5d20047adf8&skoid=5c72dd08-68ae-4091-b4e1-40ccec0693ae&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-22T00%3A41%3A41Z&ske=2026-08-23T00%3A41%3A41Z&sks=b&skv=2026-02-06&sig=F5JjFzyFiIfFO5zuP3c6faJsRkDWz1irB2LZJtwxHNg%3D'
-        run: |
-          set -euo pipefail
-          curl --fail --location --retry 3 "$ARTIFACT_URL" -o /tmp/depsec.zip
-          echo 'c7b6139d646fb38f85133b9d90f1bf9a169beb6d8929d0ce639175ceb121322c  /tmp/depsec.zip' | sha256sum -c -
-          mkdir /tmp/depsec
-          unzip -q /tmp/depsec.zip -d /tmp/depsec
-          (cd /tmp/depsec && sha256sum -c SHA256SUMS)
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
 
-      - name: Build exact current-main delivery commit
+      - name: Use repository-authorized npm
+        run: npm install --global npm@11.17.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Generate and verify the exact current-main security graph
         env:
           BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
+          SOURCE_BRANCH: restack/pr89479-current-main
           BRANCH: restack/dependency-security-final-91906
         run: |
           set -euo pipefail
+          git fetch origin "$SOURCE_BRANCH"
+          git show "origin/$SOURCE_BRANCH:.github/scripts/restack_dependency_security.py" > /tmp/restack_dependency_security.py
           git fetch https://github.com/NousResearch/hermes-agent.git "$BASE_SHA"
           git checkout --detach "$BASE_SHA"
+          mkdir -p .github/scripts
+          cp /tmp/restack_dependency_security.py .github/scripts/restack_dependency_security.py
 
-          cp /tmp/depsec/.npmrc .npmrc
-          cp /tmp/depsec/package.json package.json
-          cp /tmp/depsec/package-lock.json package-lock.json
-          cp /tmp/depsec/uv.lock uv.lock
+          python3 .github/scripts/restack_dependency_security.py apply
+          npm install --package-lock-only --ignore-scripts --include=optional
+          npm update nanoid --package-lock-only --ignore-scripts --include=optional
+          uv lock --upgrade-package 'h2==4.4.1'
+          python3 .github/scripts/restack_dependency_security.py verify
+          node --test apps/desktop/scripts/packaged-app-layout.test.mjs
+          uv lock --check
+          git diff --check
+          npm audit --workspaces=false --audit-level=high
+          npm audit --workspace web --audit-level=high
+          npm audit --workspace ui-tui --audit-level=high
+          npm audit --workspace apps/desktop --audit-level=high
+
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/apps/desktop/scripts"
+          cp .npmrc package.json package-lock.json uv.lock "$tmp/"
+          cp apps/desktop/package.json "$tmp/apps/desktop/package.json"
+          cp apps/desktop/scripts/packaged-app-layout.mjs "$tmp/apps/desktop/scripts/"
+          cp apps/desktop/scripts/packaged-app-layout.test.mjs "$tmp/apps/desktop/scripts/"
+          cp apps/desktop/scripts/test-desktop.mjs "$tmp/apps/desktop/scripts/"
+
+          git reset --hard "$BASE_SHA"
+          cp "$tmp/.npmrc" .npmrc
+          cp "$tmp/package.json" package.json
+          cp "$tmp/package-lock.json" package-lock.json
+          cp "$tmp/uv.lock" uv.lock
           mkdir -p apps/desktop/scripts
-          cp /tmp/depsec/apps/desktop/package.json apps/desktop/package.json
-          cp /tmp/depsec/apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.mjs
-          cp /tmp/depsec/apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/packaged-app-layout.test.mjs
-          cp /tmp/depsec/apps/desktop/scripts/test-desktop.mjs apps/desktop/scripts/test-desktop.mjs
+          cp "$tmp/apps/desktop/package.json" apps/desktop/package.json
+          cp "$tmp/apps/desktop/scripts/packaged-app-layout.mjs" apps/desktop/scripts/packaged-app-layout.mjs
+          cp "$tmp/apps/desktop/scripts/packaged-app-layout.test.mjs" apps/desktop/scripts/packaged-app-layout.test.mjs
+          cp "$tmp/apps/desktop/scripts/test-desktop.mjs" apps/desktop/scripts/test-desktop.mjs
 
           git add -- .npmrc package.json package-lock.json uv.lock apps/desktop/package.json apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/test-desktop.mjs
           git diff --cached --check
