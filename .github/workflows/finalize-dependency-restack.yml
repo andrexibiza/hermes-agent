@@ -3,6 +3,11 @@ name: Finalize dependency-security restack
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/finalize-dependency-restack.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -10,8 +15,11 @@ permissions:
 jobs:
   finalize:
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'automation/trigger-dependency-restack'
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'automation/trigger-dependency-restack') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
