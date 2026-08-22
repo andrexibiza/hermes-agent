@@ -10,7 +10,7 @@ on:
       - reopened
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: phase3-materialize-${{ github.event.pull_request.number }}
@@ -22,17 +22,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Check out exact branch head
-        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
+      - name: Check out exact contributor head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          ref: ${{ github.head_ref }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@e8a35333f2a663f654e263c9d42fdded51a6cd63
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
       - name: Materialize scoped Phase 3 implementation
         run: |
+          set -euo pipefail
           python .phase3_patch_1.py
           python .phase3_patch_2.py
           python .phase3_patch_3.py
@@ -46,11 +54,69 @@ jobs:
             hermes_cli/web_server.py
           git diff --check
 
+      - name: Verify exact generated path set and manifest
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+          SOURCE_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          paths = [
+              "Dockerfile",
+              "hermes_cli/main.py",
+              "hermes_cli/update_cmd.py",
+              "hermes_cli/update_inventory.py",
+              "hermes_cli/update_receipt.py",
+              "hermes_cli/web_server.py",
+              "tests/hermes_cli/test_cmd_update_docker.py",
+              "tests/hermes_cli/test_web_server.py",
+          ]
+          actual = set(
+              subprocess.check_output(
+                  ["git", "diff", "--name-only"], text=True
+              ).splitlines()
+          )
+          expected = set(paths)
+          if actual != expected:
+              raise SystemExit(
+                  "unexpected materialized path set: "
+                  f"missing={sorted(expected - actual)} "
+                  f"extra={sorted(actual - expected)}"
+              )
+
+          manifest = {
+              "schema": 1,
+              "source_head": os.environ["SOURCE_HEAD"],
+              "source_base": os.environ["SOURCE_BASE"],
+              "paths": [
+                  {
+                      "path": path,
+                      "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                      "bytes": Path(path).stat().st_size,
+                  }
+                  for path in paths
+              ],
+          }
+          Path("phase3-materialization-manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
       - name: Install locked test environment
         run: uv sync --locked --python 3.11 --extra all --extra dev
 
       - name: Run focused lint
         run: |
+          set -euo pipefail
           uv run ruff check \
             hermes_cli/image_provenance.py \
             hermes_cli/update_contract.py \
@@ -64,6 +130,7 @@ jobs:
 
       - name: Run focused updater and image contracts
         run: |
+          set -euo pipefail
           uv run pytest -q \
             tests/hermes_cli/test_image_provenance.py \
             tests/hermes_cli/test_update_inventory_image_provenance.py \
@@ -77,20 +144,19 @@ jobs:
           uv run pytest -q tests/hermes_cli/test_web_server.py \
             -k 'update_hermes_returns_docker_guidance_without_spawning or update_hermes_returns_apt_guidance_without_spawning'
 
-      - name: Commit exact tested implementation
-        env:
-          BRANCH: ${{ github.head_ref }}
-        run: |
-          git config user.name 'Axl Ibiza'
-          git config user.email '84248988+andrexibiza@users.noreply.github.com'
-          git add \
-            Dockerfile \
-            hermes_cli/main.py \
-            hermes_cli/update_cmd.py \
-            hermes_cli/update_inventory.py \
-            hermes_cli/update_receipt.py \
-            hermes_cli/web_server.py \
-            tests/hermes_cli/test_cmd_update_docker.py \
+      - name: Upload exact tested product source
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: phase3-image-refusal-source-${{ github.event.pull_request.head.sha }}
+          path: |
+            phase3-materialization-manifest.json
+            Dockerfile
+            hermes_cli/main.py
+            hermes_cli/update_cmd.py
+            hermes_cli/update_inventory.py
+            hermes_cli/update_receipt.py
+            hermes_cli/web_server.py
+            tests/hermes_cli/test_cmd_update_docker.py
             tests/hermes_cli/test_web_server.py
-          git commit -m 'fix(update): refuse mutation in image-managed runtimes'
-          git push origin HEAD:"${BRANCH}"
+          retention-days: 7
+          if-no-files-found: error
