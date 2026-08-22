@@ -1,8 +1,9 @@
 name: Publish PR 91906 exact dependency closure (temporary)
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,15 +15,13 @@ concurrency:
 jobs:
   publish:
     name: Generate, verify, and publish the exact eight-file closure
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'automation/dependency-security-finalize-91906'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       TARGET_BRANCH: restack/pr89479-current-main
       EXPECTED_HEAD: c35060427bbd1011604502e9d4a4a2121e03a500
       BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
+      WORKFLOW_PATH: .github/workflows/publish-pr-91906-dependency-closure-temp.yml
     steps:
       - name: Check out the exact staging branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -46,13 +45,12 @@ jobs:
           node-version: 22.22.0
 
       - name: Use the repository-authorized npm version
-        shell: bash
         run: npm install --global npm@11.17.0
 
       - name: Set up uv 0.12.5
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
-          version: "0.12.5"
+          version: '0.12.5'
 
       - name: Generate the canonical current-main lock graph
         shell: bash
@@ -76,7 +74,7 @@ jobs:
           npm audit --workspace ui-tui --audit-level=high
           npm audit --workspace apps/desktop --audit-level=high
 
-      - name: Prove byte identity with the verified artifact
+      - name: Prove byte identity with artifact 9466562504
         shell: bash
         run: |
           set -euo pipefail
@@ -93,6 +91,7 @@ jobs:
           sha256sum -c /tmp/expected-sha256s
 
       - name: Publish one clean current-main commit
+        id: publish
         shell: bash
         run: |
           set -euo pipefail
@@ -116,7 +115,6 @@ jobs:
           cp -a "$payload/apps/desktop/scripts/test-desktop.mjs" apps/desktop/scripts/
 
           sha256sum -c /tmp/expected-sha256s
-
           git add -- \
             .npmrc \
             package.json \
@@ -141,8 +139,8 @@ jobs:
           diff -u /tmp/expected-files /tmp/actual-files
           git diff --cached --check
 
-          git config user.name "Axl Ibiza"
-          git config user.email "andrexibiza@gmail.com"
+          git config user.name 'Axl Ibiza'
+          git config user.email 'andrexibiza@gmail.com'
           tree=$(git write-tree)
           message=$(cat <<'COMMIT_MESSAGE'
           fix(deps): close current advisory graph on current main
@@ -163,10 +161,27 @@ jobs:
           commit=$(printf '%s\n' "$message" | git commit-tree "$tree" -p "$BASE_SHA")
           git reset --hard "$commit"
           test "$(git rev-parse HEAD^)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA..HEAD")" = "1"
-          test "$(git diff --name-only "$BASE_SHA..HEAD" | wc -l | tr -d ' ')" = "8"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = '1'
+          test "$(git diff --name-only "$BASE_SHA..HEAD" | wc -l | tr -d ' ')" = '8'
 
           git push \
             --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_HEAD" \
             origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "head=$commit" >> "$GITHUB_OUTPUT"
           echo "Published exact final head $commit"
+
+      - name: Retire this one-shot publisher
+        if: steps.publish.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          control=$(mktemp -d)
+          git clone --no-checkout "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "$control"
+          cd "$control"
+          git checkout main
+          test -f "$WORKFLOW_PATH"
+          git rm -- "$WORKFLOW_PATH"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore(ci): retire completed PR 91906 publisher'
+          git push origin HEAD:main
