@@ -35,11 +35,10 @@ def _boom(name):
     return fail
 
 
-def test_cli_refuses_before_output_lock_backup_or_subprocess(
-    monkeypatch, tmp_path, capsys
-):
+def test_cli_refuses_before_io_lock_backup_or_subprocess(monkeypatch, tmp_path, capsys):
     import hermes_cli.config as config
     import hermes_cli.main as main
+    from hermes_cli.update_lock import UpdateLock
 
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -48,7 +47,11 @@ def test_cli_refuses_before_output_lock_backup_or_subprocess(
     monkeypatch.setattr(image_provenance, "IMAGE_PROVENANCE_PATH", marker)
     monkeypatch.setattr(main, "PROJECT_ROOT", checkout)
     monkeypatch.setattr(config, "is_managed", lambda: False)
-    monkeypatch.setattr(main, "_prepare_update_output", _boom("output setup"))
+    # Refusal must happen before any of the current command-boundary side
+    # effects.  These are the actual seams owned by cmd_update today; do not
+    # pin this witness to retired helper names from older updater shapes.
+    monkeypatch.setattr(main, "_install_hangup_protection", _boom("I/O setup"))
+    monkeypatch.setattr(UpdateLock, "acquire", _boom("update lock"))
     monkeypatch.setattr(main, "_run_pre_update_backup", _boom("backup"))
     monkeypatch.setattr("subprocess.run", _boom("subprocess"))
     monkeypatch.setattr(receipts, "_receipt_dir", lambda: tmp_path / "receipts")
@@ -87,9 +90,7 @@ def test_direct_update_impl_refuses_before_mutation(monkeypatch, tmp_path):
     assert exc.value.code == 2
 
 
-def test_dashboard_api_returns_shared_refusal_without_spawn(
-    monkeypatch, tmp_path
-):
+def test_dashboard_api_returns_shared_refusal_without_spawn(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
     import hermes_cli.web_server as web_server
 
