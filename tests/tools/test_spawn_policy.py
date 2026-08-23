@@ -12,10 +12,11 @@ from tools.spawn_policy import (
     SpawnPrincipal,
     SpawnSpec,
     StdinPolicy,
+    bitwarden_capability_envs,
     build_spawn_env,
     build_vault_cli_env,
     normalized_policy_manifest,
-    onepassword_grant_env,
+    onepassword_capability_envs,
     spawn_policy_hash,
 )
 
@@ -32,7 +33,7 @@ def test_vault_env_is_baseline_plus_explicit_grants_only():
     source = {
         "PATH": "/usr/bin",
         "HOME": "/home/user",
-        "HTTPS_PROXY": "http://proxy",
+        "HTTPS_PROXY": "https://proxy-user:proxy-pass@proxy.example",
         "SSL_CERT_FILE": "/etc/ca.pem",
         "OPENAI_API_KEY": "provider-secret",
         "HERMES_KANBAN_TASK": "parent-task",
@@ -40,44 +41,57 @@ def test_vault_env_is_baseline_plus_explicit_grants_only():
         "NODE_OPTIONS": "--require attacker.js",
         "BWS_ACCESS_TOKEN": "ambient-vault-token",
     }
+    auth, route = bitwarden_capability_envs(source, access_token="edge-token")
     env = build_vault_cli_env(
         executable="/usr/bin/bws",
         source_env=source,
-        grant_env={"BWS_ACCESS_TOKEN": "edge-token"},
+        auth_env=auth,
+        route_env=route,
         provenance="test",
     )
     assert env == {
         "PATH": "/usr/bin",
         "HOME": "/home/user",
-        "HTTPS_PROXY": "http://proxy",
-        "SSL_CERT_FILE": "/etc/ca.pem",
         "NO_COLOR": "1",
         "BWS_ACCESS_TOKEN": "edge-token",
+        "HTTPS_PROXY": "https://proxy-user:proxy-pass@proxy.example",
+        "SSL_CERT_FILE": "/etc/ca.pem",
     }
 
 
-def test_probe_cannot_receive_a_grant():
+def test_route_authority_is_not_ambient_without_an_explicit_route_grant():
+    env = build_vault_cli_env(
+        executable="/usr/bin/bws",
+        source_env={"PATH": "/usr/bin", "HTTPS_PROXY": "https://secret@proxy"},
+        auth_env={"BWS_ACCESS_TOKEN": "token"},
+        provenance="test",
+    )
+    assert "HTTPS_PROXY" not in env
+
+
+def test_probe_cannot_receive_any_grant():
     with pytest.raises(SpawnPolicyError, match="probes cannot receive grants"):
         build_vault_cli_env(
             executable="/usr/bin/op",
             source_env={},
-            grant_env={"OP_SERVICE_ACCOUNT_TOKEN": "secret"},
+            auth_env={"OP_SERVICE_ACCOUNT_TOKEN": "secret"},
             provenance="test",
             probe=True,
         )
 
 
-def test_unlisted_authority_is_rejected_even_when_explicit():
-    with pytest.raises(SpawnPolicyError, match="OPENAI_API_KEY"):
-        build_vault_cli_env(
-            executable="/usr/bin/op",
-            source_env={},
-            grant_env={"OPENAI_API_KEY": "secret"},
-            provenance="test",
-        )
+def test_auth_grant_cannot_smuggle_route_or_provider_authority():
+    for name in ("HTTPS_PROXY", "OPENAI_API_KEY"):
+        with pytest.raises(SpawnPolicyError, match=name):
+            build_vault_cli_env(
+                executable="/usr/bin/op",
+                source_env={},
+                auth_env={name: "secret"},
+                provenance="test",
+            )
 
 
-def test_onepassword_grants_are_narrow_and_prefix_aware():
+def test_onepassword_grants_are_split_by_capability_and_prefix_aware():
     source = {
         "OP_ACCOUNT": "team",
         "OP_CONNECT_HOST": "https://connect.example",
@@ -85,17 +99,21 @@ def test_onepassword_grants_are_narrow_and_prefix_aware():
         "OP_LOAD_DESKTOP_APP_SETTINGS": "false",
         "OP_CACHE": "false",
         "OP_SESSION_work": "session-secret",
+        "HTTPS_PROXY": "https://proxy.example",
         "OPENAI_API_KEY": "provider-secret",
     }
-    grants = onepassword_grant_env(source, token_value="service-token")
-    assert grants == {
-        "OP_ACCOUNT": "team",
-        "OP_CONNECT_HOST": "https://connect.example",
+    auth, route = onepassword_capability_envs(source, token_value="service-token")
+    assert auth == {
         "OP_CONNECT_TOKEN": "connect-secret",
-        "OP_LOAD_DESKTOP_APP_SETTINGS": "false",
-        "OP_CACHE": "false",
         "OP_SESSION_work": "session-secret",
         "OP_SERVICE_ACCOUNT_TOKEN": "service-token",
+    }
+    assert route == {
+        "HTTPS_PROXY": "https://proxy.example",
+        "OP_ACCOUNT": "team",
+        "OP_CONNECT_HOST": "https://connect.example",
+        "OP_LOAD_DESKTOP_APP_SETTINGS": "false",
+        "OP_CACHE": "false",
     }
 
 
@@ -103,7 +121,7 @@ def test_windows_environment_lookup_is_case_insensitive_and_canonicalized():
     env = build_vault_cli_env(
         executable=r"C:\Program Files\Bitwarden\bws.exe",
         source_env={"Path": r"C:\Windows", "systemroot": r"C:\Windows"},
-        grant_env={"bws_access_token": "token"},
+        auth_env={"bws_access_token": "token"},
         provenance="test",
     )
     assert env["PATH"] == r"C:\Windows"
