@@ -1,0 +1,147 @@
+name: Process-edge authority trusted materializer
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    name: Materialize, verify, and publish typed process-edge authority
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'security/process-edge-authority-broker'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_BRANCH: security/process-edge-authority-broker
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: bdf10471b5dff0d67d172065f7dbf9f4c47c4c1b
+      MAIN_WORKFLOW: .github/workflows/process-edge-authority-main-materialize.yml
+    steps:
+      - name: Check out exact materializer branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Verify trigger lease
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git merge-base HEAD "$BASE_SHA")" = "$BASE_SHA"
+
+      - name: Materialize assertion-guarded implementation
+        run: python .github/materialize-process-edge-authority.py
+
+      - name: Compile changed Python surfaces
+        run: |
+          python -m compileall -q \
+            tools/child_process_authority.py \
+            tools/environments/base.py \
+            tools/environments/singularity.py \
+            tools/checkpoint_manager.py \
+            agent/secret_sources/bitwarden.py \
+            agent/secret_sources/onepassword.py \
+            agent/secret_sources/command.py \
+            agent/transports/codex_app_server.py \
+            agent/copilot_acp_client.py \
+            hermes_cli/pty_bridge.py \
+            hermes_cli/win_pty_bridge.py \
+            hermes_cli/secrets_cli.py \
+            hermes_cli/onepassword_secrets_cli.py \
+            tui_gateway/host_supervisor.py \
+            tui_gateway/methods_tools.py \
+            tests/tools/test_child_process_authority.py \
+            tests/security/test_child_process_authority_guard.py
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install Python and test environment
+        run: |
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Format new authority surfaces
+        run: |
+          source .venv/bin/activate
+          ruff format \
+            tools/child_process_authority.py \
+            tests/tools/test_child_process_authority.py \
+            tests/security/test_child_process_authority_guard.py
+
+      - name: Run authority and affected regression suites
+        run: |
+          source .venv/bin/activate
+          python -m pytest -q \
+            tests/tools/test_child_process_authority.py \
+            tests/security/test_child_process_authority_guard.py \
+            tests/tools/test_build_subprocess_env.py \
+            tests/tools/test_hermes_subprocess_env.py \
+            tests/tools/test_local_env_blocklist.py \
+            tests/test_onepassword_secrets.py \
+            tests/test_env_loader_secret_sources.py \
+            tests/test_command_secret_source.py \
+            tests/tools/test_checkpoint_manager.py \
+            tests/tui_gateway/test_compute_host_phase1.py \
+            tests/agent/transports/test_codex_app_server_runtime.py \
+            tests/agent/test_copilot_acp_client.py
+
+      - name: Lint exact changed surfaces
+        run: |
+          source .venv/bin/activate
+          ruff check \
+            tools/child_process_authority.py \
+            tools/environments/base.py \
+            tools/environments/singularity.py \
+            tools/checkpoint_manager.py \
+            agent/secret_sources/bitwarden.py \
+            agent/secret_sources/onepassword.py \
+            agent/secret_sources/command.py \
+            agent/transports/codex_app_server.py \
+            agent/copilot_acp_client.py \
+            hermes_cli/pty_bridge.py \
+            hermes_cli/win_pty_bridge.py \
+            hermes_cli/secrets_cli.py \
+            hermes_cli/onepassword_secrets_cli.py \
+            tui_gateway/host_supervisor.py \
+            tui_gateway/methods_tools.py \
+            tests/tools/test_child_process_authority.py \
+            tests/security/test_child_process_authority_guard.py
+          ruff format --check \
+            tools/child_process_authority.py \
+            tests/tools/test_child_process_authority.py \
+            tests/security/test_child_process_authority_guard.py
+          git diff --check
+
+      - name: Publish one clean review object
+        run: |
+          rm -f \
+            .github/materialize-process-edge-authority.py \
+            .github/workflows/materialize-process-edge-authority.yml
+          git add -A
+          git config user.name "Andrex Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+          git reset --soft "$BASE_SHA"
+          git commit -m "feat(security): bind child process authority to typed edges"
+          FINAL_SHA=$(git rev-parse HEAD)
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_HEAD" \
+            origin "HEAD:$TARGET_BRANCH"
+          echo "final_sha=$FINAL_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove this one-shot workflow from fork main
+        if: success()
+        run: |
+          git fetch origin main
+          git switch -C main origin/main
+          git rm "$MAIN_WORKFLOW"
+          git commit -m "chore(ci): remove process-edge authority materializer"
+          git push origin main
