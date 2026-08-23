@@ -188,4 +188,4 @@ jobs:
           git commit -m "fix(bot-relay): retain v2 events across legacy targets"
           git push origin HEAD:feat/bot-relay-durable-delivery
 
-# trigger generation 1
+# trigger generation 2
