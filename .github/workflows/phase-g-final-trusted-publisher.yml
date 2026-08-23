@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -15,9 +17,15 @@ concurrency:
 jobs:
   publish:
     if: >-
-      github.repository == 'andrexibiza/hermes-agent' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.head_ref, 'automation/phase-g-final-trigger-')
+      (github.event_name == 'pull_request' &&
+       github.repository == 'andrexibiza/hermes-agent' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.head_ref, 'automation/phase-g-final-trigger-')) ||
+      (github.event_name == 'issue_comment' &&
+       github.repository == 'andrexibiza/hermes-agent' &&
+       github.event.issue.pull_request &&
+       github.event.comment.user.login == 'andrexibiza' &&
+       github.event.comment.body == '/publish-phase-g-final')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
