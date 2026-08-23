@@ -1,9 +1,9 @@
 name: Process-edge authority trusted materializer
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -15,8 +15,12 @@ concurrency:
 jobs:
   materialize:
     name: Materialize, verify, and publish typed process-edge authority
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'automation/process-edge-authority-run'
-    runs-on: ubuntu-latest-96-core
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       github.event.comment.user.login == 'andrexibiza' &&
+       github.event.comment.body == '/publish-phase-g')
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       TARGET_BRANCH: security/process-edge-authority-broker
