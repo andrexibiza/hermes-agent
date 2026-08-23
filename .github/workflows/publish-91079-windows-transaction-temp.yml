@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - .github/workflows/publish-91079-windows-transaction-temp.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,7 +19,7 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'andrexibiza/hermes-agent'
+    if: github.repository == 'andrexibiza/hermes-agent' && (github.event_name != 'pull_request' || github.head_ref == 'ops/pr91079-publisher-trigger')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
