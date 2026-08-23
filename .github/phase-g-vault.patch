@@ -1,0 +1,206 @@
+diff --git a/agent/secret_sources/bitwarden.py b/agent/secret_sources/bitwarden.py
+--- a/agent/secret_sources/bitwarden.py
++++ b/agent/secret_sources/bitwarden.py
+@@ -1,22 +1,20 @@
+     cmd = [str(bws), "secret", "list", project_id, "--output", "json"]
+-    # bws child intentionally receives the access token.  Under a profile-local
+-    # fetch it must not inherit sibling credentials from process-global env.
++    # VAULT_CLI is an edge-specific authority contract: the child receives a
++    # secret-free OS baseline plus explicit Bitwarden auth and route grants.
++    from tools.spawn_policy import bitwarden_capability_envs, build_vault_cli_env
++
+     source_env = get_source_environment()
+-    if source_env is os.environ:
+-        from tools.environments.local import build_subprocess_env
+-
+-        env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=False)
+-    else:
+-        env = dict(source_env)
+-    env["BWS_ACCESS_TOKEN"] = access_token
+-    # Make sure we're not echoing telemetry / colour codes into json.
+-    env.setdefault("NO_COLOR", "1")
+-    # Region / self-hosted support.  bws defaults to https://vault.bitwarden.com
+-    # (US Cloud); EU Cloud users need https://vault.bitwarden.eu, and
+-    # self-hosted users need their own URL.  When unset, fall back to whatever
+-    # BWS_SERVER_URL the caller already had in their shell env (preserved by
+-    # the copy above) so manual overrides keep working too.
+-    if server_url:
+-        env["BWS_SERVER_URL"] = server_url
++    auth_env, route_env = bitwarden_capability_envs(
++        source_env,
++        access_token=access_token,
++        server_url=server_url,
++    )
++    env = build_vault_cli_env(
++        executable=bws,
++        source_env=source_env,
++        auth_env=auth_env,
++        route_env=route_env,
++        provenance="agent.secret_sources.bitwarden._run_bws_list",
++    )
+ 
+     try:
+diff --git a/agent/secret_sources/onepassword.py b/agent/secret_sources/onepassword.py
+--- a/agent/secret_sources/onepassword.py
++++ b/agent/secret_sources/onepassword.py
+@@ -1,18 +1,15 @@
+-def _op_child_env(token_value: str) -> Dict[str, str]:
+-    """Build a minimal allowlisted environment for the ``op`` child process."""
++def _op_child_env(op: Path, token_value: str) -> Dict[str, str]:
++    """Build the typed VAULT_CLI environment for one ``op`` child edge."""
++    from tools.spawn_policy import build_vault_cli_env, onepassword_capability_envs
++
+     source_env = get_source_environment()
+-    env: Dict[str, str] = {}
+-    for key in _OP_ENV_ALLOWLIST:
+-        val = source_env.get(key)
+-        if val is not None:
+-            env[key] = val
+-    # Desktop / interactive session credentials.
+-    for key, val in source_env.items():
+-        if key.startswith("OP_SESSION_"):
+-            env[key] = val
+-    # `op` reads OP_SERVICE_ACCOUNT_TOKEN regardless of which env var the user
+-    # configured Hermes to source it from, so normalize to that name here.
+-    if token_value:
+-        env["OP_SERVICE_ACCOUNT_TOKEN"] = token_value
+-    env["NO_COLOR"] = "1"
+-    return env
++    auth_env, route_env = onepassword_capability_envs(
++        source_env, token_value=token_value
++    )
++    return build_vault_cli_env(
++        executable=op,
++        source_env=source_env,
++        auth_env=auth_env,
++        route_env=route_env,
++        provenance="agent.secret_sources.onepassword._run_op_read",
++    )
+diff --git a/agent/secret_sources/onepassword.py b/agent/secret_sources/onepassword.py
+--- a/agent/secret_sources/onepassword.py
++++ b/agent/secret_sources/onepassword.py
+@@ -1,9 +1,10 @@
+         proc = subprocess.run(  # noqa: S603 — op path is user-trusted, argv list
+             cmd,
+-            env=_op_child_env(token_value),
++            env=_op_child_env(op, token_value),
+             capture_output=True,
+             text=True,
+             encoding="utf-8",
+             errors="replace",
+             timeout=_OP_RUN_TIMEOUT,
++            stdin=subprocess.DEVNULL,
+         )
+diff --git a/hermes_cli/secrets_cli.py b/hermes_cli/secrets_cli.py
+--- a/hermes_cli/secrets_cli.py
++++ b/hermes_cli/secrets_cli.py
+@@ -1,8 +1,18 @@
+ def _bws_version(binary: Path) -> str:
++    from tools.spawn_policy import build_vault_cli_env
++
++    env = build_vault_cli_env(
++        executable=binary,
++        source_env=os.environ,
++        provenance="hermes_cli.secrets_cli._bws_version",
++        probe=True,
++    )
+     try:
+         res = subprocess.run(
+             [str(binary), "--version"],
++            env=env,
+             capture_output=True,
+             text=True, encoding='utf-8', errors='replace',
+             timeout=5,
++            stdin=subprocess.DEVNULL,
+         )
+diff --git a/hermes_cli/secrets_cli.py b/hermes_cli/secrets_cli.py
+--- a/hermes_cli/secrets_cli.py
++++ b/hermes_cli/secrets_cli.py
+@@ -1,11 +1,18 @@
+-    # Secret-manager CLI child: intentionally receives tokens — no scrub,
+-    # no HOME rewrite (bws stores state under the real user home).
+-    from tools.environments.local import build_subprocess_env
+-    env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=False)
+-    env["BWS_ACCESS_TOKEN"] = token
+-    env.setdefault("NO_COLOR", "1")
+-    if server_url:
+-        env["BWS_SERVER_URL"] = server_url
++    from tools.spawn_policy import bitwarden_capability_envs, build_vault_cli_env
++
++    source_env = os.environ
++    auth_env, route_env = bitwarden_capability_envs(
++        source_env,
++        access_token=token,
++        server_url=server_url,
++    )
++    env = build_vault_cli_env(
++        executable=binary,
++        source_env=source_env,
++        auth_env=auth_env,
++        route_env=route_env,
++        provenance="hermes_cli.secrets_cli._list_projects",
++    )
+     try:
+         res = subprocess.run(
+             [str(binary), "project", "list", "--output", "json"],
+@@ -13,4 +20,5 @@
+             capture_output=True,
+             text=True, encoding='utf-8', errors='replace',
+             timeout=15,
++            stdin=subprocess.DEVNULL,
+         )
+diff --git a/hermes_cli/onepassword_secrets_cli.py b/hermes_cli/onepassword_secrets_cli.py
+--- a/hermes_cli/onepassword_secrets_cli.py
++++ b/hermes_cli/onepassword_secrets_cli.py
+@@ -1,10 +1,20 @@
+ def _op_version(binary: Path) -> str:
++    from tools.spawn_policy import build_vault_cli_env
++
++    env = build_vault_cli_env(
++        executable=binary,
++        source_env=os.environ,
++        provenance="hermes_cli.onepassword_secrets_cli._op_version",
++        probe=True,
++    )
+     try:
+         res = subprocess.run(
+             [str(binary), "--version"],
++            env=env,
+             capture_output=True,
+             text=True,
+             encoding="utf-8",
+             errors="replace",
+             timeout=5,
++            stdin=subprocess.DEVNULL,
+         )
+diff --git a/hermes_cli/onepassword_secrets_cli.py b/hermes_cli/onepassword_secrets_cli.py
+--- a/hermes_cli/onepassword_secrets_cli.py
++++ b/hermes_cli/onepassword_secrets_cli.py
+@@ -1,12 +1,19 @@
+-    # 1Password CLI child: intentionally receives the service-account token —
+-    # no scrub, no HOME rewrite (op stores auth state under the real home).
+-    from tools.environments.local import build_subprocess_env
+-    env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=False)
+-    env.setdefault("NO_COLOR", "1")
+-    if token_value:
+-        env["OP_SERVICE_ACCOUNT_TOKEN"] = token_value
++    from tools.spawn_policy import build_vault_cli_env, onepassword_capability_envs
++
++    source_env = os.environ
++    auth_env, route_env = onepassword_capability_envs(
++        source_env, token_value=token_value
++    )
++    env = build_vault_cli_env(
++        executable=binary,
++        source_env=source_env,
++        auth_env=auth_env,
++        route_env=route_env,
++        provenance="hermes_cli.onepassword_secrets_cli._op_whoami",
++    )
+     try:
+         res = subprocess.run(
+             cmd, env=env, capture_output=True, text=True,
+-            encoding="utf-8", errors="replace", timeout=10
++            encoding="utf-8", errors="replace", timeout=10,
++            stdin=subprocess.DEVNULL,
+         )
