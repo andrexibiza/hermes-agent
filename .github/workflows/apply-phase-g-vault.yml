@@ -1,0 +1,115 @@
+name: Apply Phase G vault spawn migration
+
+on:
+  push:
+    branches:
+      - arch/capability-bound-spawn-contracts
+    paths:
+      - .github/phase-g-vault.patch
+      - .github/workflows/apply-phase-g-vault.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase-g-vault-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.repository == 'andrexibiza/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact trigger object
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: arch/capability-bound-spawn-contracts
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify trigger lease and apply exact patch
+        env:
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TRIGGER_SHA"
+          git apply --check .github/phase-g-vault.patch
+          git apply .github/phase-g-vault.patch
+          rm .github/phase-g-vault.patch
+          rm .github/workflows/apply-phase-g-vault.yml
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        uses: ./.github/actions/retry
+        with:
+          command: uv python install 3.11
+
+      - name: Install locked test environment
+        uses: ./.github/actions/retry
+        with:
+          command: uv sync --locked --python 3.11 --extra dev
+
+      - name: Verify typed policy and real vault edges
+        run: |
+          set -euo pipefail
+          uv run --no-sync python -m pytest -q \
+            tests/tools/test_spawn_policy.py \
+            tests/agent/test_vault_cli_spawn_policy.py
+          uv run --no-sync python -m py_compile \
+            tools/spawn_policy_manifest.py \
+            tools/spawn_policy.py \
+            agent/secret_sources/bitwarden.py \
+            agent/secret_sources/onepassword.py \
+            hermes_cli/secrets_cli.py \
+            hermes_cli/onepassword_secrets_cli.py
+          uv run --no-sync ruff check \
+            tools/spawn_policy_manifest.py \
+            tools/spawn_policy.py \
+            tests/tools/test_spawn_policy.py \
+            tests/agent/test_vault_cli_spawn_policy.py \
+            agent/secret_sources/bitwarden.py \
+            agent/secret_sources/onepassword.py \
+            hermes_cli/secrets_cli.py \
+            hermes_cli/onepassword_secrets_cli.py
+          uv run --no-sync ruff format --check \
+            tools/spawn_policy_manifest.py \
+            tools/spawn_policy.py \
+            tests/tools/test_spawn_policy.py \
+            tests/agent/test_vault_cli_spawn_policy.py
+          git diff --check
+
+      - name: Prove ambient vault escapes are retired on migrated sites
+        run: |
+          set -euo pipefail
+          ! grep -n "build_subprocess_env(scrub_secrets=False" \
+            agent/secret_sources/bitwarden.py \
+            hermes_cli/secrets_cli.py \
+            hermes_cli/onepassword_secrets_cli.py
+          grep -n "stdin=subprocess.DEVNULL" \
+            agent/secret_sources/bitwarden.py \
+            agent/secret_sources/onepassword.py \
+            hermes_cli/secrets_cli.py \
+            hermes_cli/onepassword_secrets_cli.py
+
+      - name: Publish clean reviewed object with exact lease
+        env:
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin arch/capability-bound-spawn-contracts
+          test "$(git rev-parse origin/arch/capability-bound-spawn-contracts)" = "$TRIGGER_SHA"
+          git config user.name "Axl Ibiza"
+          git config user.email "andrexibiza@gmail.com"
+          git add -A
+          git commit -s -m "fix(security): bind vault CLIs to typed spawn policy"
+          git push origin HEAD:arch/capability-bound-spawn-contracts
