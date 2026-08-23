@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - .github/workflows/apply-pr-92931-rolling-upgrade-temp.yml
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -188,4 +191,4 @@ jobs:
           git commit -m "fix(bot-relay): retain v2 events across legacy targets"
           git push origin HEAD:feat/bot-relay-durable-delivery
 
-# trigger generation 2
+# trigger generation 3
