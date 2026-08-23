@@ -29,11 +29,12 @@ def _assert_strict_env(env: dict[str, str]) -> None:
     assert env["NO_COLOR"] == "1"
 
 
-def test_bitwarden_fetch_receives_only_baseline_and_explicit_grant(monkeypatch):
+def test_bitwarden_fetch_receives_only_baseline_and_explicit_grants(monkeypatch):
     source = {
         "PATH": "/usr/bin",
         "HOME": "/home/user",
         "BWS_SERVER_URL": "https://vault.example",
+        "HTTPS_PROXY": "https://proxy-user:proxy-pass@proxy.example",
         "OPENAI_API_KEY": "provider-secret",
         "HERMES_KANBAN_TASK": "parent-task",
         "_HERMES_GATEWAY": "1",
@@ -62,16 +63,19 @@ def test_bitwarden_fetch_receives_only_baseline_and_explicit_grant(monkeypatch):
     assert env["HOME"] == "/home/user"
     assert env["BWS_ACCESS_TOKEN"] == "edge-token"
     assert env["BWS_SERVER_URL"] == "https://vault.example"
+    assert env["HTTPS_PROXY"] == "https://proxy-user:proxy-pass@proxy.example"
 
 
-def test_onepassword_read_receives_only_declared_auth_capability(monkeypatch):
+def test_onepassword_read_receives_only_declared_capabilities(monkeypatch):
     source = {
         "PATH": "/usr/bin",
         "HOME": "/home/user",
         "OP_ACCOUNT": "team",
+        "OP_CONNECT_TOKEN": "connect-secret",
         "OP_SESSION_team": "session-secret",
         "OP_LOAD_DESKTOP_APP_SETTINGS": "false",
         "OP_CACHE": "false",
+        "HTTPS_PROXY": "https://proxy.example",
         "OPENAI_API_KEY": "provider-secret",
         "HERMES_KANBAN_RUN_ID": "parent-run",
         "PYTHONPATH": "/attacker",
@@ -98,15 +102,17 @@ def test_onepassword_read_receives_only_declared_auth_capability(monkeypatch):
     env = captured["env"]
     _assert_strict_env(env)
     assert env["OP_ACCOUNT"] == "team"
+    assert env["OP_CONNECT_TOKEN"] == "connect-secret"
     assert env["OP_SESSION_team"] == "session-secret"
     assert env["OP_LOAD_DESKTOP_APP_SETTINGS"] == "false"
     assert env["OP_CACHE"] == "false"
     assert env["OP_SERVICE_ACCOUNT_TOKEN"] == "service-token"
+    assert env["HTTPS_PROXY"] == "https://proxy.example"
 
 
-def test_bws_version_probe_is_credential_free_and_stdin_closed(monkeypatch):
+def test_bws_version_probe_is_credential_and_route_free(monkeypatch):
     captured = {}
-    for key in _FORBIDDEN | {"BWS_ACCESS_TOKEN"}:
+    for key in _FORBIDDEN | {"BWS_ACCESS_TOKEN", "HTTPS_PROXY"}:
         monkeypatch.setenv(key, "ambient-secret")
 
     def fake_run(cmd, **kwargs):
@@ -119,11 +125,13 @@ def test_bws_version_probe_is_credential_free_and_stdin_closed(monkeypatch):
     env = captured["env"]
     _assert_strict_env(env)
     assert "BWS_ACCESS_TOKEN" not in env
+    assert "HTTPS_PROXY" not in env
 
 
-def test_bws_project_probe_uses_exact_candidate_token(monkeypatch):
+def test_bws_project_probe_uses_exact_candidate_token_and_route(monkeypatch):
     captured = {}
     monkeypatch.setenv("BWS_ACCESS_TOKEN", "ambient-token")
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy.example")
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
 
     def fake_run(cmd, **kwargs):
@@ -139,12 +147,14 @@ def test_bws_project_probe_uses_exact_candidate_token(monkeypatch):
     env = captured["env"]
     _assert_strict_env(env)
     assert env["BWS_ACCESS_TOKEN"] == "candidate-token"
+    assert env["HTTPS_PROXY"] == "https://proxy.example"
 
 
-def test_op_version_probe_is_credential_free_and_stdin_closed(monkeypatch):
+def test_op_version_probe_is_credential_and_route_free(monkeypatch):
     captured = {}
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "ambient-token")
     monkeypatch.setenv("OP_SESSION_team", "ambient-session")
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy.example")
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
 
     def fake_run(cmd, **kwargs):
@@ -158,12 +168,14 @@ def test_op_version_probe_is_credential_free_and_stdin_closed(monkeypatch):
     _assert_strict_env(env)
     assert "OP_SERVICE_ACCOUNT_TOKEN" not in env
     assert "OP_SESSION_team" not in env
+    assert "HTTPS_PROXY" not in env
 
 
 def test_op_whoami_uses_candidate_token_without_other_hermes_authority(monkeypatch):
     captured = {}
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "ambient-token")
     monkeypatch.setenv("OP_SESSION_team", "session-secret")
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy.example")
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
     monkeypatch.setenv("HERMES_KANBAN_TASK", "parent-task")
 
@@ -183,4 +195,5 @@ def test_op_whoami_uses_candidate_token_without_other_hermes_authority(monkeypat
     _assert_strict_env(env)
     assert env["OP_SERVICE_ACCOUNT_TOKEN"] == "candidate-token"
     assert env["OP_SESSION_team"] == "session-secret"
+    assert env["HTTPS_PROXY"] == "https://proxy.example"
     assert env.get("OP_SERVICE_ACCOUNT_TOKEN") != os.environ["OP_SERVICE_ACCOUNT_TOKEN"]
