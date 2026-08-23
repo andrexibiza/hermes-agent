@@ -1,0 +1,139 @@
+name: Finalize upstream PR 89461 v2
+
+on:
+  push:
+    branches:
+      - ops/finalize-89461-v2-20260823
+    paths:
+      - .github/workflows/finalize-89461-v2.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-upstream-89461
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_REPO: NousResearch/hermes-agent
+      TARGET_BRANCH: fix/browser-exec-network-boundary-class
+      OPS_BRANCH: ops/finalize-89461-v2-20260823
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Finalize only while upstream PR is open
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(gh api "repos/${UPSTREAM_REPO}/pulls/89461" --jq '.merged')" = true ]; then
+            echo 'upstream PR already merged'
+            exit 0
+          fi
+
+          git config user.name 'Axl Ibiza, MBA'
+          git config user.email 'andrexibiza@gmail.com'
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || true
+          git fetch upstream main
+
+          if [ -d .github/patches/89461 ]; then
+            cat .github/patches/89461/part-* | base64 --decode | gzip --decompress > /tmp/apply_89461.py
+            python3 /tmp/apply_89461.py
+          fi
+
+          git checkout upstream/main -- .github/actions/detect-changes/action.yml
+          rm -rf .github/patches/89461
+          rm -f .github/workflows/apply-89461-review-fixes.yml
+          git add -A
+
+          sha256sum --check <<'EOF'
+          f15673b8de962da80505076009744b941b3d68e057cb0e664c7f4ca9e0760241  tools/browser_use_guard_bootstrap/browser_exec_egress_guard.py
+          05600e93e8d1d1d8db0350c3b542ffbe710e1a649166179852ecf88fcf50abfb  tools/browser_exec_egress_guard.py
+          18c5c2460a6cc085a1849cb3d82cc8eedc1d3acf984c5e52e512eac9ae3c064d  tools/browser_use_guard.py
+          359e648583fb712ba28b0e9877f6eab0bd6a40a9dd1ca92ffd14f3bc5cc11dbd  tests/tools/test_browser_exec_egress_guard.py
+          01cb88f28b0f5354ac2ed6762c9e1a2cec4d4dd8c3f10b32da7a4a9fd75a4453  tests/tools/test_browser_use_guard.py
+          EOF
+          python3 -m compileall -q \
+            tools/browser_use_guard_bootstrap/browser_exec_egress_guard.py \
+            tools/browser_exec_egress_guard.py \
+            tools/browser_use_guard.py \
+            tests/tools/test_browser_exec_egress_guard.py \
+            tests/tools/test_browser_use_guard.py
+          git diff --cached --check
+
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix(security): publish verified browser_exec network boundary'
+          fi
+          candidate_sha="$(git rev-parse HEAD)"
+
+          gh api --paginate "repos/${UPSTREAM_REPO}/pulls/89461/files?per_page=100" --jq '.[].filename' > /tmp/pr-files
+          if ! git merge-base --is-ancestor upstream/main HEAD; then
+            git merge --no-commit --no-ff upstream/main || true
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            for path in "${conflicts[@]}"; do
+              case "$path" in
+                .github/actions/detect-changes/action.yml|.github/patches/89461/*|.github/workflows/apply-89461-review-fixes.yml)
+                  git checkout --theirs -- "$path" 2>/dev/null || git rm -f -- "$path"
+                  ;;
+                *)
+                  if grep -Fxq "$path" /tmp/pr-files; then
+                    git checkout --ours -- "$path"
+                  else
+                    git checkout --theirs -- "$path"
+                  fi
+                  ;;
+              esac
+              git add -A -- "$path"
+            done
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              echo 'unresolved merge conflicts remain' >&2
+              git diff --name-only --diff-filter=U >&2
+              exit 1
+            fi
+          fi
+
+          git checkout "$candidate_sha" -- \
+            tools/browser_use_guard_bootstrap/browser_exec_egress_guard.py \
+            tools/browser_exec_egress_guard.py \
+            tools/browser_use_guard.py \
+            tests/tools/test_browser_exec_egress_guard.py \
+            tests/tools/test_browser_use_guard.py
+          git checkout upstream/main -- .github/actions/detect-changes/action.yml
+          rm -rf .github/patches/89461
+          rm -f .github/workflows/apply-89461-review-fixes.yml
+          git add -A
+
+          sha256sum --check <<'EOF'
+          f15673b8de962da80505076009744b941b3d68e057cb0e664c7f4ca9e0760241  tools/browser_use_guard_bootstrap/browser_exec_egress_guard.py
+          05600e93e8d1d1d8db0350c3b542ffbe710e1a649166179852ecf88fcf50abfb  tools/browser_exec_egress_guard.py
+          18c5c2460a6cc085a1849cb3d82cc8eedc1d3acf984c5e52e512eac9ae3c064d  tools/browser_use_guard.py
+          359e648583fb712ba28b0e9877f6eab0bd6a40a9dd1ca92ffd14f3bc5cc11dbd  tests/tools/test_browser_exec_egress_guard.py
+          01cb88f28b0f5354ac2ed6762c9e1a2cec4d4dd8c3f10b32da7a4a9fd75a4453  tests/tools/test_browser_use_guard.py
+          EOF
+          python3 -m compileall -q \
+            tools/browser_use_guard_bootstrap/browser_exec_egress_guard.py \
+            tools/browser_exec_egress_guard.py \
+            tools/browser_use_guard.py \
+            tests/tools/test_browser_exec_egress_guard.py \
+            tests/tools/test_browser_use_guard.py
+          git diff --cached --check
+
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git commit -m 'merge: refresh #89461 onto current main'
+          elif ! git diff --cached --quiet; then
+            git commit -m 'fix(security): refresh #89461 onto current main'
+          fi
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+      - name: Remove temporary operations branch
+        if: always()
+        shell: bash
+        run: git push origin --delete "${OPS_BRANCH}" || true
