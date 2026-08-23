@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: repair-pr-92931
+  cancel-in-progress: true
+
 jobs:
   repair:
     runs-on: ubuntu-latest
@@ -90,7 +94,7 @@ jobs:
           }
 
           async function processV2"""
-          text, count = pattern.subn(replacement, text, count=1)
+          text, count = pattern.subn(lambda _match: replacement, text, count=1)
           if count != 1:
               raise SystemExit(f'expected one targetDurability replacement, found {count}')
           production.write_text(text, encoding='utf-8')
@@ -104,8 +108,10 @@ jobs:
           replacement = """test('v2 source retains the same event until a legacy target upgrades', async () => {
             const routes = [route('a', 'install-a'), route('b', 'install-b')]
             const calls = []
-            const event = envelope()
-            let claimAvailable = true
+            const eventId = 'c'.repeat(32)
+            let available = true
+            let claimCount = 0
+            let pending = true
             let targetSupportsV2 = false
             const host = {
               profileRoutes: async () => routes,
@@ -113,9 +119,19 @@ jobs:
                 calls.push({ connection: target.connectionId, method, params })
 
                 if (method === 'bot_relay.outbox.claim') {
-                  if (target.connectionId !== 'a' || !claimAvailable) return { envelopes: [] }
-                  claimAvailable = false
-                  return { envelopes: [event] }
+                  if (target.connectionId !== 'a' || !pending || !available) {
+                    return { envelopes: [] }
+                  }
+
+                  const claimed = envelope({
+                    attempt: claimCount,
+                    id: eventId,
+                    lease_generation: claimCount + 3,
+                    lease_token: `lease-${claimCount + 1}`
+                  })
+                  claimCount += 1
+                  available = false
+                  return { envelopes: [claimed] }
                 }
 
                 if (method === 'bot_relay.capabilities') {
@@ -135,8 +151,16 @@ jobs:
                   }
                 }
 
-                if (method === 'bot_relay.outbox.nack') return { ok: true }
-                if (method === 'bot_relay.outbox.ack') return { ok: true }
+                if (method === 'bot_relay.outbox.nack') {
+                  if (params.retryable) available = true
+                  return { ok: true }
+                }
+
+                if (method === 'bot_relay.outbox.ack') {
+                  pending = false
+                  return { ok: true }
+                }
+
                 throw new Error(`unexpected method: ${method}`)
               }
             }
@@ -149,20 +173,20 @@ jobs:
               false
             )
             const firstNack = calls.find(call => call.method === 'bot_relay.outbox.nack')
-            assert.equal(firstNack.params.id, event.id)
+            assert.equal(firstNack.params.id, eventId)
             assert.equal(firstNack.params.retryable, true)
             assert.match(firstNack.params.error, /durable inbox admission/)
 
             targetSupportsV2 = true
-            claimAvailable = true
+            await relay.drainOnce()
             await relay.drainOnce()
 
             const deliveries = calls.filter(call => call.method === 'bot_relay.deliver')
             assert.equal(deliveries.length, 1)
-            assert.equal(deliveries[0].params.id, event.id)
+            assert.equal(deliveries[0].params.id, eventId)
             const acknowledgements = calls.filter(call => call.method === 'bot_relay.outbox.ack')
             assert.equal(acknowledgements.length, 1)
-            assert.equal(acknowledgements[0].params.id, event.id)
+            assert.equal(acknowledgements[0].params.id, eventId)
             assert.equal(
               calls.filter(call => call.method === 'bot_relay.capabilities').length,
               2
@@ -173,10 +197,47 @@ jobs:
               ),
               false
             )
+            assert.equal(claimCount, 2)
+            assert.equal(pending, false)
+          })
+
+          test('an explicit v1 capability response remains retryable without delivery', async () => {
+            const routes = [route('a', 'install-a'), route('b', 'install-b')]
+            const calls = []
+            let claimed = false
+            const host = {
+              profileRoutes: async () => routes,
+              requestProfile: async (target, method, params) => {
+                calls.push({ connection: target.connectionId, method, params })
+
+                if (method === 'bot_relay.outbox.claim') {
+                  if (target.connectionId !== 'a' || claimed) return { envelopes: [] }
+                  claimed = true
+                  return { envelopes: [envelope()] }
+                }
+
+                if (method === 'bot_relay.capabilities') {
+                  return { protocol_version: 1, durable_inbox: false }
+                }
+
+                if (method === 'bot_relay.outbox.nack') return { ok: true }
+                throw new Error(`unexpected method: ${method}`)
+              }
+            }
+
+            await worker(host).drainOnce()
+
+            assert.equal(
+              calls.some(call => call.method === 'bot_relay.deliver'),
+              false
+            )
+            const nack = calls.find(call => call.method === 'bot_relay.outbox.nack')
+            assert.equal(nack.params.retryable, true)
+            assert.match(nack.params.error, /durable inbox admission/)
           })
 
           """
-          text, count = pattern.subn(replacement, text, count=1)
+          text, count = pattern.subn(lambda _match: replacement, text, count=1)
           if count != 1:
               raise SystemExit(f'expected one rolling-upgrade test replacement, found {count}')
           tests.write_text(text, encoding='utf-8')
@@ -188,7 +249,8 @@ jobs:
           git add apps/desktop/src/plugins/hermes-bots/bot-relay.mjs \
             apps/desktop/src/plugins/hermes-bots/tests/bot-relay.test.mjs \
             .github/workflows/_repair-92931.yml
+          git diff --cached --check
           git commit -m "fix(bot-relay): retain v2 events across legacy targets"
           git push origin HEAD:feat/bot-relay-durable-delivery
 
-# trigger generation 4
+# repaired trigger generation 6
