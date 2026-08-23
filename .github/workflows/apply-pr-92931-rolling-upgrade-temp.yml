@@ -1,0 +1,191 @@
+name: Temporary PR 92931 rolling-upgrade repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-pr-92931-rolling-upgrade-temp.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR 92931 source branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: feat/bot-relay-durable-delivery
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge live upstream main, repair rolling-upgrade retention, verify, and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git || true
+          git fetch upstream main --prune
+          git config user.name "Axl Ibiza"
+          git config user.email "84248988+andrexibiza@users.noreply.github.com"
+          git merge --no-edit upstream/main
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          production = Path('apps/desktop/src/plugins/hermes-bots/bot-relay.mjs')
+          text = production.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r"  async function targetDurability\(target, capabilitiesByTarget\) \{.*?\n  \}\n\n  async function processV2",
+              re.DOTALL,
+          )
+          replacement = """  async function targetDurability(target, capabilitiesByTarget) {
+            const key = `${target.id}\\u0000${installId(target.route) || ''}`
+
+            if (!capabilitiesByTarget.has(key)) {
+              capabilitiesByTarget.set(
+                key,
+                host
+                  .requestProfile(target.route, 'bot_relay.capabilities', {})
+                  .then(result => {
+                    const supported =
+                      Number(result?.protocol_version) === 2 && result?.durable_inbox === true
+
+                    return {
+                      error: supported
+                        ? null
+                        : new Error(
+                            'target gateway does not yet support relay-v2 durable inbox admission'
+                          ),
+                      retryable: !supported,
+                      supported
+                    }
+                  })
+                  .catch(error => {
+                    const capabilityMissing = isMethodNotFound(error)
+
+                    if (!capabilityMissing) {
+                      report(error, `capabilities:${target.id}`)
+                    }
+
+                    return {
+                      error: capabilityMissing
+                        ? new Error(
+                            'target gateway does not yet support relay-v2 durable inbox admission'
+                          )
+                        : error,
+                      retryable: true,
+                      supported: false
+                    }
+                  })
+              )
+            }
+
+            return capabilitiesByTarget.get(key)
+          }
+
+          async function processV2"""
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one targetDurability replacement, found {count}')
+          production.write_text(text, encoding='utf-8')
+
+          tests = Path('apps/desktop/src/plugins/hermes-bots/tests/bot-relay.test.mjs')
+          text = tests.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r"test\('v2 capability preflight never invokes a legacy target', async \(\) => \{.*?\n\}\)\n\n(?=test\('a transient capability preflight failure retries without invoking deliver')",
+              re.DOTALL,
+          )
+          replacement = """test('v2 source retains the same event until a legacy target upgrades', async () => {
+            const routes = [route('a', 'install-a'), route('b', 'install-b')]
+            const calls = []
+            const event = envelope()
+            let claimAvailable = true
+            let targetSupportsV2 = false
+            const host = {
+              profileRoutes: async () => routes,
+              requestProfile: async (target, method, params) => {
+                calls.push({ connection: target.connectionId, method, params })
+
+                if (method === 'bot_relay.outbox.claim') {
+                  if (target.connectionId !== 'a' || !claimAvailable) return { envelopes: [] }
+                  claimAvailable = false
+                  return { envelopes: [event] }
+                }
+
+                if (method === 'bot_relay.capabilities') {
+                  if (!targetSupportsV2) {
+                    throw relayError(-32601, 'Method not found')
+                  }
+
+                  return { protocol_version: 2, durable_inbox: true }
+                }
+
+                if (method === 'bot_relay.deliver') {
+                  return {
+                    protocol_version: 2,
+                    durable_receipt: true,
+                    status: 'completed',
+                    reply: `delivered:${params.id}`
+                  }
+                }
+
+                if (method === 'bot_relay.outbox.nack') return { ok: true }
+                if (method === 'bot_relay.outbox.ack') return { ok: true }
+                throw new Error(`unexpected method: ${method}`)
+              }
+            }
+            const relay = worker(host)
+
+            await relay.drainOnce()
+
+            assert.equal(
+              calls.some(call => call.method === 'bot_relay.deliver'),
+              false
+            )
+            const firstNack = calls.find(call => call.method === 'bot_relay.outbox.nack')
+            assert.equal(firstNack.params.id, event.id)
+            assert.equal(firstNack.params.retryable, true)
+            assert.match(firstNack.params.error, /durable inbox admission/)
+
+            targetSupportsV2 = true
+            claimAvailable = true
+            await relay.drainOnce()
+
+            const deliveries = calls.filter(call => call.method === 'bot_relay.deliver')
+            assert.equal(deliveries.length, 1)
+            assert.equal(deliveries[0].params.id, event.id)
+            const acknowledgements = calls.filter(call => call.method === 'bot_relay.outbox.ack')
+            assert.equal(acknowledgements.length, 1)
+            assert.equal(acknowledgements[0].params.id, event.id)
+            assert.equal(
+              calls.filter(call => call.method === 'bot_relay.capabilities').length,
+              2
+            )
+            assert.equal(
+              calls.some(
+                call => call.method === 'bot_relay.outbox.nack' && call.params.retryable === false
+              ),
+              false
+            )
+          })
+
+          """
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one rolling-upgrade test replacement, found {count}')
+          tests.write_text(text, encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/_repair-92931.yml
+          git diff --check
+          node --test apps/desktop/src/plugins/hermes-bots/tests/bot-relay.test.mjs
+          git add apps/desktop/src/plugins/hermes-bots/bot-relay.mjs \
+            apps/desktop/src/plugins/hermes-bots/tests/bot-relay.test.mjs \
+            .github/workflows/_repair-92931.yml
+          git commit -m "fix(bot-relay): retain v2 events across legacy targets"
+          git push origin HEAD:feat/bot-relay-durable-delivery
+
+# trigger generation 1
