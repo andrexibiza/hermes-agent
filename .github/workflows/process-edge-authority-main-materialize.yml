@@ -11,12 +11,12 @@ permissions:
 jobs:
   materialize:
     name: Materialize, verify, and publish typed process-edge authority
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'security/process-edge-authority-broker'
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'automation/process-edge-authority-run'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       TARGET_BRANCH: security/process-edge-authority-broker
-      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_HEAD: ecf6fc2f9b76a96656e888bc4e0eff06a212fcb6
       BASE_SHA: bdf10471b5dff0d67d172065f7dbf9f4c47c4c1b
       MAIN_WORKFLOW: .github/workflows/process-edge-authority-main-materialize.yml
     steps:
@@ -26,7 +26,7 @@ jobs:
           ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
-      - name: Verify trigger lease
+      - name: Verify target lease
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$(git merge-base HEAD "$BASE_SHA")" = "$BASE_SHA"
