@@ -1,10 +1,9 @@
 name: PR 51762 trusted contract repair
 
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths:
-      - .github/workflows/pr-51762-main-repair.yml
+    types: [opened]
 
 permissions:
   contents: write
@@ -12,6 +11,7 @@ permissions:
 jobs:
   repair:
     name: Repair and settle PR 51762 materializer
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'automation/pr-51762-run'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
