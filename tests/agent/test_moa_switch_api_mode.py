@@ -40,6 +40,15 @@ def _make_fake_agent():
     # this test asserts on.
     agent._reasoning_echo_flag = False
     agent._read_reasoning_echo_from_config = lambda: False
+    # A real AIAgent has these LM Studio phase methods; for a non-lmstudio
+    # provider they are NO-OPS (see run_agent.py: _ensure_lmstudio_runtime_loaded
+    # returns None immediately when provider != "lmstudio"). The moa switch is
+    # non-lmstudio, so mirror the real no-op path — the LM Studio phase must
+    # NOT raise here (a real agent's phase is transactional and only rolls back
+    # on a genuine failure, e.g. an lmstudio network error).
+    agent._ensure_lmstudio_runtime_loaded = lambda *_a, **_k: None
+    agent._lmstudio_load_was_unverified = lambda *_a, **_k: False
+    agent._effective_lmstudio_context_length = lambda *a, **k: None
     return agent
 
 
