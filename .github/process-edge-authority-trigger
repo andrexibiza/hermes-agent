@@ -1,0 +1,3 @@
+target_branch=security/process-edge-authority-broker
+target_head=ecf6fc2f9b76a96656e888bc4e0eff06a212fcb6
+upstream_base=bdf10471b5dff0d67d172065f7dbf9f4c47c4c1b
