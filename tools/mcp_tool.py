@@ -2366,6 +2366,7 @@ class MCPServerTask:
         "_rpc_lock", "_pending_refresh_tasks",
         "_pending_call_context",
         "_inflight_tasks", "_reconnecting",
+        "_inflight_by_gen", "_retired_generations",
         "_rpc_generation", "_admitting_generation",
         "_lifecycle_started_at", "_last_tool_call_at",
         "_idle_timeout_seconds", "_max_lifetime_seconds", "_recycled_reason",
@@ -2438,6 +2439,39 @@ class MCPServerTask:
         # than a raw cancel.
         self._inflight_tasks: set[asyncio.Task] = set()
         self._reconnecting: bool = False
+        # Per-generation OWNERSHIP of in-flight RPCs (#48069 third-round rework).
+        #
+        # The second-round admission gate below is generation-scoped, but
+        # CANCELLATION and COMPLETION authority were still process-wide mutable
+        # state: ``_inflight_tasks`` was ONE cross-generation set and
+        # ``_reconnecting`` a single shared bit that the next healthy wait
+        # unconditionally reset. A gen-N RPC that finished its async
+        # cancellation cleanup (or that the SDK let RETURN) AFTER gen N+1 had
+        # already reopened admission would then be classified by N+1's state:
+        # its raw CancelledError leaked out (``_reconnecting`` reset to False),
+        # or its retired payload was accepted (no exit-time generation check).
+        # This is acute for RESOURCE/PROMPT-ONLY servers, whose
+        # ``_discover_tools`` returns WITHOUT taking ``_rpc_lock``, so N+1 can
+        # reach ``_wait_for_lifecycle_event`` while the gen-N task still owns
+        # the lock.
+        #
+        # The repair binds each admitted RPC to the generation captured at
+        # admission time and fences its COMPLETION on BOTH exit paths
+        # (delayed-cancellation AND normal-return): a gen-N outcome is rejected
+        # once N is no longer the live/admitting generation, whichever way it
+        # exits, and any returned payload is discarded. Teardown CAUSE is made
+        # generation-scoped so N+1's ``_reconnecting = False`` reset cannot
+        # erase N's cause:
+        #   * ``_inflight_by_gen`` maps generation id -> the set of that
+        #     generation's in-flight tasks, so ``_fail_inflight_calls`` cancels
+        #     and quarantines exactly the retiring generation's tasks; and
+        #   * ``_retired_generations`` records every generation that has been
+        #     drained (its teardown cause), so a late gen-N exit can still see
+        #     "N was retired" long after N+1 reset the shared ``_reconnecting``
+        #     bit. Generations are pruned from both maps once their last task
+        #     drains, so neither grows without bound.
+        self._inflight_by_gen: dict[int, set[asyncio.Task]] = {}
+        self._retired_generations: set[int] = set()
         # Per-generation RPC admission gate (#48069 second-round rework).
         #
         # ``self.session`` publishes the CURRENTLY-USABLE ClientSession, but a
@@ -2950,7 +2984,7 @@ class MCPServerTask:
         # already opens admission on the normal transport paths, but doing it
         # here as well makes the gate robust to any path that (re)enters the
         # healthy wait after a drain (e.g. a session swapped in directly).
-        self._admitting_generation = self._rpc_generation
+        self._reopen_admission(self._rpc_generation)
 
         shutdown_task = asyncio.create_task(self._shutdown_event.wait())
         reconnect_task = asyncio.create_task(self._reconnect_event.wait())
@@ -3051,10 +3085,48 @@ class MCPServerTask:
         ``self.session`` directly, so the generation counter can never skew
         from the published session. See the ``_rpc_generation`` /
         ``_admitting_generation`` contract in ``__init__`` (#48069).
+
+        Publishing generation N+1 does NOT clear generation N's teardown cause:
+        a retired gen-N task may still be unwinding (delayed cancellation or a
+        suppressed-cancel normal return) and must remain fenced by
+        ``_retired_generations`` until it actually exits. We only prune
+        bookkeeping for generations that have fully drained (no tasks left in
+        ``_inflight_by_gen``), which keeps both maps bounded without ever
+        erasing a still-live generation's cause (#48069 third-round rework).
         """
+        self._prune_drained_generations()
         self._rpc_generation += 1
-        self._admitting_generation = self._rpc_generation
+        self._reopen_admission(self._rpc_generation)
         self.session = session
+
+    def _reopen_admission(self, gen: int) -> None:
+        """Open admission for generation ``gen`` and clear its retired status.
+
+        Admission opening and retired-status clearing are one atomic act: a
+        generation that is now ADMITTING new work is live, so its completions
+        must pass the ``_track_inflight_rpc`` fence. In production
+        ``_publish_session`` mints a strictly higher, never-reused id, so
+        ``gen`` is never in ``_retired_generations`` and the discard is a
+        no-op; the clear matters only for transport-rebuild paths (and their
+        test doubles) that re-establish under the SAME generation id, whose
+        successful retries must not be fenced as retired-generation outcomes
+        (#48069 third-round rework).
+        """
+        self._admitting_generation = gen
+        self._retired_generations.discard(gen)
+
+    def _prune_drained_generations(self) -> None:
+        """Drop retired-generation bookkeeping once a generation's last task
+        has drained, so ``_retired_generations`` / ``_inflight_by_gen`` stay
+        bounded across many reconnect cycles. A generation is only pruned when
+        it holds no live tasks — a generation still mid-cleanup keeps its cause
+        so its late exit is still fenced.
+        """
+        for gen in list(self._retired_generations):
+            tasks = self._inflight_by_gen.get(gen)
+            if not tasks:
+                self._inflight_by_gen.pop(gen, None)
+                self._retired_generations.discard(gen)
 
     def _close_rpc_admission(self) -> None:
         """Atomically stop admitting NEW RPCs to the current generation.
@@ -3090,11 +3162,37 @@ class MCPServerTask:
         the next request runs on the freshly rebuilt session (self-healing).
         Runs on the MCP event loop, same as the request tasks, so no lock
         needed.
+
+        Generation-scoped teardown cause (#48069 third-round rework). The
+        generation currently being drained is the one whose admission was just
+        closed (``_admitting_generation`` is None by now), so we retire the
+        LIVE ``_rpc_generation`` and every generation still holding tasks in
+        ``_inflight_by_gen``. Recording the retired generation ids in
+        ``_retired_generations`` is what makes the teardown cause survive
+        ``_wait_for_lifecycle_event``'s ``_reconnecting = False`` reset for the
+        NEXT generation: a gen-N RPC that exits late (delayed cancellation OR a
+        suppressed-cancel normal return) can still observe that N was retired
+        and convert its outcome to the controlled retryable result instead of
+        leaking a raw cancel or a retired-generation payload. ``_reconnecting``
+        is kept as a coarse "some teardown is happening" hint for the legacy
+        bookkeeping tests, but authority now rests on the per-generation state.
         """
-        if not self._inflight_tasks:
+        # Retire the live generation's teardown cause unconditionally, even
+        # with zero active RPCs: a call admitted a moment ago (or one still
+        # mid-cleanup) must be able to see that its generation was drained.
+        live_gen = self._rpc_generation
+        self._retired_generations.add(live_gen)
+        # Any generation that still owns in-flight tasks is also draining.
+        for gen in list(self._inflight_by_gen.keys()):
+            self._retired_generations.add(gen)
+
+        pending = [t for t in self._inflight_tasks if not t.done()]
+        if not pending and not self._inflight_by_gen:
+            # Nothing to cancel. The retired-generation cause is already
+            # recorded above, so a zero-active-RPC teardown still fences any
+            # late arrival for this generation.
             return
         self._reconnecting = True
-        pending = [t for t in self._inflight_tasks if not t.done()]
         if pending:
             logger.warning(
                 "MCP server '%s': failing %d in-flight request(s) due to %s",
@@ -5903,6 +6001,36 @@ def _mark_server_call_started(server: Any) -> None:
         mark_tool_call()
 
 
+def _generation_retired(server, gen) -> bool:
+    """Return True if generation ``gen`` has been drained (its teardown cause).
+
+    Authority is the GENERATION-SCOPED ``_retired_generations`` set, populated
+    by ``_fail_inflight_calls`` and NOT reset when the next generation enters
+    its healthy wait (``_wait_for_lifecycle_event`` only clears the coarse
+    shared ``_reconnecting`` bit). So a gen-N RPC that exits long after gen N+1
+    reopened admission can still see that N was retired.
+
+    Reopening admission for a generation CLEARS its retired status (see
+    ``_reopen_admission`` / ``_publish_session``): a generation that is drained
+    and then re-established as the live, admitting generation is serving again
+    and its completions must pass. In production ``_publish_session`` mints a
+    strictly higher, never-reused id, so a retired id can never be reopened;
+    the clear-on-reopen matters only for the transport-rebuild paths (and their
+    test doubles) that re-establish a session under the SAME generation id.
+
+    Legacy/synthetic server doubles used in unit tests may not carry the
+    per-generation set; for them we fall back to the coarse shared
+    ``_reconnecting`` teardown bit so their bookkeeping-only behaviour is
+    unchanged. Real ``MCPServerTask`` instances always carry the set, so their
+    teardown cause is purely per-generation and immune to the shared-bit reset
+    (#48069 third-round rework).
+    """
+    retired = getattr(server, "_retired_generations", None)
+    if retired is None:
+        return bool(getattr(server, "_reconnecting", False))
+    return gen in retired
+
+
 def _track_inflight_rpc(server, server_name: str, op: str):
     """Async context manager: register the running task as an in-flight RPC.
 
@@ -5918,19 +6046,28 @@ def _track_inflight_rpc(server, server_name: str, op: str):
         window (while ``server.session`` still publishes the old generation)
         is REFUSED with a clean, retryable ``RuntimeError`` and never enqueued
         against the draining session — closing the late-admission race
-        (#48069). The admission read and the ``_inflight_tasks`` registration
-        below run with NO ``await`` between them, so they cannot interleave
-        with the synchronous ``_close_rpc_admission`` on the same loop: a late
-        call is EITHER admitted-then-registered (and thus cancelled by the
-        ensuing sweep) OR refused, never both admitted and outside the sweep;
-      * adds the current task to ``server._inflight_tasks`` so
-        ``_wait_for_lifecycle_event`` skips the keepalive while the request is
-        active and ``_fail_inflight_calls`` can cancel it on teardown; and
-      * converts the resulting ``CancelledError`` into a clean, retryable
-        ``RuntimeError`` when the cancel came from a deliberate reconnect/
-        shutdown teardown (``server._reconnecting``), so the agent re-runs the
-        request on the freshly rebuilt session instead of hanging to
-        ``tool_timeout`` or propagating a raw cancel.
+        (#48069). The admission read and the registration below run with NO
+        ``await`` between them, so they cannot interleave with the synchronous
+        ``_close_rpc_admission`` on the same loop: a late call is EITHER
+        admitted-then-registered (and thus cancelled by the ensuing sweep) OR
+        refused, never both admitted and outside the sweep;
+      * BINDS the admitted RPC to the generation captured at admission time
+        (``gen = server._rpc_generation``) and registers the task under that
+        generation in ``server._inflight_by_gen[gen]`` (as well as the flat
+        ``server._inflight_tasks`` the keepalive/skip logic reads), so
+        ``_fail_inflight_calls`` cancels and quarantines exactly the retiring
+        generation's tasks; and
+      * FENCES COMPLETION on BOTH exit paths. If generation ``gen`` was
+        retired while this RPC was running, the outcome is converted to the
+        controlled retryable ``RuntimeError`` and any returned payload is
+        DISCARDED — whether the RPC exits by delayed cancellation (the SDK
+        raised ``CancelledError`` after ``_fail_inflight_calls`` cancelled us)
+        OR returns normally (the SDK SUPPRESSED the cancel and handed back a
+        retired-generation payload). A retired-generation result can therefore
+        never escape through the next generation, and a teardown cancel is
+        never confused with an external cancel because the classification is
+        the per-generation cause, not the shared ``_reconnecting`` bit that
+        N+1 already reset.
 
     The set/discard is single-loop, so no lock is needed.
     """
@@ -5953,35 +6090,69 @@ def _track_inflight_rpc(server, server_name: str, op: str):
                 f"MCP server '{server_name}' reconnected during "
                 f"{op} (transport reset); retry the request."
             )
-        # Pin the generation we were admitted to. If a drain starts after this
-        # point we are already in _inflight_tasks and the sweep cancels us
-        # (handled by the _reconnecting branch below); either way we never run
-        # against a session admitted for a different generation.
-        #
-        # ``_inflight_tasks`` is read defensively (getattr) for the same reason
-        # as the admission attribute: synthetic server doubles used in unit
-        # tests may not carry it, and a missing set simply means "no teardown
+        # CAPTURE + PIN the generation we were admitted to. Everything below —
+        # registration, cancellation classification, and the completion fence —
+        # is keyed to THIS ``gen``, never to whatever generation happens to be
+        # live when we exit. The admitting generation is the live generation at
+        # admission time, so pin it (falling back to ``_rpc_generation`` and
+        # finally to the admitting id itself for synthetic doubles).
+        gen = getattr(server, "_rpc_generation", admitting)
+        # ``_inflight_tasks`` / ``_inflight_by_gen`` are read defensively
+        # (getattr) because synthetic server doubles used in unit tests may not
+        # carry them; a missing container simply means "no teardown
         # bookkeeping" rather than an error.
         inflight = getattr(server, "_inflight_tasks", None)
+        by_gen = getattr(server, "_inflight_by_gen", None)
         task = asyncio.current_task()
         if task is not None and inflight is not None:
             inflight.add(task)
+        if task is not None and by_gen is not None:
+            by_gen.setdefault(gen, set()).add(task)
+
+        def _retired_error():
+            return RuntimeError(
+                f"MCP server '{server_name}' reconnected during "
+                f"{op} (transport reset); retry the request."
+            )
+
         try:
             yield
+            # --- Completion fence, NORMAL-RETURN path ---
+            # The RPC's ``session.<rpc>()`` await completed WITHOUT raising.
+            # But if our generation was retired while it ran, the SDK
+            # suppressed the teardown cancel and handed back a
+            # retired-generation payload. That payload must NOT be surfaced:
+            # raising here (before the handler processes ``result``) discards
+            # it and yields the same controlled retryable result the
+            # cancellation path produces. Only the LIVE generation's normal
+            # returns are allowed through.
+            if _generation_retired(server, gen):
+                raise _retired_error()
         except asyncio.CancelledError:
+            # --- Completion fence, DELAYED-CANCELLATION path ---
             # A deliberate reconnect/shutdown teardown cancelled us (see
-            # _fail_inflight_calls). Convert to a clean, retryable error
-            # instead of propagating a raw cancellation, so the agent retries
-            # on the freshly rebuilt session.
-            if getattr(server, "_reconnecting", False):
-                raise RuntimeError(
-                    f"MCP server '{server_name}' reconnected during "
-                    f"{op} (transport reset); retry the request."
-                ) from None
+            # _fail_inflight_calls, which retired ``gen``). Convert to a clean,
+            # retryable error instead of propagating a raw cancellation, so the
+            # agent retries on the freshly rebuilt session. The check is the
+            # PER-GENERATION cause, so a late cancel that lands after N+1 reset
+            # the shared ``_reconnecting`` bit is still correctly classified as
+            # a teardown (not an external cancel).
+            if _generation_retired(server, gen):
+                raise _retired_error() from None
             raise
         finally:
             if task is not None and inflight is not None:
                 inflight.discard(task)
+            if task is not None and by_gen is not None:
+                gen_set = by_gen.get(gen)
+                if gen_set is not None:
+                    gen_set.discard(task)
+                    # Drop the generation bucket once its last task drains, so
+                    # ``_inflight_by_gen`` stays bounded. A retired generation
+                    # whose last task just exited no longer needs to fence
+                    # anything, so let ``_publish_session`` prune its cause.
+                    if not gen_set:
+                        by_gen.pop(gen, None)
 
     return _cm()
 

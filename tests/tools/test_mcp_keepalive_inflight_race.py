@@ -649,3 +649,254 @@ def test_publish_session_bumps_generation_monotonically():
     assert server._admitting_generation == 2
     assert server.session is s2
 
+
+# ---------------------------------------------------------------------------
+# Generation-OWNERSHIP tests (#48069 third round). Admission is
+# generation-scoped, but the SECOND-round fix left CANCELLATION and COMPLETION
+# authority as process-wide mutable state: `_inflight_tasks` was one
+# cross-generation set, and the teardown cause was the single shared
+# `_reconnecting` bit that the NEXT generation's `_wait_for_lifecycle_event`
+# unconditionally reset to False. The sharp schedule is a RESOURCE/PROMPT-ONLY
+# server (no tools advertised, so `_discover_tools` returns WITHOUT taking
+# `_rpc_lock`): a gen-N resources/read or prompts/get holds `_rpc_lock`; a
+# reconnect closes admission, requests cancellation, and returns while the RPC
+# is still doing async cancellation cleanup; gen N+1 is published and — because
+# tool-less discovery doesn't take the lock — reaches the healthy wait, resets
+# `_reconnecting=False`, and reopens admission WHILE the gen-N task still
+# exists. When the gen-N task finally exits, the old code classified it by
+# N+1's state: a raw CancelledError leaked out, or (if the SDK suppressed the
+# cancel and RETURNED) the retired-generation payload was accepted.
+#
+# These tests bind the RPC to its captured generation and fence completion on
+# BOTH exit paths: a retired-generation outcome is converted to the controlled
+# retryable reconnect result and any payload discarded, whether the RPC exits
+# by delayed cancellation OR by normal return.
+# ---------------------------------------------------------------------------
+
+
+class _ResourceOnlySession:
+    """A resource/prompt-only session double (advertises NO tools).
+
+    ``read_resource`` blocks on a caller-supplied event so the test can hold
+    the RPC INSIDE its async cancellation cleanup across the N→N+1 lifecycle
+    boundary, exactly the tool-less schedule that let a retired-generation
+    outcome escape.
+    """
+
+    def __init__(self):
+        self.read_calls = 0
+
+    async def read_resource(self, uri, *, hold, release, mode):
+        self.read_calls += 1
+        hold.set()
+        try:
+            await asyncio.sleep(3600)  # stand-in for the wedged RPC
+        except asyncio.CancelledError:
+            # Model the SDK doing async cleanup AFTER the lifecycle exit: wait
+            # until the test has advanced to generation N+1, THEN either
+            # re-raise the cancel (delayed-cancellation path) or SUPPRESS it and
+            # return a retired-generation payload (normal-return path).
+            await release.wait()
+            if mode == "suppress-and-return":
+                return {"contents": "RETIRED-GEN-PAYLOAD-MUST-NOT-ESCAPE"}
+            raise
+
+
+def _drive_resource_only_across_generation(mode):
+    """Shared driver: hold a gen-N resources/read inside cleanup, publish gen
+    N+1 (reopening admission and resetting ``_reconnecting``), then release the
+    gen-N task and capture how its outcome is classified.
+    """
+    from tools.mcp_tool import _track_inflight_rpc
+
+    server = _make_lifecycle_server(f"gen-own-{mode}")
+    old = _ResourceOnlySession()
+    server._publish_session(old)  # generation 1
+    gen_n = server._rpc_generation
+
+    hold = asyncio.Event()
+    release = asyncio.Event()
+    result_box = {}
+
+    async def drive():
+        async def _gen_n_read():
+            async with _track_inflight_rpc(server, server.name, "resources/read"):
+                async with server._rpc_lock:
+                    # The captured-generation binding happens at admission; the
+                    # payload returned here (normal-return mode) is a RETIRED
+                    # generation's and must never reach the caller.
+                    return await server.session.read_resource(
+                        "res://x", hold=hold, release=release, mode=mode,
+                    )
+
+        task = asyncio.create_task(_gen_n_read())
+        await hold.wait()  # gen-N RPC is now holding _rpc_lock inside the SDK
+
+        # --- Reconnect: close admission, request cancellation, RETURN while the
+        #     gen-N task is still doing async cleanup. ---
+        server._reconnect_event.set()
+        reason = await asyncio.wait_for(
+            server._wait_for_lifecycle_event(), timeout=5.0
+        )
+        assert reason == "reconnect"
+        assert server._admitting_generation is None
+        assert gen_n in server._retired_generations  # gen-N cause recorded
+
+        # --- Publish gen N+1 the way a tool-less discovery path does: it does
+        #     NOT take _rpc_lock, so it reaches the healthy wait even though the
+        #     gen-N task still holds the lock. Model exactly what gen N+1's
+        #     ``_wait_for_lifecycle_event`` entry does on a healthy session:
+        #     reset the shared ``_reconnecting`` bit and reopen admission for
+        #     the new generation. (Driving a real second lifecycle event would
+        #     re-run ``_fail_inflight_calls`` and re-cancel the still-pending
+        #     gen-N task, masking the normal-return path we are testing.) ---
+        new = _ResourceOnlySession()
+        server._publish_session(new)  # generation 2
+        assert server._rpc_generation == gen_n + 1
+        server._reconnecting = False  # N+1's healthy-wait entry resets the bit
+        server._admitting_generation = server._rpc_generation  # admission reopens
+        assert server._reconnecting is False
+        # The generation-scoped cause SURVIVES the reset.
+        assert gen_n in server._retired_generations
+
+        # --- Now release the gen-N task's cleanup and see how it is classified.
+        release.set()
+        try:
+            result_box["result"] = await asyncio.wait_for(task, timeout=2.0)
+            result_box["outcome"] = "returned"
+        except RuntimeError as exc:
+            result_box["outcome"] = "retryable"
+            result_box["error"] = str(exc)
+        except asyncio.CancelledError:
+            result_box["outcome"] = "raw_cancel"
+        except asyncio.TimeoutError:
+            result_box["outcome"] = "hung"
+        return result_box
+
+    return server, asyncio.run(drive())
+
+
+def test_gen_owned_delayed_cancellation_is_controlled_reconnect():
+    """RESOURCE-ONLY server, DELAYED-CANCELLATION path: a gen-N read that is
+    still in async cancellation cleanup when gen N+1 reopens admission and
+    resets ``_reconnecting`` must STILL surface the controlled retryable
+    reconnect result (not a raw cancel), because the teardown cause is
+    generation-scoped and survives the shared-bit reset.
+    """
+    server, box = _drive_resource_only_across_generation("reraise-cancel")
+
+    # (a) controlled reconnect result...
+    assert box["outcome"] == "retryable", box
+    assert "reconnected during" in box["error"]
+    assert "retry the request" in box["error"]
+    # (c) ...and it cannot be confused with an external cancellation.
+    assert box["outcome"] != "raw_cancel"
+    # The gen-N bucket drained; pruning keeps the maps bounded once it exits.
+    server._prune_drained_generations()
+    assert server._inflight_by_gen == {}
+
+
+def test_gen_owned_normal_return_after_drain_is_fenced():
+    """RESOURCE-ONLY server, NORMAL-RETURN path (completion fencing): if the
+    SDK SUPPRESSES the teardown cancel and RETURNS a retired-generation
+    payload, the wrapper must DISCARD that payload and convert the outcome to
+    the controlled retryable reconnect result. A retired-generation completion
+    can never escape through gen N+1.
+    """
+    server, box = _drive_resource_only_across_generation("suppress-and-return")
+
+    # (b) the retired-generation payload must NOT be returned to the caller.
+    assert box["outcome"] == "retryable", box
+    assert "result" not in box  # payload discarded
+    assert "reconnected during" in box["error"]
+    assert "retry the request" in box["error"]
+    server._prune_drained_generations()
+    assert server._inflight_by_gen == {}
+
+
+def test_live_generation_normal_return_is_not_fenced():
+    """Negative control for the normal-return fence: a resources/read that
+    completes on the LIVE (admitting) generation, with no drain, returns its
+    payload normally. The completion fence must reject ONLY retired
+    generations, never the healthy path.
+    """
+    from tools.mcp_tool import _track_inflight_rpc
+
+    server = _make_lifecycle_server("gen-live-return")
+
+    class _HealthySession:
+        async def read_resource(self, uri):
+            return {"contents": "LIVE-PAYLOAD"}
+
+    server._publish_session(_HealthySession())
+
+    async def drive():
+        async def _read():
+            async with _track_inflight_rpc(server, server.name, "resources/read"):
+                async with server._rpc_lock:
+                    return await server.session.read_resource("res://x")
+
+        return await asyncio.create_task(_read())
+
+    result = asyncio.run(drive())
+    assert result == {"contents": "LIVE-PAYLOAD"}
+    assert server._inflight_tasks == set()
+    assert server._inflight_by_gen == {}
+
+
+def test_fail_inflight_calls_quarantines_only_retiring_generation():
+    """``_fail_inflight_calls`` cancels/quarantines the tasks of the RETIRING
+    generation and records that generation's cause, per-generation, so a later
+    generation's in-flight task is untouched. Proves cancellation authority is
+    generation-scoped, not one cross-generation set.
+    """
+    from tools.mcp_tool import _track_inflight_rpc
+
+    server = _make_lifecycle_server("gen-quarantine")
+
+    class _Blocking:
+        async def read_resource(self, uri, *, started):
+            started.set()
+            await asyncio.sleep(3600)
+
+    async def drive():
+        # Generation 1 with an in-flight read.
+        server._publish_session(_Blocking())
+        gen1 = server._rpc_generation
+        started1 = asyncio.Event()
+        outcome1 = {}
+
+        async def _read_gen1():
+            try:
+                async with _track_inflight_rpc(server, server.name, "resources/read"):
+                    async with server._rpc_lock:
+                        return await server.session.read_resource(
+                            "res://1", started=started1,
+                        )
+            except RuntimeError as exc:
+                outcome1["err"] = str(exc)
+                raise
+
+        t1 = asyncio.create_task(_read_gen1())
+        await started1.wait()
+        assert gen1 in server._inflight_by_gen
+        assert t1 in server._inflight_by_gen[gen1]
+
+        # Drain generation 1.
+        server._close_rpc_admission()
+        server._fail_inflight_calls("reconnect")
+        assert gen1 in server._retired_generations
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(t1, timeout=2.0)
+        assert "reconnected during" in outcome1["err"]
+        # The cancelled task unwound its ``async with server._rpc_lock``, so the
+        # lock is free again and the gen-1 bucket drained to empty.
+        assert not server._rpc_lock.locked()
+        return gen1
+
+    gen1 = asyncio.run(drive())
+    # After the retiring generation's only task drained, pruning drops it.
+    server._prune_drained_generations()
+    assert gen1 not in server._inflight_by_gen
+    assert server._inflight_by_gen == {}
+
