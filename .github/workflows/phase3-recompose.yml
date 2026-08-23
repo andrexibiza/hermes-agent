@@ -1,0 +1,51 @@
+name: phase3-recompose-probe
+
+on:
+  push:
+    branches:
+      - phase3/rebuild-b766607
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact probe head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Apply Phase 3 delta to current main
+        shell: bash
+        run: |
+          set +e
+          status=0
+          for script in .phase3_patch_1.py .phase3_patch_2.py .phase3_patch_3.py; do
+            echo "==> ${script}" | tee -a phase3-recompose.log
+            python "${script}" >> phase3-recompose.log 2>&1
+            rc=$?
+            echo "${script}: exit ${rc}" | tee -a phase3-recompose.log
+            if [ "${rc}" -ne 0 ]; then
+              status="${rc}"
+              break
+            fi
+          done
+          git status --short > phase3-status.txt
+          git diff --binary > phase3-current-main.patch
+          exit "${status}"
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: phase3-recompose-probe-${{ github.sha }}
+          path: |
+            phase3-recompose.log
+            phase3-status.txt
+            phase3-current-main.patch
+          if-no-files-found: error
+          retention-days: 3
