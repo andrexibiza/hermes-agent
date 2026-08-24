@@ -218,6 +218,30 @@ _SECRET_SUFFIXES = (
     "_CLIENT_SECRET",
 )
 
+# Mutable coordinates are explicit policy too.  These are values that reviewed
+# call sites need to select a child-owned home, lifecycle cadence, vault output
+# mode, or container cache location.  They are not a generic escape hatch for
+# arbitrary caller state.
+_OVERRIDE_COORDINATES: dict[ChildProcessIntent, frozenset[str]] = {
+    ChildProcessIntent.TRUSTED_HERMES_CHILD: frozenset({
+        "HERMES_HOME",
+        "HERMES_COMPUTE_HOST_HEARTBEAT_SECS",
+    }),
+    ChildProcessIntent.INTERACTIVE_HERMES_PTY: frozenset({"HERMES_HOME"}),
+    ChildProcessIntent.VAULT_CLI: frozenset({"NO_COLOR"}),
+    ChildProcessIntent.CONTAINER_IMAGE_BUILD: frozenset({
+        "APPTAINER_TMPDIR",
+        "APPTAINER_CACHEDIR",
+        "SINGULARITY_TMPDIR",
+        "SINGULARITY_CACHEDIR",
+    }),
+}
+_NETWORK_OVERRIDE_INTENTS = frozenset({
+    ChildProcessIntent.MODEL_DRIVER,
+    ChildProcessIntent.VAULT_CLI,
+    ChildProcessIntent.CONTAINER_IMAGE_BUILD,
+})
+
 
 def _normalize_name(name: str) -> str:
     return str(name or "").strip().upper()
@@ -421,33 +445,42 @@ def _apply_overrides(
     env: dict[str, str],
     overrides: Mapping[str, str] | None,
     spec: ChildProcessSpec,
-    *,
-    trusted_profile_child: bool,
-    model_driver: bool,
 ) -> None:
+    """Apply only names positively admitted by the typed edge policy.
+
+    Forwarding wrappers are separate authority channels and therefore require an
+    explicit spec grant.  Ordinary raw names may be changed only when the policy
+    declares them as safe baseline, intent-owned routing/network coordinates,
+    model-provider authority, or an exact/prefix grant.
+    """
+
     if not overrides:
         return
 
     provider_names = _provider_env_names()
-    safe_names = {_normalize_name(name) for name in _SAFE_BASE_KEYS}
-    safe_names.update(_normalize_name(name) for name in _NETWORK_ROUTE_KEYS)
+    allowed_names = {_normalize_name(name) for name in _SAFE_BASE_KEYS}
+    if spec.intent in _NETWORK_OVERRIDE_INTENTS:
+        allowed_names.update(_normalize_name(name) for name in _NETWORK_ROUTE_KEYS)
+    allowed_names.update(
+        _normalize_name(name) for name in _OVERRIDE_COORDINATES.get(spec.intent, ())
+    )
+    if spec.intent is ChildProcessIntent.MODEL_DRIVER:
+        allowed_names.update(provider_names)
 
     for key, value in overrides.items():
         name = str(key)
+        normalized = _normalize_name(name)
         effective = _effective_env_name(name)
         if _grant_allows(spec, effective):
             env[name] = str(value)
             continue
+        if normalized != effective:
+            # A container forwarding wrapper can only carry explicitly granted
+            # authority; baseline/coordinate admission is for this child only.
+            continue
         if _is_tier1_or_internal(effective) or _is_control_plane_authority(effective):
-            # A caller cannot smuggle authority back after the broker filtered it.
             continue
-        if trusted_profile_child:
-            env[name] = str(value)
-            continue
-        if model_driver and effective in provider_names:
-            env[name] = str(value)
-            continue
-        if effective in safe_names or not _secret_like(effective):
+        if effective in allowed_names:
             env[name] = str(value)
 
 
@@ -549,13 +582,7 @@ def build_child_process_env(
     except Exception:
         pass
 
-    _apply_overrides(
-        env,
-        overrides,
-        spec,
-        trusted_profile_child=trusted_profile_child,
-        model_driver=model_driver,
-    )
+    _apply_overrides(env, overrides, spec)
     env = _strip_ungranted_authority(
         env,
         spec,
@@ -740,6 +767,16 @@ def _policy_hash() -> str:
         ],
         "safe_base": sorted(_SAFE_BASE_KEYS),
         "network": sorted(_NETWORK_ROUTE_KEYS),
+        "network_override_intents": sorted(
+            intent.value for intent in _NETWORK_OVERRIDE_INTENTS
+        ),
+        "override_coordinates": {
+            intent.value: sorted(_normalize_name(name) for name in names)
+            for intent, names in sorted(
+                _OVERRIDE_COORDINATES.items(), key=lambda item: item[0].value
+            )
+        },
+        "provider_env_names": sorted(_provider_env_names()),
         "control_exact": sorted(_CONTROL_PLANE_EXACT),
         "control_prefixes": sorted(_CONTROL_PLANE_PREFIXES),
         "forwarded_prefixes": sorted(_FORWARDED_ENV_PREFIXES),

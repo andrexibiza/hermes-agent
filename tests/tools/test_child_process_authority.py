@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -145,24 +146,47 @@ def test_explicit_profile_home_override_wins_context_home(monkeypatch):
     assert env["HERMES_HOME"] == "/target-profile"
 
 
-def test_overrides_cannot_reintroduce_stripped_authority(monkeypatch):
+def test_overrides_require_positive_policy_and_block_execution_authority(monkeypatch):
     _plant(monkeypatch)
     spec = trusted_hermes_child_spec(source="test:override")
 
     env = build_child_process_env(
         spec,
         overrides={
-            "SAFE_OVERRIDE": "yes",
+            "SAFE_OVERRIDE": "no-longer-ambiently-safe",
+            "LD_PRELOAD": "/tmp/evil.so",
+            "DYLD_INSERT_LIBRARIES": "/tmp/evil.dylib",
+            "PYTHONPATH": "/tmp/evil-python",
+            "PYTHONHOME": "/tmp/evil-home",
+            "NODE_OPTIONS": "--require=/tmp/evil.js",
+            "BASH_ENV": "/tmp/evil-bashrc",
+            "ENV": "/tmp/evil-shrc",
+            "APPTAINERENV_LD_PRELOAD": "/tmp/wrapped-evil.so",
+            "SINGULARITYENV_NODE_OPTIONS": "--require=/tmp/wrapped-evil.js",
             "DISCORD_BOT_TOKEN": "smuggled",
             "APPTAINERENV_GATEWAY_RELAY_SECRET": "wrapped-smuggle",
             "_HERMES_GATEWAY": "1",
+            "HERMES_HOME": "/target-profile",
         },
     )
 
-    assert env["SAFE_OVERRIDE"] == "yes"
-    assert "DISCORD_BOT_TOKEN" not in env
-    assert "APPTAINERENV_GATEWAY_RELAY_SECRET" not in env
-    assert "_HERMES_GATEWAY" not in env
+    assert env["HERMES_HOME"] == "/target-profile"
+    for denied in (
+        "SAFE_OVERRIDE",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "NODE_OPTIONS",
+        "BASH_ENV",
+        "ENV",
+        "APPTAINERENV_LD_PRELOAD",
+        "SINGULARITYENV_NODE_OPTIONS",
+        "DISCORD_BOT_TOKEN",
+        "APPTAINERENV_GATEWAY_RELAY_SECRET",
+        "_HERMES_GATEWAY",
+    ):
+        assert denied not in env
 
 
 def test_bws_vault_edge_is_minimal_and_keeps_network_controls(monkeypatch):
@@ -223,7 +247,7 @@ def test_secret_helper_keeps_profile_data_but_not_parent_role(monkeypatch):
     assert "HERMES_KANBAN_TASK" not in env
 
 
-def test_checkpoint_git_does_not_inherit_git_or_network_injection(monkeypatch):
+def test_checkpoint_git_does_not_inherit_or_override_git_injection(monkeypatch):
     _plant(monkeypatch)
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
@@ -239,6 +263,10 @@ def test_checkpoint_git_does_not_inherit_git_or_network_injection(monkeypatch):
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_SSH_COMMAND": "ssh -oProxyCommand=evil",
+            "APPTAINERENV_GIT_SSH_COMMAND": "wrapped-evil",
+            "NODE_OPTIONS": "--require=/tmp/evil.js",
         },
     )
 
@@ -248,6 +276,9 @@ def test_checkpoint_git_does_not_inherit_git_or_network_injection(monkeypatch):
     assert "GIT_CONFIG_KEY_0" not in env
     assert "GIT_CONFIG_VALUE_0" not in env
     assert "GIT_ASKPASS" not in env
+    assert "GIT_SSH_COMMAND" not in env
+    assert "APPTAINERENV_GIT_SSH_COMMAND" not in env
+    assert "NODE_OPTIONS" not in env
     assert "HTTPS_PROXY" not in env
     assert "OPENAI_API_KEY" not in env
 
@@ -288,12 +319,28 @@ def test_interactive_pty_is_typed_and_stdin_is_not_synthesized(monkeypatch):
 def test_closed_probe_stdin_and_environment(monkeypatch):
     _plant(monkeypatch)
     spec = probe_spec(source="test:probe")
-    env = build_child_process_env(spec)
+    env = build_child_process_env(
+        spec,
+        overrides={
+            "TMP": "/tmp/probe",
+            "LD_PRELOAD": "/tmp/evil.so",
+            "PYTHONPATH": "/tmp/evil-python",
+            "NODE_OPTIONS": "--require=/tmp/evil.js",
+            "GIT_CONFIG_COUNT": "1",
+            "SINGULARITYENV_LD_PRELOAD": "/tmp/wrapped-evil.so",
+        },
+    )
 
     assert stdin_for_spec(spec) is subprocess.DEVNULL
+    assert env["TMP"] == "/tmp/probe"
     assert "OPENAI_API_KEY" not in env
     assert "ACME_LOGIN" not in env
     assert "BWS_ACCESS_TOKEN" not in env
+    assert "LD_PRELOAD" not in env
+    assert "PYTHONPATH" not in env
+    assert "NODE_OPTIONS" not in env
+    assert "GIT_CONFIG_COUNT" not in env
+    assert "SINGULARITYENV_LD_PRELOAD" not in env
 
 
 def test_active_multiplex_scope_is_authoritative(monkeypatch):
@@ -364,6 +411,22 @@ def test_policy_hash_covers_authority_manifest(monkeypatch):
         authority._CONTROL_PLANE_EXACT | {"HERMES_NEW_CONTROL_AUTHORITY"},
     )
 
+    assert authority._policy_hash() != baseline
+
+
+def test_policy_hash_covers_provider_registry_authority(monkeypatch):
+    from hermes_cli import auth
+    from tools import child_process_authority as authority
+
+    baseline = authority._policy_hash()
+    registry = dict(auth.PROVIDER_REGISTRY)
+    registry["policy-hash-canary"] = SimpleNamespace(
+        api_key_env_vars=("POLICY_HASH_CANARY_API_KEY",),
+        base_url_env_var="POLICY_HASH_CANARY_BASE_URL",
+    )
+    monkeypatch.setattr(auth, "PROVIDER_REGISTRY", registry)
+
+    assert "POLICY_HASH_CANARY_API_KEY" in authority._provider_env_names()
     assert authority._policy_hash() != baseline
 
 
