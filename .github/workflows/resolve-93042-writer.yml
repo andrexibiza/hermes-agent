@@ -1,0 +1,170 @@
+name: Resolve PR 93042 conflicts
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: resolve-pr-93042
+  cancel-in-progress: false
+
+jobs:
+  resolve-and-push:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/resolve-93042-writer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out immutable resolver carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: automation/resolve-93042-writer
+          path: carrier
+          persist-credentials: false
+
+      - name: Check out exact Phase 4 head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: andrexibiza/hermes-agent
+          ref: phase4-desktop-fleet
+          fetch-depth: 0
+          path: work
+          token: ${{ github.token }}
+
+      - name: Merge pinned current main and resolve the exact conflict set
+        working-directory: work
+        env:
+          EXPECTED_HEAD_SHA: a47902f068d91ee95aea41b0de94d5067b03d1e8
+          MAIN_SHA: 057dcdf236f8a6a26721c10fcc6ccb72726e272a
+          EXPECTED_BASE_SHA: 91e867631e9d2eb9fbd69edd4459475d38070979
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags upstream "$MAIN_SHA"
+          test "$(git merge-base HEAD "$MAIN_SHA")" = "$EXPECTED_BASE_SHA"
+
+          set +e
+          git merge --no-commit --no-ff "$MAIN_SHA"
+          merge_rc=$?
+          set -e
+          test "$merge_rc" -eq 1
+
+          git diff --name-only --diff-filter=U | sort > /tmp/actual-conflicts.txt
+          cat > /tmp/expected-conflicts.txt <<'EOF'
+          apps/desktop/src/app/skills/index.test.tsx
+          apps/desktop/src/store/updates.ts
+          hermes_cli/main.py
+          plugins/platforms/telegram/adapter.py
+          EOF
+          diff -u /tmp/expected-conflicts.txt /tmp/actual-conflicts.txt
+
+          python ../carrier/.github/scripts/resolve_93042_conflicts.py
+          git add \
+            apps/desktop/src/app/skills/index.test.tsx \
+            apps/desktop/src/store/updates.ts \
+            hermes_cli/main.py \
+            plugins/platforms/telegram/adapter.py
+          test -z "$(git diff --name-only --diff-filter=U)"
+          ! grep -RInE '^(<<<<<<<|=======|>>>>>>>)' \
+            apps/desktop/src/app/skills/index.test.tsx \
+            apps/desktop/src/store/updates.ts \
+            hermes_cli/main.py \
+            plugins/platforms/telegram/adapter.py
+          git diff --cached --check
+
+      - name: Static composition checks
+        working-directory: work
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in (
+              'gateway/run.py',
+              'gateway/slash_commands.py',
+              'hermes_cli/config_defaults.py',
+              'hermes_cli/main.py',
+              'hermes_cli/update_cmd.py',
+              'hermes_cli/web_server.py',
+              'plugins/platforms/telegram/adapter.py',
+          ):
+              ast.parse(Path(path).read_text(encoding='utf-8'), filename=path)
+          PY
+          bash -n scripts/desktop-update/posix.sh
+          pwsh -NoProfile -NonInteractive -Command \
+            "[void][scriptblock]::Create((Get-Content -Raw 'scripts/desktop-update/windows.ps1'))"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            work/pyproject.toml
+            work/uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install Python test dependencies
+        working-directory: work
+        run: >-
+          uv sync --locked --python 3.11
+          --extra all --extra dev --extra anthropic --extra mistral
+          --extra fal --extra modal --extra daytona --extra hindsight
+          --extra parallel-web
+
+      - name: Run focused Python update and Telegram regressions
+        working-directory: work
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+        run: |
+          source .venv/bin/activate
+          python -m pytest -q --tb=short \
+            tests/hermes_cli/test_update_handoff_exit.py \
+            tests/hermes_cli/test_update_windows_coordinator.py \
+            tests/hermes_cli/test_cmd_update.py \
+            tests/hermes_cli/test_update_receipt.py \
+            tests/gateway/test_telegram_approval_buttons.py \
+            tests/gateway/test_telegram_error_redaction.py \
+            tests/gateway/test_update_command.py
+
+      - name: Set up Node 26
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: work/package-lock.json
+
+      - name: Install JavaScript dependencies
+        working-directory: work
+        run: |
+          npm --version | grep -q '^12\.' || npm i -g npm@12
+          npm ci
+
+      - name: Run focused Desktop conflict regressions
+        working-directory: work/apps/desktop
+        run: >-
+          npx vitest run --project ui
+          src/app/skills/index.test.tsx
+          src/store/updates.test.ts
+
+      - name: Commit and push the exact merge
+        working-directory: work
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "a47902f068d91ee95aea41b0de94d5067b03d1e8"
+          test "$(git rev-parse MERGE_HEAD)" = "057dcdf236f8a6a26721c10fcc6ccb72726e272a"
+          git config user.name "Andrex Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+          git commit -m "merge(main): resolve Phase 4 conflicts"
+          merged_sha="$(git rev-parse HEAD)"
+          git push origin HEAD:phase4-desktop-fleet
+          echo "merged_sha=$merged_sha" >> "$GITHUB_STEP_SUMMARY"
