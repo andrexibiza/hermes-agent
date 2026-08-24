@@ -14,11 +14,10 @@ import type {
   DesktopUpdateStatus,
   DesktopVersionInfo
 } from '@/global'
-import { checkHermesUpdate, getActionStatus, getScopedStatus, getStatus, restartGateway, updateHermes } from '@/hermes'
+import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { persistString, storedString } from '@/lib/storage'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
-import { applyFleetUpdates, type FleetUpdateResult } from '@/store/fleet-updates'
 import { dismissNotification, notify } from '@/store/notifications'
 import { $connection } from '@/store/session'
 import type { BackendUpdateCheckResponse } from '@/types/hermes'
@@ -74,26 +73,20 @@ export const resetUpdateApplyState = () => {
   $backendUpdateApply.set(IDLE)
 }
 
-const UPDATE_TOAST_IDS: Record<UpdateTarget, string> = {
-  client: 'desktop-update-available',
-  backend: 'backend-update-available'
-}
+const UPDATE_TOAST_ID = 'desktop-update-available'
 // Time-based snooze instead of per-sha dismissal: this repo lands ~100 commits
 // a day, so a "don't show this exact sha again" guard re-popped the toast on
 // every new commit. We instead suppress the toast for a cooldown window that
 // (re)starts whenever the user closes it.
-const UPDATE_TOAST_SNOOZE_KEYS: Record<UpdateTarget, string> = {
-  client: 'hermes:update-toast-snooze-until',
-  backend: 'hermes:backend-update-toast-snooze-until'
-}
+const UPDATE_TOAST_SNOOZE_KEY = 'hermes:update-toast-snooze-until'
 const UPDATE_TOAST_COOLDOWN_MS = 24 * 60 * 60 * 1000
 
-function snoozeUpdateToast(target: UpdateTarget): void {
-  persistString(UPDATE_TOAST_SNOOZE_KEYS[target], String(Date.now() + UPDATE_TOAST_COOLDOWN_MS))
+function snoozeUpdateToast(): void {
+  persistString(UPDATE_TOAST_SNOOZE_KEY, String(Date.now() + UPDATE_TOAST_COOLDOWN_MS))
 }
 
-function isUpdateToastSnoozed(target: UpdateTarget): boolean {
-  const until = Number(storedString(UPDATE_TOAST_SNOOZE_KEYS[target]) || 0)
+function isUpdateToastSnoozed(): boolean {
+  const until = Number(storedString(UPDATE_TOAST_SNOOZE_KEY) || 0)
 
   return Number.isFinite(until) && Date.now() < until
 }
@@ -212,7 +205,7 @@ export function reportInstallMethodWarning(message: string | undefined): void {
  * (re)starts the cooldown, so a busy upstream branch doesn't re-spam the user
  * on every new commit. The snooze is persisted, so it survives relaunches too.
  */
-export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, target: UpdateTarget = 'client') {
+export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
   if (!status || status.supported === false || status.error || !status.targetSha) {
     return
   }
@@ -225,13 +218,11 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, t
     return
   }
 
-  if (isUpdateToastSnoozed(target)) {
+  if (isUpdateToastSnoozed()) {
     return
   }
 
-  const apply = target === 'backend' ? $backendUpdateApply.get() : $updateApply.get()
-
-  if (apply.applying) {
+  if ($updateApply.get().applying) {
     return
   }
 
@@ -239,39 +230,25 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, t
     action: {
       label: translateNow('notifications.seeWhatsNew'),
       onClick: () => {
-        snoozeUpdateToast(target)
-        openUpdateOverlayFor(target)
+        snoozeUpdateToast()
+        openUpdatesWindow()
       }
     },
     durationMs: 0,
     icon: 'gift',
-    id: UPDATE_TOAST_IDS[target],
+    id: UPDATE_TOAST_ID,
     kind: 'info',
     message:
       behind !== null && behind > 0
         ? translateNow('notifications.updateReadyMessage', behind)
         : translateNow('notifications.updateReadyMessageUnknown'),
-    onDismiss: () => snoozeUpdateToast(target),
+    onDismiss: () => snoozeUpdateToast(),
     title: translateNow('notifications.updateReadyTitle')
   })
 }
 
 export function openUpdatesWindow(): void {
   openUpdateOverlayFor(isRemoteMode() ? 'backend' : 'client')
-}
-
-/** Open and apply one explicitly named update target.
- *
- * Settings → About renders the desktop client and a connected remote
- * backend as separate rows.  Those row actions must stay pinned to the row the
- * user chose; routing through `startActiveUpdate()` would intentionally fan out
- * to every target and recreates the client/backend ambiguity that the split UI
- * is meant to remove.
- */
-export function startUpdateFor(target: UpdateTarget): void {
-  $updateOverlayTarget.set(target)
-  $updateOverlayOpen.set(true)
-  void (target === 'backend' ? applyBackendUpdate() : applyUpdates())
 }
 
 /**
@@ -295,7 +272,9 @@ export function startActiveUpdate(): void {
   }
 
   const target: UpdateTarget = isRemoteMode() ? 'backend' : 'client'
-  startUpdateFor(target)
+  $updateOverlayTarget.set(target)
+  $updateOverlayOpen.set(true)
+  void (target === 'backend' ? applyBackendUpdate() : applyUpdates())
 }
 
 /**
@@ -368,152 +347,48 @@ function isRemoteMode(): boolean {
   return $connection.get()?.mode === 'remote'
 }
 
-interface BackendAuthority {
-  key: string
-  scope: undefined | { connectionId: string; profile?: string }
-}
+function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
+  const behind = res.behind ?? 0
 
-/** Snapshot the backend identity before an await. Registry connections carry
- * an explicit request pin; legacy remotes keep their old ambient route but are
- * still guarded by base URL/profile so an A response cannot repaint B. */
-function activeBackendAuthority(): BackendAuthority | null {
-  const connection = $connection.get()
-
-  if (connection?.mode !== 'remote') {
-    return null
-  }
-
-  const connectionId = connection.connectionId?.trim()
-  const baseUrl = connection.baseUrl?.trim() || ''
-  const profile = connection.profile?.trim()
-
-  return {
-    key: `${baseUrl}::${connectionId || ''}::${profile || 'default'}`,
-    scope: connectionId ? { connectionId, ...(profile ? { profile } : {}) } : undefined
-  }
-}
-
-function backendAuthorityIsCurrent(authority: BackendAuthority): boolean {
-  return activeBackendAuthority()?.key === authority.key
-}
-
-function checkBackendFor(authority: BackendAuthority, force = true): Promise<BackendUpdateCheckResponse> {
-  return authority.scope ? checkHermesUpdate(force, authority.scope) : checkHermesUpdate(force)
-}
-
-function updateBackendFor(authority: BackendAuthority) {
-  return authority.scope ? updateHermes(authority.scope) : updateHermes()
-}
-
-function backendActionStatusFor(authority: BackendAuthority, name: string, lines: number) {
-  return getActionStatus(name, lines, authority.scope)
-}
-
-function backendStatusFor(authority: BackendAuthority) {
-  return authority.scope ? getScopedStatus(authority.scope) : getStatus()
-}
-
-function mapBackendCheck(
-  res: BackendUpdateCheckResponse,
-  runtime?: Awaited<ReturnType<typeof getStatus>> | null
-): DesktopUpdateStatus {
   return {
     supported: res.can_apply,
     message: res.message ?? undefined,
     updateAvailable: res.update_available,
-    behind: res.behind === null ? null : res.behind > 0 ? res.behind : 0,
+    behind: behind > 0 ? behind : 0,
     currentVersion: res.current_version,
-    gatewayRestartRequired: runtime?.gateway_restart_required === true,
-    gatewayProfile: runtime?.gateway_profile?.trim() || undefined,
-    gatewayCodeSha: runtime?.gateway_code_sha?.trim() || undefined,
-    checkoutCodeSha: runtime?.checkout_code_sha?.trim() || undefined,
     targetSha: res.update_available ? `backend:${res.current_version}` : undefined,
     commits: res.commits,
     fetchedAt: Date.now()
   }
 }
 
-const backendChecks = new Map<string, Promise<DesktopUpdateStatus | null>>()
-
-function syncBackendChecking(): void {
-  const current = activeBackendAuthority()
-  $backendUpdateChecking.set(Boolean(current && backendChecks.has(current.key)))
-}
-
-// The renderer has one visible backend-update slot, so its contents must have
-// one equally explicit owner. Clear that slot synchronously on every remote
-// connection/profile re-home; an A result may publish after A→B→A, but A's
-// cached status can never be shown or acted on while B owns the window.
-let observedBackendAuthorityKey = activeBackendAuthority()?.key ?? null
-$connection.subscribe(() => {
-  const authorityKey = activeBackendAuthority()?.key ?? null
-
-  if (authorityKey === observedBackendAuthorityKey) {
-    return
-  }
-
-  observedBackendAuthorityKey = authorityKey
-  $backendUpdateStatus.set(null)
-  $backendUpdateApply.set(IDLE)
-  syncBackendChecking()
-})
-
-export function checkBackendUpdates(): Promise<DesktopUpdateStatus | null> {
-  const authority = activeBackendAuthority()
-
-  if (!authority) {
-    return Promise.resolve($backendUpdateStatus.get())
-  }
-
-  const existing = backendChecks.get(authority.key)
-
-  if (existing) {
-    $backendUpdateChecking.set(true)
-    return existing
+export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null> {
+  if (!isRemoteMode() || $backendUpdateChecking.get()) {
+    return $backendUpdateStatus.get()
   }
 
   $backendUpdateChecking.set(true)
 
-  let request!: Promise<DesktopUpdateStatus | null>
-  request = (async () => {
-    try {
-      const [check, runtime] = await Promise.all([
-        checkBackendFor(authority, true),
-        backendStatusFor(authority).catch(() => null)
-      ])
-      const status = mapBackendCheck(check, runtime)
+  try {
+    const status = mapBackendCheck(await checkHermesUpdate(true))
+    $backendUpdateStatus.set(status)
+    maybeNotifyUpdateAvailable(status)
 
-      if (backendAuthorityIsCurrent(authority)) {
-        $backendUpdateStatus.set(status)
-        maybeNotifyUpdateAvailable(status, 'backend')
-      }
-
-      return status
-    } catch (error) {
-      const fallback: DesktopUpdateStatus = {
-        supported: $backendUpdateStatus.get()?.supported ?? true,
-        error: 'check-failed',
-        message: error instanceof Error ? error.message : String(error),
-        fetchedAt: Date.now()
-      }
-
-      if (backendAuthorityIsCurrent(authority)) {
-        $backendUpdateStatus.set(fallback)
-      }
-
-      return fallback
-    } finally {
-      if (backendChecks.get(authority.key) === request) {
-        backendChecks.delete(authority.key)
-      }
-
-      syncBackendChecking()
+    return status
+  } catch (error) {
+    const fallback: DesktopUpdateStatus = {
+      supported: $backendUpdateStatus.get()?.supported ?? true,
+      error: 'check-failed',
+      message: error instanceof Error ? error.message : String(error),
+      fetchedAt: Date.now()
     }
-  })()
 
-  backendChecks.set(authority.key, request)
+    $backendUpdateStatus.set(fallback)
 
-  return request
+    return fallback
+  } finally {
+    $backendUpdateChecking.set(false)
+  }
 }
 
 export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
@@ -528,7 +403,7 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
   try {
     const status = await bridge.check()
     $updateStatus.set(status)
-    maybeNotifyUpdateAvailable(status, 'client')
+    maybeNotifyUpdateAvailable(status)
     void refreshDesktopVersion()
 
     return status
@@ -558,7 +433,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
     return { ok: false, error: 'unavailable', message: 'Desktop bridge unavailable.' }
   }
 
-  dismissNotification(UPDATE_TOAST_IDS.client)
+  dismissNotification(UPDATE_TOAST_ID)
   $updateApply.set({ ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' })
 
   try {
@@ -625,7 +500,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
         resetUpdateApplyState()
         notify({
           durationMs: 8000,
-          id: UPDATE_TOAST_IDS.client,
+          id: UPDATE_TOAST_ID,
           kind: 'success',
           message: translateNow('updates.manualPickedUp'),
           // No action button here, but it's still update-lifecycle news — keep
@@ -659,8 +534,8 @@ const BACKEND_ACTION_POLL_MS = 1500
 const BACKEND_ACTION_MAX_MS = 6 * 60 * 1000
 const BACKEND_RETURN_MAX_MS = 4 * 60 * 1000
 
-function finishBackendApply(authority: BackendAuthority): DesktopUpdateApplyResult {
-  if (backendAuthorityIsCurrent(authority)) {
+function finishBackendApply(returned: boolean): DesktopUpdateApplyResult {
+  if (returned) {
     $backendUpdateApply.set(IDLE)
     setUpdateOverlayOpen(false)
     void checkBackendUpdates()
@@ -669,19 +544,22 @@ function finishBackendApply(authority: BackendAuthority): DesktopUpdateApplyResu
     // affordance in remote mode targets the backend, so nothing ever told
     // them the app itself was stale). Nudge with a one-click client update.
     void maybeNudgeClientAfterBackendUpdate()
+
+    return { ok: true, message: 'Backend update applied.' }
   }
 
-  return { ok: true, message: 'Backend update applied.' }
+  $backendUpdateApply.set({
+    ...$backendUpdateApply.get(),
+    applying: false,
+    stage: 'error',
+    error: 'apply-failed',
+    message: translateNow('updates.applyStatus.noReturn')
+  })
+
+  return { ok: false, error: 'apply-failed', message: 'Backend did not come back online.' }
 }
 
-function ingestBackendActionStatus(
-  authority: BackendAuthority,
-  status: Awaited<ReturnType<typeof getActionStatus>>
-): void {
-  if (!backendAuthorityIsCurrent(authority)) {
-    return
-  }
-
+function ingestBackendActionStatus(status: Awaited<ReturnType<typeof getActionStatus>>): void {
   const current = $backendUpdateApply.get()
 
   const log = status.lines
@@ -697,8 +575,6 @@ function ingestBackendActionStatus(
 
   $backendUpdateApply.set({
     ...current,
-    applying: true,
-    stage: current.stage === 'idle' ? 'pull' : current.stage,
     log,
     message: latest ?? current.message
   })
@@ -716,34 +592,15 @@ function completedAfterRestart(
  *  run started at-or-after we kicked the update off counts — an older
  *  receipt describes a previous update, and a still-running one proves
  *  nothing yet. The 60s slack absorbs client/backend clock skew. */
-function receiptProvesOutcome(
-  status: Awaited<ReturnType<typeof getActionStatus>>,
-  applyStartedAtMs: number,
-  expectedCorrelationId?: string
-): boolean {
+function receiptProvesOutcome(status: Awaited<ReturnType<typeof getActionStatus>>, applyStartedAtMs: number): boolean {
   const receipt = status.receipt
 
   if (!receipt || !receipt.finished_at || !receipt.started_at) {
     return false
   }
 
-  if (
-    receipt.outcome !== 'success' &&
-    receipt.outcome !== 'partial' &&
-    receipt.outcome !== 'failed' &&
-    receipt.outcome !== 'refused'
-  ) {
+  if (receipt.outcome !== 'success' && receipt.outcome !== 'partial' && receipt.outcome !== 'failed') {
     return false
-  }
-
-  if (expectedCorrelationId) {
-    if (receipt.correlation_id) {
-      return receipt.correlation_id === expectedCorrelationId
-    }
-
-    if (status.action_id?.trim() !== expectedCorrelationId) {
-      return false
-    }
   }
 
   const startedMs = Date.parse(receipt.started_at)
@@ -767,92 +624,18 @@ function legacyBackendReachedTarget(
   return !!targetSha && !!status.commits?.length && !status.commits.some(commit => commit.sha === targetSha)
 }
 
-const backendUpdatesInFlight = new Map<string, Promise<DesktopUpdateApplyResult>>()
+let backendUpdateInFlight: Promise<DesktopUpdateApplyResult> | null = null
 
-function activeManagedSshConnection(authority: BackendAuthority) {
-  const connectionId = authority.scope?.connectionId
-
-  if (!connectionId) {
-    return null
-  }
-
-  const connection = $connectionsRegistry.get()?.connections.find(candidate => candidate.id === connectionId)
-
-  return connection?.kind === 'ssh' ? connection : null
-}
-
-async function runManagedSshBackendUpdate(authority: BackendAuthority): Promise<DesktopUpdateApplyResult> {
-  const connection = activeManagedSshConnection(authority)
-  const updateManaged = window.hermesDesktop?.connections?.updateManaged
-
-  if (!connection || !updateManaged) {
-    const message = !connection
-      ? 'No Desktop-managed SSH backend is active.'
-      : 'This Desktop version cannot safely update a managed SSH backend.'
-
-    if (backendAuthorityIsCurrent(authority)) {
-      $backendUpdateApply.set({
-        ...IDLE,
-        applying: false,
-        stage: 'error',
-        error: 'managed-ssh-unavailable',
-        message
-      })
-    }
-
-    return { ok: false, error: 'managed-ssh-unavailable', message }
-  }
-
-  if (backendAuthorityIsCurrent(authority)) {
-    $backendUpdateApply.set({
-      ...IDLE,
-      applying: true,
-      stage: 'pull',
-      message: translateNow('updates.applyStatus.pulling')
-    })
-  }
-
-  const result = await updateManaged(connection.id)
-  const message = result.message || result.error || result.receipt?.stopReason || 'Managed SSH update failed.'
-
-  if (result.ok) {
-    return finishBackendApply(authority)
-  }
-
-  const partial = result.updateOk && !result.restoreOk
-  if (backendAuthorityIsCurrent(authority)) {
-    $backendUpdateApply.set({
-      ...IDLE,
-      applying: false,
-      stage: 'error',
-      error: partial ? 'partial' : 'apply-failed',
-      message
-    })
-  }
-
-  return { ok: false, error: partial ? 'partial' : 'apply-failed', message }
-}
-
-async function runBackendUpdate(authority: BackendAuthority): Promise<DesktopUpdateApplyResult> {
-  dismissNotification(UPDATE_TOAST_IDS.backend)
-  if (backendAuthorityIsCurrent(authority)) {
-    $backendUpdateApply.set({
-      ...IDLE,
-      applying: true,
-      stage: 'prepare',
-      message: translateNow('updates.applyStatus.preparing')
-    })
-  }
+async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
+  dismissNotification(UPDATE_TOAST_ID)
+  $backendUpdateApply.set({
+    ...IDLE,
+    applying: true,
+    stage: 'prepare',
+    message: translateNow('updates.applyStatus.preparing')
+  })
 
   try {
-    // A registry-backed SSH serve process is owned by Electron. Posting the
-    // generic HTTP updater into that live process can replace its own venv
-    // (and fails outright on Windows). Route every active-backend affordance
-    // through the same drain/update/restore transaction as the fleet rows.
-    if (activeManagedSshConnection(authority)) {
-      return await runManagedSshBackendUpdate(authority)
-    }
-
     const previousStatus = $backendUpdateStatus.get()
     const requestedTargetSha = previousStatus?.commits?.at(0)?.sha
 
@@ -860,27 +643,23 @@ async function runBackendUpdate(authority: BackendAuthority): Promise<DesktopUpd
       ? previousStatus.targetSha.slice('backend:'.length)
       : undefined
 
-    const started = await updateBackendFor(authority)
+    const started = await updateHermes()
     const applyStartedAtMs = Date.now()
 
     if (!started.ok) {
       const message = (started as { message?: string }).message || translateNow('updates.applyStatus.notAvailable')
       const command = (started as { update_command?: string }).update_command || 'hermes update'
-      if (backendAuthorityIsCurrent(authority)) {
-        $backendUpdateApply.set({ ...IDLE, applying: false, stage: 'manual', message, command })
-      }
+      $backendUpdateApply.set({ ...IDLE, applying: false, stage: 'manual', message, command })
 
       return { ok: false, error: 'manual', manual: true, message, command }
     }
 
-    if (backendAuthorityIsCurrent(authority)) {
-      $backendUpdateApply.set({
-        ...IDLE,
-        applying: true,
-        stage: 'pull',
-        message: translateNow('updates.applyStatus.pulling')
-      })
-    }
+    $backendUpdateApply.set({
+      ...IDLE,
+      applying: true,
+      stage: 'pull',
+      message: translateNow('updates.applyStatus.pulling')
+    })
 
     let last: Awaited<ReturnType<typeof getActionStatus>> | null = null
     // Backups, dependency repair, and builds can legitimately take several
@@ -893,20 +672,18 @@ async function runBackendUpdate(authority: BackendAuthority): Promise<DesktopUpd
       await new Promise(resolve => globalThis.setTimeout(resolve, BACKEND_ACTION_POLL_MS))
 
       try {
-        last = await backendActionStatusFor(authority, started.name, 2000)
-        ingestBackendActionStatus(authority, last)
+        last = await getActionStatus(started.name, 2000)
+        ingestBackendActionStatus(last)
       } catch {
         if (!reconnecting) {
           reconnecting = true
           deadline = Date.now() + BACKEND_RETURN_MAX_MS
-          if (backendAuthorityIsCurrent(authority)) {
-            $backendUpdateApply.set({
-              ...$backendUpdateApply.get(),
-              applying: true,
-              stage: 'restart',
-              message: translateNow('updates.applyStatus.restarting')
-            })
-          }
+          $backendUpdateApply.set({
+            ...$backendUpdateApply.get(),
+            applying: true,
+            stage: 'restart',
+            message: translateNow('updates.applyStatus.restarting')
+          })
         }
 
         continue
@@ -916,91 +693,35 @@ async function runBackendUpdate(authority: BackendAuthority): Promise<DesktopUpd
         if (reconnecting) {
           reconnecting = false
           deadline = actionDeadline
-          if (backendAuthorityIsCurrent(authority)) {
-            $backendUpdateApply.set({
-              ...$backendUpdateApply.get(),
-              applying: true,
-              stage: 'pull',
-              message: translateNow('updates.applyStatus.pulling')
-            })
-          }
+          $backendUpdateApply.set({
+            ...$backendUpdateApply.get(),
+            applying: true,
+            stage: 'pull',
+            message: translateNow('updates.applyStatus.pulling')
+          })
         }
 
         continue
+      }
+
+      if (last.exit_code === 0 || (last.exit_code === null && completedAfterRestart(last, started.action_id))) {
+        return finishBackendApply(true)
       }
 
       // #91277 bullet 3: the backend now attaches the durable update
       // receipt to the status. A receipt whose run STARTED after we kicked
       // this update off is authoritative — read its outcome instead of
       // inferring from log markers or timing out across the restart gap.
-      const expectedCorrelationId = started.correlation_id?.trim() || started.action_id?.trim() || undefined
-
-      if (receiptProvesOutcome(last, applyStartedAtMs, expectedCorrelationId)) {
-        if (last.receipt!.outcome === 'refused') {
-          const message = last.receipt!.refusal?.message || translateNow('updates.applyStatus.notAvailable')
-          const command = last.receipt!.refusal?.update_command || 'hermes update'
-
-          if (backendAuthorityIsCurrent(authority)) {
-            $backendUpdateApply.set({ ...IDLE, applying: false, stage: 'manual', message, command })
-          }
-
-          return { ok: false, error: 'manual', manual: true, message, command }
-        }
-
-        if (last.receipt!.outcome === 'partial') {
-          const message = translateNow('updates.applyStatus.partial')
-
-          if (backendAuthorityIsCurrent(authority)) {
-            $backendUpdateApply.set({
-              ...IDLE,
-              applying: false,
-              stage: 'error',
-              error: 'partial',
-              message
-            })
-          }
-
-          return { ok: false, error: 'partial', message }
-        }
-
-        if (last.receipt!.outcome === 'failed') {
-          const message = last.receipt!.stop_reason?.trim() || translateNow('updates.applyStatus.failed')
-
-          if (backendAuthorityIsCurrent(authority)) {
-            $backendUpdateApply.set({
-              ...IDLE,
-              applying: false,
-              stage: 'error',
-              error: 'apply-failed',
-              message
-            })
-          }
-
-          return { ok: false, error: 'apply-failed', message }
-        }
-
-        return finishBackendApply(authority)
-      }
-
-      const statusMatchesStarted = !expectedCorrelationId || last.action_id?.trim() === expectedCorrelationId
-
-      if (
-        statusMatchesStarted &&
-        (last.exit_code === 0 || (last.exit_code === null && completedAfterRestart(last, started.action_id)))
-      ) {
-        return finishBackendApply(authority)
-      }
-
-      if (expectedCorrelationId && !statusMatchesStarted) {
-        continue
+      if (last.exit_code === null && receiptProvesOutcome(last, applyStartedAtMs)) {
+        return finishBackendApply(last.receipt!.outcome === 'success')
       }
 
       if (!started.action_id && last.exit_code === null) {
         try {
-          const status = await checkBackendFor(authority, true)
+          const status = await checkHermesUpdate(true)
 
           if (legacyBackendReachedTarget(status, requestedTargetSha, previousVersion)) {
-            return finishBackendApply(authority)
+            return finishBackendApply(true)
           }
         } catch {
           continue
@@ -1012,173 +733,39 @@ async function runBackendUpdate(authority: BackendAuthority): Promise<DesktopUpd
       }
     }
 
-    if (backendAuthorityIsCurrent(authority)) {
-      $backendUpdateApply.set({
-        ...$backendUpdateApply.get(),
-        applying: false,
-        stage: 'error',
-        error: 'apply-failed',
-        message: translateNow('updates.applyStatus.failed')
-      })
-    }
+    $backendUpdateApply.set({
+      ...$backendUpdateApply.get(),
+      applying: false,
+      stage: 'error',
+      error: 'apply-failed',
+      message: translateNow('updates.applyStatus.failed')
+    })
 
     return { ok: false, error: 'apply-failed', message: 'Backend update failed.' }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (backendAuthorityIsCurrent(authority)) {
-      $backendUpdateApply.set({
-        ...$backendUpdateApply.get(),
-        applying: false,
-        stage: 'error',
-        error: 'apply-failed',
-        message
-      })
-    }
+    $backendUpdateApply.set({
+      ...$backendUpdateApply.get(),
+      applying: false,
+      stage: 'error',
+      error: 'apply-failed',
+      message
+    })
 
     return { ok: false, error: 'apply-failed', message }
   }
 }
 
 export function applyBackendUpdate(): Promise<DesktopUpdateApplyResult> {
-  const authority = activeBackendAuthority()
-
-  if (!authority) {
-    return Promise.resolve({ ok: false, error: 'unavailable', message: 'No remote backend is active.' })
+  if (backendUpdateInFlight) {
+    return backendUpdateInFlight
   }
 
-  const existing = backendUpdatesInFlight.get(authority.key)
-
-  if (existing) {
-    return existing
-  }
-
-  const update = runBackendUpdate(authority).finally(() => {
-    if (backendUpdatesInFlight.get(authority.key) === update) {
-      backendUpdatesInFlight.delete(authority.key)
-    }
+  backendUpdateInFlight = runBackendUpdate().finally(() => {
+    backendUpdateInFlight = null
   })
-  backendUpdatesInFlight.set(authority.key, update)
 
-  return update
-}
-
-const backendRestartsInFlight = new Map<string, Promise<DesktopUpdateApplyResult>>()
-
-async function runBackendGatewayRestart(authority: BackendAuthority): Promise<DesktopUpdateApplyResult> {
-  const profile = $backendUpdateStatus.get()?.gatewayProfile?.trim()
-  const scope = authority.scope
-    ? { ...authority.scope, ...(profile ? { profile } : {}) }
-    : profile
-      ? { profile }
-      : undefined
-
-  if (backendAuthorityIsCurrent(authority)) {
-    $backendUpdateApply.set({
-      ...IDLE,
-      applying: true,
-      stage: 'restart',
-      message: translateNow('updates.applyStatus.restartingSkewedGateway')
-    })
-  }
-
-  try {
-    const started = await restartGateway(scope)
-
-    if (!started.ok) {
-      throw new Error(started.message?.trim() || translateNow('updates.applyStatus.restartFailed'))
-    }
-
-    const expectedId = started.correlation_id?.trim() || started.action_id?.trim() || undefined
-    const deadline = Date.now() + BACKEND_RETURN_MAX_MS
-
-    while (Date.now() < deadline) {
-      await new Promise(resolve => globalThis.setTimeout(resolve, BACKEND_ACTION_POLL_MS))
-
-      let action: Awaited<ReturnType<typeof getActionStatus>>
-
-      try {
-        action = await getActionStatus(started.name, 2_000, scope)
-      } catch {
-        // The explicitly scoped route may disappear while its supervisor
-        // replaces the gateway. Retry until it returns with current code.
-        continue
-      }
-
-      if (action.running) {
-        continue
-      }
-
-      if (expectedId && action.action_id?.trim() !== expectedId) {
-        continue
-      }
-
-      if (action.exit_code !== null && action.exit_code !== 0) {
-        throw new Error(action.lines.at(-1) || translateNow('updates.applyStatus.restartFailed'))
-      }
-
-      try {
-        const runtime = await (scope ? getScopedStatus(scope) : getStatus())
-
-        if (runtime.gateway_restart_required === true) {
-          continue
-        }
-
-        const check = await checkBackendFor(authority, true)
-        const status = mapBackendCheck(check, runtime)
-
-        if (backendAuthorityIsCurrent(authority)) {
-          $backendUpdateStatus.set(status)
-          $backendUpdateApply.set(IDLE)
-        }
-
-        return { ok: true, message: translateNow('updates.applyStatus.restartComplete') }
-      } catch {
-        continue
-      }
-    }
-
-    throw new Error(translateNow('updates.applyStatus.restartNoReturn'))
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-
-    if (backendAuthorityIsCurrent(authority)) {
-      $backendUpdateApply.set({
-        ...IDLE,
-        applying: false,
-        stage: 'error',
-        error: 'gateway-restart-failed',
-        message
-      })
-    }
-
-    return { ok: false, error: 'gateway-restart-failed', message }
-  }
-}
-
-/** Restart only the active backend gateway/profile when the backend explicitly
- * reports code skew. Human-readable messages never activate this path. */
-export function restartBackendGatewayForSkew(): Promise<DesktopUpdateApplyResult> {
-  const authority = activeBackendAuthority()
-
-  if (!authority || $backendUpdateStatus.get()?.gatewayRestartRequired !== true) {
-    return Promise.resolve({ ok: false, error: 'unavailable', message: 'No skewed backend gateway is active.' })
-  }
-
-  const key = `${authority.key}::${$backendUpdateStatus.get()?.gatewayProfile || 'default'}`
-  const existing = backendRestartsInFlight.get(key)
-
-  if (existing) {
-    return existing
-  }
-
-  const restart = runBackendGatewayRestart(authority).finally(() => {
-    if (backendRestartsInFlight.get(key) === restart) {
-      backendRestartsInFlight.delete(key)
-    }
-  })
-  backendRestartsInFlight.set(key, restart)
-
-  return restart
+  return backendUpdateInFlight
 }
 
 // ── Update everything: the client + every registered backend in one action ──
@@ -1260,63 +847,62 @@ async function runEverythingUpdate(): Promise<void> {
   $updateEverything.set({ running: true })
 
   try {
-    // 1. Preflight every backend through the keyed fleet coordinator, then
-    //    wait for one truthful terminal outcome per physical install. This
-    //    replaces Electron's old fire-and-forget "dispatched" fan-out.
-    const registry = $connectionsRegistry.get() ?? (await refreshConnectionsRegistry().catch(() => null))
-    const registeredBackends = (registry?.connections ?? []).filter(connection => connection.kind !== 'local')
-    let fleetResults: FleetUpdateResult[] = []
+    // 1. Active backend first (remote mode), with the detailed overlay flow.
+    //    Its own finish path re-checks and nudges, but the everything-flow
+    //    continues regardless of the outcome: one unreachable backend must
+    //    not strand the other machines or the client.
+    if (isRemoteMode()) {
+      $updateOverlayTarget.set('backend')
 
-    if (registeredBackends.length > 0) {
-      fleetResults = await applyFleetUpdates().catch(error => {
+      await applyBackendUpdate().catch(() => null)
+    }
+
+    // 2. Fan out to every OTHER eligible registered connection. The active
+    //    backend was just updated (excluded), and the local runtime updates
+    //    with the client in step 3 (excluded). No registry/bridge → skip.
+    const bridge = window.hermesDesktop?.connections
+    const registry = $connectionsRegistry.get() ?? (await refreshConnectionsRegistry().catch(() => null))
+    const excludeIds = ['local']
+    const activeConnectionId = $connection.get()?.connectionId
+
+    if (isRemoteMode() && activeConnectionId && !excludeIds.includes(activeConnectionId)) {
+      excludeIds.push(activeConnectionId)
+    }
+
+    const remaining = (registry?.connections ?? []).filter(connection => !excludeIds.includes(connection.id))
+
+    if (bridge?.updateAll && remaining.length > 0) {
+      try {
+        const { results } = await bridge.updateAll({ excludeIds })
+
+        for (const row of results) {
+          if (row.ok) {
+            notify({ title: row.label, message: row.detail || translateNow('updates.everythingDispatched') })
+          } else if (row.skipped) {
+            notify({
+              title: row.label,
+              message: row.detail || row.reason || translateNow('updates.everythingSkipped')
+            })
+          } else {
+            notify({
+              kind: 'warning',
+              title: row.label,
+              message: row.error || row.detail || translateNow('updates.everythingRowFailed')
+            })
+          }
+        }
+      } catch (error) {
         notify({
           kind: 'warning',
           title: translateNow('updates.everythingFanoutFailedTitle'),
           message: error instanceof Error ? error.message : String(error)
         })
-
-        return []
-      })
-    } else if (isRemoteMode()) {
-      // Compatibility with a pre-registry Electron main: retain the detailed
-      // active-backend path, which captures its legacy ambient route once.
-      $updateOverlayTarget.set('backend')
-      await applyBackendUpdate().catch(() => null)
-    }
-
-    for (const result of fleetResults) {
-      const label =
-        registeredBackends.find(connection => connection.id === result.connectionId)?.label ?? result.connectionId
-      const title = translateNow('updates.everythingBackendTitle', label)
-
-      if (result.outcome === 'success') {
-        notify({ kind: 'success', title, message: translateNow('updates.everythingBackendUpdated') })
-      } else if (result.outcome === 'restarted') {
-        notify({ kind: 'success', title, message: translateNow('updates.everythingBackendRestarted') })
-      } else if (result.outcome === 'partial') {
-        notify({ kind: 'warning', title, message: translateNow('updates.everythingBackendPartial') })
-      } else if (result.outcome === 'manual') {
-        notify({
-          kind: 'warning',
-          title,
-          message: result.command
-            ? translateNow('updates.everythingBackendManualCommand', result.command)
-            : result.message || translateNow('updates.everythingBackendManual')
-        })
-      } else if (result.outcome === 'managed') {
-        notify({ title, message: translateNow('updates.everythingBackendManaged') })
-      } else if (result.outcome === 'failed') {
-        notify({
-          kind: 'warning',
-          title,
-          message: result.message || translateNow('updates.everythingRowFailed')
-        })
       }
     }
 
-    // 2. The client last — its apply relaunches or hands off the app, so it
+    // 3. The client last — its apply relaunches or hands off the app, so it
     //    must come after every dispatch above. Skipped when already current.
-    const clientStatus = (await checkUpdates()) ?? $updateStatus.get()
+    const clientStatus = $updateStatus.get() ?? (await checkUpdates())
 
     if ((clientStatus?.behind ?? 0) > 0 || clientStatus?.updateAvailable) {
       $updateOverlayTarget.set('client')
@@ -1356,7 +942,7 @@ let pollerStarted = false
 let backgroundTimer: ReturnType<typeof setInterval> | null = null
 let lastFocusAt = 0
 let connectionUnsub: (() => void) | null = null
-let lastBackendAuthorityKey: string | null | undefined
+let lastConnectionMode: string | undefined
 
 /** Wire up background polling + progress streaming. Idempotent. */
 export function startUpdatePoller(): void {
@@ -1379,17 +965,14 @@ export function startUpdatePoller(): void {
   // The poller starts at mount, before the gateway connects — so the first
   // backend check above sees mode≠remote and no-ops. Re-check once the
   // connection resolves to remote.
-  lastBackendAuthorityKey = activeBackendAuthority()?.key ?? null
-  connectionUnsub = $connection.subscribe(() => {
-    const authorityKey = activeBackendAuthority()?.key ?? null
-
-    if (authorityKey === lastBackendAuthorityKey) {
+  connectionUnsub = $connection.subscribe(conn => {
+    if (conn?.mode === lastConnectionMode) {
       return
     }
 
-    lastBackendAuthorityKey = authorityKey
+    lastConnectionMode = conn?.mode
 
-    if (authorityKey) {
+    if (conn?.mode === 'remote') {
       void checkBackendUpdates()
     }
   })
@@ -1412,7 +995,7 @@ export function stopUpdatePoller(): void {
 
   connectionUnsub?.()
   connectionUnsub = null
-  lastBackendAuthorityKey = undefined
+  lastConnectionMode = undefined
   window.removeEventListener('focus', onFocus)
   pollerStarted = false
 }

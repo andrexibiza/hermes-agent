@@ -105,8 +105,6 @@ afterEach(() => {
 })
 
 describe('SkillsView toolset management', () => {
-  // This is the first lazy renderer import in the full CI shard; cold module
-  // transformation can exceed Vitest's default while the focused test stays fast.
   it('renders a switch for each toolset and toggles it off', async () => {
     await renderSkills()
 
@@ -120,7 +118,7 @@ describe('SkillsView toolset management', () => {
 
     await waitFor(() => expect(setToolsetEnabled).toHaveBeenCalled())
     expect(setToolsetEnabled.mock.calls[0].slice(0, 2)).toEqual(['web', false])
-  }, 30_000)
+  })
 
   it('renders toolset titles without leading emoji', async () => {
     getToolsets.mockResolvedValue([toolset({ name: 'cronjob', label: '⏰ Cron Jobs', description: 'cron tools' })])

@@ -10,7 +10,6 @@ Uses python-telegram-bot library for:
 import asyncio
 import dataclasses
 import faulthandler
-import hashlib
 import inspect
 import json
 import logging
@@ -24,13 +23,6 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
-
-
-def _update_prompt_callback_token(prompt_id: str, correlation_id: str) -> str:
-    """Fit a prompt+correlation binding inside Telegram's callback limit."""
-
-    material = f"{prompt_id}\0{correlation_id}".encode("utf-8")
-    return hashlib.sha256(material).hexdigest()[:24]
 
 
 def _redact_telegram_error_text(error: object) -> str:
@@ -1228,32 +1220,17 @@ class TelegramAdapter(BasePlatformAdapter):
         if not normalized_user_id:
             return False
 
-        normalized_chat_type = str(chat_type or "dm").strip().lower() or "dm"
-        if normalized_chat_type == "private":
-            normalized_chat_type = "dm"
-        elif normalized_chat_type == "supergroup":
-            normalized_chat_type = "forum" if thread_id is not None else "group"
-
-        # The runner installs a profile-bound callback on every adapter. Unlike
-        # ``_message_handler.__self__`` it survives multiplex closure wrapping
-        # and evaluates pairing, per-profile allowlists, groups, and allow-all
-        # in the exact bot's scope. A configured callback that cannot decide is
-        # an authorization failure, never a reason to consult process-global
-        # fallback env from another profile.
-        has_registered_check = getattr(self, "_authorization_check", None) is not None
-        if has_registered_check:
-            decision = self._is_sender_authorized(
-                normalized_user_id,
-                chat_type=normalized_chat_type,
-                chat_id=str(chat_id or normalized_user_id),
-            )
-            return decision is True
-
         runner = getattr(getattr(self, "_message_handler", None), "__self__", None)
         auth_fn = getattr(runner, "_is_user_authorized", None)
         if callable(auth_fn):
             try:
                 from gateway.session import SessionSource
+
+                normalized_chat_type = str(chat_type or "dm").strip().lower() or "dm"
+                if normalized_chat_type == "private":
+                    normalized_chat_type = "dm"
+                elif normalized_chat_type == "supergroup":
+                    normalized_chat_type = "forum" if thread_id is not None else "group"
 
                 source = SessionSource(
                     platform=Platform.TELEGRAM,
@@ -1277,12 +1254,7 @@ class TelegramAdapter(BasePlatformAdapter):
             # The runner auth path in _is_user_authorized() handles
             # GATEWAY_ALLOW_ALL_USERS; this fallback must not silently
             # allow everyone (fixes #24457).
-            return (
-                _scoped_gate_env("TELEGRAM_ALLOW_ALL_USERS").lower()
-                in {"true", "1", "yes"}
-                or _scoped_gate_env("GATEWAY_ALLOW_ALL_USERS").lower()
-                in {"true", "1", "yes"}
-            )
+            return _scoped_gate_env("GATEWAY_ALLOW_ALL_USERS").lower() in {"true", "1", "yes"}
         allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
         return "*" in allowed_ids or normalized_user_id in allowed_ids
 
@@ -6307,9 +6279,6 @@ class TelegramAdapter(BasePlatformAdapter):
     async def send_update_prompt(
         self, chat_id: str, prompt: str, default: str = "",
         session_key: str = "",
-        prompt_id: str = "",
-        correlation_id: str = "",
-        context: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
         """Send an inline-keyboard update prompt (Yes / No buttons).
@@ -6322,33 +6291,13 @@ class TelegramAdapter(BasePlatformAdapter):
         try:
             default_hint = f" (default: {default})" if default else ""
             text = self.format_message(f"⚕ *Update needs your input:*\n\n{prompt}{default_hint}")
-            callback_prompt_id = str(prompt_id or "")
-            callback_correlation_id = str(correlation_id or "")
-            if not callback_prompt_id or not callback_correlation_id:
-                return SendResult(success=False, error="Missing update prompt identity")
-            callback_token = _update_prompt_callback_token(
-                callback_prompt_id,
-                callback_correlation_id,
-            )
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("✓ Yes", callback_data=f"update_prompt:{callback_token}:y"),
-                    InlineKeyboardButton("✗ No", callback_data=f"update_prompt:{callback_token}:n"),
+                    InlineKeyboardButton("✓ Yes", callback_data="update_prompt:y"),
+                    InlineKeyboardButton("✗ No", callback_data="update_prompt:n"),
                 ]
             ])
-            state = getattr(self, "_update_prompt_state", None)
-            if not isinstance(state, dict):
-                state = {}
-                self._update_prompt_state = state
             thread_id = self._metadata_thread_id(metadata)
-            state[callback_token] = {
-                "prompt_id": callback_prompt_id,
-                "correlation_id": callback_correlation_id,
-                "session_key": str(session_key or ""),
-                "control_home": str((context or {}).get("control_home") or ""),
-                "chat_id": str(normalize_telegram_chat_id(chat_id)),
-                "thread_id": str(thread_id) if thread_id is not None else "",
-            }
             reply_to_id = self._reply_to_message_id_for_send(None, metadata, reply_to_mode=self._reply_to_mode)
             msg = await self._send_message_with_thread_fallback(
                 chat_id=normalize_telegram_chat_id(chat_id),
@@ -6367,16 +6316,6 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
-            try:
-                self._update_prompt_state.pop(
-                    _update_prompt_callback_token(
-                        str(prompt_id or ""),
-                        str(correlation_id or ""),
-                    ),
-                    None,
-                )
-            except Exception:
-                pass
             logger.warning("[%s] send_update_prompt failed: %s", self.name, _redact_telegram_error_text(e))
             return SendResult(success=False, error=_redact_telegram_error_text(e))
 
@@ -7603,27 +7542,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # --- Update prompt callbacks ---
         if not data.startswith("update_prompt:"):
             return
-        parts = data.split(":", 2)
-        if len(parts) != 3 or parts[2] not in {"y", "n"}:
-            await query.answer(text="This update prompt is stale or invalid.")
-            return
-        callback_token, answer = parts[1], parts[2]
-        prompt_state = getattr(self, "_update_prompt_state", {}).get(callback_token)
-        if not isinstance(prompt_state, dict):
-            await query.answer(text="This update prompt has expired.")
-            return
-        prompt_id = str(prompt_state.get("prompt_id") or "")
-        expected_chat_id = str(prompt_state.get("chat_id") or "")
-        expected_thread_id = str(prompt_state.get("thread_id") or "")
-        if (
-            expected_chat_id
-            and str(query_chat_id or "") != expected_chat_id
-        ) or (
-            "thread_id" in prompt_state
-            and str(query_thread_id or "") != expected_thread_id
-        ):
-            await query.answer(text="This update prompt is stale or belongs to another chat.")
-            return
+        answer = data.split(":", 1)[1]  # "y" or "n"
         caller_id = str(getattr(query.from_user, "id", ""))
         if not self._is_callback_user_authorized(
             caller_id,
@@ -7634,29 +7553,6 @@ class TelegramAdapter(BasePlatformAdapter):
         ):
             await query.answer(text="⛔ You are not authorized to answer update prompts.")
             return
-        try:
-            from gateway.update_prompt_response import (
-                write_update_confirmation_response,
-            )
-            from hermes_constants import get_hermes_home
-
-            control_home = prompt_state.get("control_home") or str(get_hermes_home())
-            written = write_update_confirmation_response(
-                control_home,
-                prompt_id=prompt_id,
-                correlation_id=str(prompt_state.get("correlation_id") or ""),
-                session_key=str(prompt_state.get("session_key") or ""),
-                actor_id=caller_id,
-                answer=answer,
-            )
-        except Exception as exc:
-            logger.error("Failed to write update response from callback: %s", exc)
-            written = False
-        if not written:
-            await query.answer(text="This update prompt is stale or already answered.")
-            return
-
-        self._update_prompt_state.pop(callback_token, None)
         await query.answer(text=f"Sent '{answer}' to the update process.")
         # Edit the message to show the choice and remove buttons
         label = "Yes" if answer == "y" else "No"
@@ -7668,8 +7564,18 @@ class TelegramAdapter(BasePlatformAdapter):
             )
         except Exception:
             pass  # non-fatal if edit fails
-        logger.info("Telegram update prompt answered '%s' by user %s",
-                    answer, getattr(query.from_user, "id", "unknown"))
+        # Write the response file
+        try:
+            from hermes_constants import get_hermes_home
+            home = get_hermes_home()
+            response_path = home / ".update_response"
+            tmp = response_path.with_suffix(".tmp")
+            tmp.write_text(answer, encoding="utf-8")
+            tmp.replace(response_path)
+            logger.info("Telegram update prompt answered '%s' by user %s",
+                        answer, getattr(query.from_user, "id", "unknown"))
+        except Exception as exc:
+            logger.error("Failed to write update response from callback: %s", exc)
 
     # Maps `gt:<verb>` -> (script-name, extra-args, success-label, is_state).
     # Scripts live in ~/.hermes/scripts/gmail-triage/. `arg` from the callback
