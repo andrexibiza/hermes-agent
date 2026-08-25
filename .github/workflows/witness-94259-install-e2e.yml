@@ -1,0 +1,122 @@
+name: Witness #94259 exact-head installer E2E
+
+on:
+  push:
+    branches:
+      - witness/94259-install-e2e-3fdc672
+
+permissions:
+  contents: read
+
+concurrency:
+  group: witness-94259-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TARGET_REPOSITORY: FixItFoundry/hermes-agent
+  TARGET_SHA: 3fdc672ff4a4a95266a74ce96aef1c8400f6b302
+
+jobs:
+  pick-releases:
+    name: Pick the scheduled five-release sample
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tags: ${{ steps.pick.outputs.tags }}
+    steps:
+      - name: Check out the exact submitted object
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: FixItFoundry/hermes-agent
+          ref: 3fdc672ff4a4a95266a74ce96aef1c8400f6b302
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Verify exact target and refresh canonical release tags
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch --force --tags https://github.com/NousResearch/hermes-agent.git 'refs/tags/*:refs/tags/*'
+          test -z "$(git status --porcelain)"
+
+      - id: pick
+        name: Resolve the same five-tag sample as the scheduled workflow
+        run: |
+          set -euo pipefail
+          tags="$(scripts/sandbox/pick-release-tags.sh --count 5)"
+          echo "Testing installer updates from: $tags"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+  installer:
+    name: installer from ${{ matrix.install-ref }}
+    needs: pick-releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+
+    steps:
+      - name: Check out the exact submitted object
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: FixItFoundry/hermes-agent
+          ref: 3fdc672ff4a4a95266a74ce96aef1c8400f6b302
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Verify exact target and refresh canonical release tags
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch --force --tags https://github.com/NousResearch/hermes-agent.git 'refs/tags/*:refs/tags/*'
+          test -z "$(git status --porcelain)"
+
+      - name: Install sandbox dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap slirp4netns uidmap util-linux
+
+      - name: Permit unprivileged user namespaces
+        run: |
+          set -euo pipefail
+          echo "--- kernel userns settings (before)"
+          sysctl kernel.unprivileged_userns_clone 2>/dev/null || echo "  (sysctl absent)"
+          sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo "  (sysctl absent)"
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          echo "--- subuid/subgid for $(id -un)"
+          grep "^$(id -un):" /etc/subuid /etc/subgid || echo "  (none — sandbox will say so)"
+
+      - name: Run exact-head installer E2E
+        run: |
+          set -euo pipefail
+          tests/install/install-update-e2e.sh \
+            --route installer \
+            --install-ref '${{ matrix.install-ref }}'
+        env:
+          HERMES_E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
+
+      - name: Build artifact name
+        if: always()
+        id: artifact
+        run: |
+          set -euo pipefail
+          safe_ref='${{ matrix.install-ref }}'
+          safe_ref="${safe_ref//\//-}"
+          echo "name=install-e2e-installer-${safe_ref}-${TARGET_SHA:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload installer logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ runner.temp }}/e2e-logs
+          retention-days: 14
+          if-no-files-found: ignore
