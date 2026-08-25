@@ -1,0 +1,6 @@
+The Sprites backend was originally authored by Kyle McLaren (@kylemclaren) in
+NousResearch/hermes-agent PR #30112 and salvaged/hardened in PR #93523.
+
+This standalone extraction preserves the reviewed behavior from #93523 while
+routing terminal classification and dispatch through the provider API merged in
+NousResearch/hermes-agent PR #94400.

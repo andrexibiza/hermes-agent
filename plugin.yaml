@@ -1,0 +1,8 @@
+manifest_version: 2
+api_version: 1
+name: sprites
+version: 0.1.0
+description: Stateful Fly.io Sprites as a first-class Hermes terminal backend
+kind: backend
+python_dependencies:
+  - "sprites-py>=0.5.0,<0.6"
