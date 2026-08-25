@@ -66,6 +66,7 @@ from agent.turn_context import (
 )
 from hermes_cli.config import _is_ssh_remote_tilde_cwd, cfg_get
 from hermes_cli.fallback_config import get_fallback_chain
+from gateway.routing_identity import TransportClaimantGeneration
 
 # --- Agent cache tuning ---------------------------------------------------
 # Bounds the per-session AIAgent cache to prevent unbounded growth in
@@ -8148,6 +8149,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "listener_claim": self._adapter_listener_claim(
                 adapter.platform, adapter
             ),
+            "claimant_generation": TransportClaimantGeneration(
+                "default", adapter.platform, adapter
+            ),
         }
         logger.info(
             "%s queued for background reconnection",
@@ -12704,6 +12708,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "queued_at": time.monotonic(),
                     "credential_claim": self._adapter_credential_claim(platform, adapter),
                     "listener_claim": self._adapter_listener_claim(platform, adapter),
+                    "claimant_generation": TransportClaimantGeneration(
+                        "default", platform, adapter
+                    ),
                 }
                 continue
             if outcome == "ok":
@@ -12746,6 +12753,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             "next_retry": time.monotonic() + 30,
                             "credential_claim": self._adapter_credential_claim(platform, adapter),
                             "listener_claim": self._adapter_listener_claim(platform, adapter),
+                            "claimant_generation": TransportClaimantGeneration(
+                                "default", platform, adapter
+                            ),
                         }
                 else:
                     self._update_platform_runtime_status(
@@ -12760,6 +12770,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         "queued_at": time.monotonic(),
                         "credential_claim": self._adapter_credential_claim(platform, adapter),
                         "listener_claim": self._adapter_listener_claim(platform, adapter),
+                        "claimant_generation": TransportClaimantGeneration(
+                            "default", platform, adapter
+                        ),
                     }
 
         if await self._abort_startup_if_shutdown_requested():
@@ -14921,20 +14934,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # with distinct credentials from binding the same endpoint.
         claimed: Dict[tuple, str] = {}
         for _plat, _ad in self.adapters.items():
-            fp = self._adapter_credential_fingerprint(_ad)
-            if fp is not None:
-                claimed[(_plat, fp)] = active
-            listener_claim = self._adapter_listener_claim(_plat, _ad)
-            if listener_claim is not None:
-                claimed[listener_claim] = active
-        # A retryable primary still owns its configured credential and listener.
-        # Reserve both while it is queued so a secondary cannot take the endpoint
-        # before the reconnect watcher retries the primary adapter.
+            claimant = TransportClaimantGeneration(active, _plat, _ad)
+            for claim in claimant.realize(_ad, self._adapter_claim_factories()):
+                claimed[claim] = active
+        # A retry entry may reserve resources only through its published live
+        # claimant generation.  Legacy/cached claim tuples are realizations,
+        # not runtime authority, and cannot certify a recreated adapter.
         for retry_info in getattr(self, "_failed_platforms", {}).values():
-            for claim_name in ("credential_claim", "listener_claim"):
-                retry_claim = retry_info.get(claim_name)
-                if isinstance(retry_claim, tuple):
-                    claimed[retry_claim] = active
+            claimant = retry_info.get("claimant_generation")
+            if isinstance(claimant, TransportClaimantGeneration):
+                for claim in claimant.realize(
+                    claimant.adapter, self._adapter_claim_factories()
+                ):
+                    claimed[claim] = claimant.profile
 
         profile_homes = _multiplex_profile_homes(self.config)
         for profile_name, profile_home in profile_homes:
@@ -15460,6 +15472,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if fingerprint is None:
             return None
         return (platform, fingerprint)
+
+    @staticmethod
+    def _adapter_claim_factories():
+        """Return the claim realizers used by a claimant-generation product."""
+        return (
+            GatewayRunner._adapter_credential_claim,
+            GatewayRunner._adapter_listener_claim,
+        )
 
     @staticmethod
     def _adapter_listener_claim(platform: Platform, adapter: Any) -> Optional[tuple]:

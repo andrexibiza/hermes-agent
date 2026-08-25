@@ -10,6 +10,7 @@ import pytest
 import gateway.run as gateway_run
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.run import GatewayRunner
+from gateway.routing_identity import TransportClaimantGeneration
 
 
 class _FakeAdapter:
@@ -70,6 +71,57 @@ class TestCredentialFingerprint:
         b = GatewayRunner._adapter_credential_fingerprint(_B())
         assert a is not None and b is not None
         assert a != b
+
+
+class TestTransportClaimantGeneration:
+    def test_only_published_adapter_generation_can_realize_claims(self):
+        current = _FakeAdapter(token="shared")
+        replacement = _FakeAdapter(token="shared")
+        claimant = TransportClaimantGeneration("default", Platform.DISCORD, current)
+
+        assert claimant.realize(
+            current, GatewayRunner._adapter_claim_factories()
+        ) == (GatewayRunner._adapter_credential_claim(Platform.DISCORD, current),)
+        assert claimant.realize(
+            replacement, GatewayRunner._adapter_claim_factories()
+        ) == ()
+
+    @pytest.mark.asyncio
+    async def test_retry_cache_cannot_stand_in_for_claimant_generation(self, monkeypatch):
+        runner = GatewayRunner.__new__(GatewayRunner)
+        runner.config = GatewayConfig(multiplex_profiles=True)
+        runner.adapters = {}
+        stale = _FakeAdapter(token="stale")
+        runner._failed_platforms = {
+            Platform.DISCORD: {
+                "credential_claim": runner._adapter_credential_claim(
+                    Platform.DISCORD, stale
+                )
+            }
+        }
+        observed = []
+
+        monkeypatch.setattr(
+            "hermes_cli.profiles.get_active_profile_name", lambda: "default"
+        )
+        monkeypatch.setattr(
+            gateway_run,
+            "_multiplex_profile_homes",
+            lambda _config: [("default", Path("/default")), ("reviewer", Path("/reviewer"))],
+        )
+
+        async def capture(_profile, _home, claimed):
+            observed.append(dict(claimed))
+            return 0
+
+        monkeypatch.setattr(runner, "_start_one_profile_adapters", capture)
+        monkeypatch.setattr("gateway.status.write_runtime_status", lambda **_kw: None)
+        runner.pairing_stores = {"default": MagicMock(), "reviewer": MagicMock()}
+        runner.pairing_store = runner.pairing_stores["default"]
+
+        await runner._start_secondary_profile_adapters()
+
+        assert observed == [{}]
 
 
 class TestProfileMessageHandler:
