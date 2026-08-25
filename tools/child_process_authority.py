@@ -449,8 +449,8 @@ def _apply_overrides(
     """Apply only names positively admitted by the typed edge policy.
 
     Forwarding wrappers are separate authority channels and therefore require an
-    explicit spec grant.  Ordinary raw names may be changed only when the policy
-    declares them as safe baseline, intent-owned routing/network coordinates,
+    explicit spec grant.  Safe-baseline membership controls inheritance only;
+    caller writes require an intent-owned routing/network coordinate,
     model-provider authority, or an exact/prefix grant.
     """
 
@@ -458,7 +458,7 @@ def _apply_overrides(
         return
 
     provider_names = _provider_env_names()
-    allowed_names = {_normalize_name(name) for name in _SAFE_BASE_KEYS}
+    allowed_names: set[str] = set()
     if spec.intent in _NETWORK_OVERRIDE_INTENTS:
         allowed_names.update(_normalize_name(name) for name in _NETWORK_ROUTE_KEYS)
     allowed_names.update(
@@ -789,9 +789,6 @@ def _policy_hash() -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-POLICY_SHA256 = _policy_hash()
-
-
 def build_spawn_receipt(
     spec: ChildProcessSpec,
     *,
@@ -802,7 +799,7 @@ def build_spawn_receipt(
 
     return {
         "policy_version": POLICY_VERSION,
-        "policy_sha256": POLICY_SHA256,
+        "policy_sha256": _policy_hash(),
         "intent": spec.intent.value,
         "principal": spec.principal.value,
         "stdin": spec.stdin.value,
