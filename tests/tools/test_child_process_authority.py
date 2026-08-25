@@ -189,6 +189,36 @@ def test_overrides_require_positive_policy_and_block_execution_authority(monkeyp
         assert denied not in env
 
 
+def test_safe_baseline_is_inherited_but_not_override_authority(monkeypatch):
+    import hermes_constants
+    from tools.environments import local
+
+    monkeypatch.setattr(local, "_inject_context_hermes_home", lambda _env: None)
+    monkeypatch.setattr(hermes_constants, "apply_subprocess_home_env", lambda _env: None)
+    source = {
+        "PATH": "/ambient/bin",
+        "HOME": "/ambient/home",
+        "TMP": "/ambient/tmp",
+        "XDG_CONFIG_HOME": "/ambient/xdg",
+    }
+    overrides = {
+        "PATH": "/attacker/bin",
+        "HOME": "/attacker/home",
+        "TMP": "/attacker/tmp",
+        "XDG_CONFIG_HOME": "/attacker/xdg",
+    }
+
+    for spec in (
+        probe_spec(source="test:probe-baseline"),
+        checkpoint_git_spec(source="test:checkpoint-baseline"),
+    ):
+        env = build_child_process_env(spec, source_env=source, overrides=overrides)
+        assert env["PATH"] == "/ambient/bin"
+        assert env["HOME"] == "/ambient/home"
+        assert env["TMP"] == "/ambient/tmp"
+        assert env["XDG_CONFIG_HOME"] == "/ambient/xdg"
+
+
 def test_bws_vault_edge_is_minimal_and_keeps_network_controls(monkeypatch):
     _plant(monkeypatch)
     spec = bws_vault_spec(source="test:bws")
@@ -318,6 +348,7 @@ def test_interactive_pty_is_typed_and_stdin_is_not_synthesized(monkeypatch):
 
 def test_closed_probe_stdin_and_environment(monkeypatch):
     _plant(monkeypatch)
+    monkeypatch.setenv("TMP", "/tmp/ambient")
     spec = probe_spec(source="test:probe")
     env = build_child_process_env(
         spec,
@@ -332,7 +363,7 @@ def test_closed_probe_stdin_and_environment(monkeypatch):
     )
 
     assert stdin_for_spec(spec) is subprocess.DEVNULL
-    assert env["TMP"] == "/tmp/probe"
+    assert env["TMP"] == "/tmp/ambient"
     assert "OPENAI_API_KEY" not in env
     assert "ACME_LOGIN" not in env
     assert "BWS_ACCESS_TOKEN" not in env
@@ -428,6 +459,28 @@ def test_policy_hash_covers_provider_registry_authority(monkeypatch):
 
     assert "POLICY_HASH_CANARY_API_KEY" in authority._provider_env_names()
     assert authority._policy_hash() != baseline
+
+
+def test_spawn_receipt_hash_uses_current_provider_registry(monkeypatch):
+    from hermes_cli import auth
+    from tools import child_process_authority as authority
+
+    spec = probe_spec(source="test:receipt-policy")
+    baseline = authority.build_spawn_receipt(spec, argv=["probe"], env={})[
+        "policy_sha256"
+    ]
+    registry = dict(auth.PROVIDER_REGISTRY)
+    registry["receipt-policy-canary"] = SimpleNamespace(
+        api_key_env_vars=("RECEIPT_POLICY_CANARY_API_KEY",),
+        base_url_env_var="RECEIPT_POLICY_CANARY_BASE_URL",
+    )
+    monkeypatch.setattr(auth, "PROVIDER_REGISTRY", registry)
+
+    current = authority.build_spawn_receipt(spec, argv=["probe"], env={})[
+        "policy_sha256"
+    ]
+    assert current == authority._policy_hash()
+    assert current != baseline
 
 
 class _DummyProcess:
