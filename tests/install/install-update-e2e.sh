@@ -72,9 +72,9 @@ export HERMES_DEV_SANDBOX_DIR="$SANDBOX_DIR_NAME"
 SANDBOX_ROOT="$REPO_ROOT/$SANDBOX_DIR_NAME"
 INSTALL_DIR="/home/hermes/.hermes/hermes-agent"   # user-level layout (sandbox default)
 FAKE_REMOTE="/work/repos/hermes-agent.git"
-# Only used to fetch an old install.sh for the flag probe below; the sandbox does
-# its own fetching. Same override dev-sandbox.sh honours, so a fork can retarget
-# both together.
+# Used to fetch the old installer and immutable submodule objects before the
+# network-isolated sandbox is built. Same override dev-sandbox.sh honours, so a
+# fork can retarget both together.
 UPSTREAM_URL="${HERMES_DEV_SANDBOX_UPSTREAM:-https://github.com/NousResearch/hermes-agent.git}"
 
 # Installer transcripts live outside the sandbox root: the sandbox is recreated
@@ -145,27 +145,34 @@ fi
 rm -rf -- "$SANDBOX_ROOT"
 
 # ── helpers ────────────────────────────────────────────────────────────────
+# Resolve REF locally for fixture inspection. Fetching the exact ref is bounded
+# and happens outside the sandbox; dev-sandbox.sh independently resolves it
+# again before constructing the fake remote.
+ensure_ref_available() {
+  local ref="$1"
+  if git rev-parse --verify -q "$ref^{commit}" >/dev/null; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+  git fetch -q --depth 1 "$UPSTREAM_URL" "$ref" 2>/dev/null || return 1
+  printf '%s\n' FETCH_HEAD
+}
+
 # Does the INSTALLED hermes accept FLAG on `hermes update`?
-#
-# Asked of the installed binary rather than parsed out of a release's source:
-# the update subcommand has lived in main.py, subcommands/update.py, and
-# update_cmd.py across the releases we sample, so any static parse is a guess
-# that silently rots. `hermes update --help` is the same surface a user meets,
-# and argparse prints every option it accepts.
+# Capture first, then match in-process: `producer | grep -q` is not safe under
+# pipefail because grep exits on the match and the producer can die on SIGPIPE.
 update_supports() {
   local flag="$1"
-  in_sandbox "hermes update --help 2>&1" | grep -qF -- "$flag"
+  local help=""
+  help="$(in_sandbox "hermes update --help 2>&1")" || return 1
+  [[ "$help" == *"$flag"* ]]
 }
 
 # Does the installer at REF accept FLAG? Read it out of that ref's own
 # install.sh rather than assuming this checkout's flag set: the point of the
 # matrix is to install releases from months back, whose installers predate
-# options we take for granted. (Unlike the updater, the installer runs before
-# anything is installed, so there is no --help to ask yet.)
-#
-# The ref may not be local -- the sandbox does its own fetching -- so fall back
-# to fetching just that blob. Unresolvable means "flag absent", which costs a
-# more conservative invocation, never a wrong one.
+# options we take for granted. Avoid the same pipefail/SIGPIPE false negative
+# here: the v2026.8.19 installer is large enough to trigger it reliably.
 installer_supports() {
   local ref="$1"
   local flag="$2"
@@ -174,7 +181,82 @@ installer_supports() {
     git fetch -q --depth 1 "$UPSTREAM_URL" "$ref" 2>/dev/null || return 1
     script="$(git show FETCH_HEAD:scripts/install.sh 2>/dev/null)" || return 1
   }
-  printf '%s' "$script" | grep -qF -- "$flag"
+  [[ "$script" == *"$flag"* ]]
+}
+
+# Old releases cloned GitHub submodules recursively. Sending those HTTPS URLs
+# through the very proxy under test couples repository composition to transient
+# public-network behavior and hides the SSH-first path's stderr. Seed immutable
+# bare mirrors at the exact gitlink SHAs and rewrite GitHub HTTPS URLs to the
+# sandbox SSH shim. The parent repository still comes from /work/repos and is
+# promoted normally; only declared submodule objects are prepositioned.
+prepare_submodule_seed() {
+  local ref="$1"
+  local resolved=""
+  resolved="$(ensure_ref_available "$ref")" \
+    || fail "could not resolve $ref while preparing submodule fixtures"
+
+  SANDBOX_SEED_DIR="$LOG_DIR/sandbox-seed"
+  mkdir -p "$SANDBOX_SEED_DIR/.hermes-sandbox-git/github.com"
+  cat > "$SANDBOX_SEED_DIR/.gitconfig" <<'GITCONFIG'
+[url "git@github.com:"]
+    insteadOf = https://github.com/
+GITCONFIG
+
+  local modules="$LOG_DIR/install-ref.gitmodules"
+  if ! git show "$resolved:.gitmodules" > "$modules" 2>/dev/null; then
+    return 0
+  fi
+
+  local key path name url repo sub_sha mirror fetched attempt
+  while read -r key path; do
+    [ -n "$key" ] && [ -n "$path" ] || continue
+    name="${key#submodule.}"
+    name="${name%.path}"
+    url="$(git config -f "$modules" --get "submodule.$name.url" 2>/dev/null || true)"
+    case "$url" in
+      https://github.com/*) repo="${url#https://github.com/}" ;;
+      git@github.com:*) repo="${url#git@github.com:}" ;;
+      *)
+        fail "unsupported submodule URL in $ref: $url"
+        ;;
+    esac
+    repo="${repo%/}"
+    repo="${repo%.git}"
+    if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+      fail "unsafe GitHub submodule path in $ref: $repo"
+    fi
+
+    sub_sha="$(git ls-tree "$resolved" -- "$path" | awk '$2 == "commit" { print $3; exit }')"
+    [ -n "$sub_sha" ] || fail "could not resolve gitlink $path in $ref"
+
+    mirror="$SANDBOX_SEED_DIR/.hermes-sandbox-git/github.com/$repo.git"
+    rm -rf -- "$mirror"
+    mkdir -p "$(dirname "$mirror")"
+    git init --bare -q "$mirror"
+    fetched=false
+    for attempt in 1 2 3; do
+      if git --git-dir="$mirror" fetch -q --force "$url" \
+          "$sub_sha:refs/hermes-sandbox/pinned" 2>/dev/null; then
+        fetched=true
+        break
+      fi
+      sleep 2
+    done
+    if [ "$fetched" = false ]; then
+      # Some servers disable direct reachable-SHA wants. Fetch advertised refs
+      # as a compatibility fallback, then require the declared gitlink object.
+      git --git-dir="$mirror" fetch -q --force "$url" \
+        '+refs/heads/*:refs/remotes/origin/*' \
+        '+refs/tags/*:refs/tags/*' 2>/dev/null \
+        || fail "could not prefetch submodule $repo for $ref"
+      git --git-dir="$mirror" cat-file -e "$sub_sha^{commit}" 2>/dev/null \
+        || fail "submodule $repo did not contain declared commit $sub_sha"
+    fi
+    git --git-dir="$mirror" update-ref refs/heads/main "$sub_sha"
+    git --git-dir="$mirror" symbolic-ref HEAD refs/heads/main
+    ok "prefetched submodule $repo at ${sub_sha:0:12}"
+  done < <(git config -f "$modules" --get-regexp '^submodule\..*\.path$' || true)
 }
 
 # Run the real install one-liner inside the sandbox. `ref` non-empty installs
@@ -186,15 +268,13 @@ install_in_sandbox() {
   local ref="$2"
   local tag="$3"
   local log="$LOG_DIR/$tag.log"
-  local args=(install --persistent)
+  local args=(install --persistent --from "$SANDBOX_SEED_DIR")
   [ -n "$ref" ] && args+=(--install-ref "$ref")
-  # Serve the uv installer script from the sandbox's fixture root: astral.sh
-  # intermittently returns empty replies to GitHub runner egress IPs, which
-  # kills the install with a bare `curl: (52)` that looks like a broken
-  # installer. Prefetch it once on the runner (with retries) and let the MITM
-  # proxy serve the copy; the binary download it performs still goes upstream.
-  if [ -n "$UV_INSTALLER_FIXTURE" ]; then
-    args+=(--http-root "$UV_INSTALLER_FIXTURE")
+  # Serve prefetched transport fixtures from the sandbox's static HTTP root.
+  # Missing paths still forward upstream, so partial prefetch success degrades
+  # to the real network rather than manufacturing a response.
+  if [ "$HTTP_FIXTURE_READY" = true ]; then
+    args+=(--http-root "$HTTP_FIXTURE_ROOT")
   fi
 
   # Installer flags have to match the installer being run, not this checkout's.
@@ -254,45 +334,113 @@ require_hermes_works() {
   ok "hermes runs $when"
 }
 
-# ── install the earlier Hermes ─────────────────────────────────────────────
-# Prefetch the astral.sh uv installer AND binary so the sandbox serves them as
-# fixtures. astral.sh's CDN and the GitHub release mirror intermittently return
-# empty replies to GitHub runner egress IPs (curl 52), which fails the install
-# at its first step. Best-effort: if prefetching fails we proceed without the
-# fixture and let the in-sandbox curl try upstream itself.
-UV_INSTALLER_FIXTURE=""
-if command -v curl >/dev/null 2>&1; then
-  UV_FIXTURE_DIR="$LOG_DIR/http-fixture"
-  UV_SCRIPT="$UV_FIXTURE_DIR/astral.sh/uv/install.sh"
-  mkdir -p "$UV_FIXTURE_DIR/astral.sh/uv"
-  for _attempt in 1 2 3 4 5; do
-    if curl -fsSL --retry 3 --retry-delay 2 https://astral.sh/uv/install.sh \
-        -o "$UV_SCRIPT" 2>/dev/null && [ -s "$UV_SCRIPT" ]; then
-      UV_INSTALLER_FIXTURE="$UV_FIXTURE_DIR"
+# Prefetch the astral.sh uv installer and binary so the sandbox serves them as
+# fixtures. Those CDNs intermittently return empty replies to runner egress IPs.
+# Also cache the Node index and exact archive used by old installers; otherwise
+# the oldest compatibility leg can silently proceed without Node after two
+# empty metadata responses, weakening the witness before it even reaches Git.
+prepare_http_fixtures() {
+  HTTP_FIXTURE_ROOT="$LOG_DIR/http-fixture"
+  HTTP_FIXTURE_READY=false
+  mkdir -p "$HTTP_FIXTURE_ROOT"
+
+  if command -v curl >/dev/null 2>&1; then
+    local uv_script="$HTTP_FIXTURE_ROOT/astral.sh/uv/install.sh"
+    mkdir -p "$(dirname "$uv_script")"
+    local attempt
+    for attempt in 1 2 3 4 5; do
+      if curl -fsSL --retry 3 --retry-delay 2 https://astral.sh/uv/install.sh \
+          -o "$uv_script" 2>/dev/null && [ -s "$uv_script" ]; then
+        HTTP_FIXTURE_READY=true
+        break
+      fi
+      sleep 3
+    done
+    if [ -s "$uv_script" ]; then
+      local uv_ver=""
+      uv_ver="$(grep -om1 'releases/download/[0-9][0-9.]*' "$uv_script" | cut -d/ -f3)"
+      if [ -n "$uv_ver" ]; then
+        local uv_rel="github/uv/releases/download/$uv_ver/uv-x86_64-unknown-linux-gnu.tar.gz"
+        mkdir -p "$HTTP_FIXTURE_ROOT/releases.astral.sh/$(dirname "$uv_rel")" \
+                 "$HTTP_FIXTURE_ROOT/github.com/astral-sh/$(dirname "${uv_rel#github/}")"
+        curl -fsSL --retry 3 --retry-delay 2 \
+          "https://releases.astral.sh/$uv_rel" \
+          -o "$HTTP_FIXTURE_ROOT/releases.astral.sh/$uv_rel" 2>/dev/null \
+          && cp "$HTTP_FIXTURE_ROOT/releases.astral.sh/$uv_rel" \
+             "$HTTP_FIXTURE_ROOT/github.com/astral-sh/${uv_rel#github/}" \
+          || echo "⚠ could not prefetch uv $uv_ver tarball; binary will fetch upstream" >&2
+      fi
+      ok "prefetched uv installer for sandbox fixture"
+    else
+      echo "⚠ could not prefetch uv installer; install will fetch astral.sh directly" >&2
+    fi
+  fi
+
+  local resolved="" installer_script="" node_version=""
+  resolved="$(ensure_ref_available "$INSTALL_REF")" || return 0
+  installer_script="$(git show "$resolved:scripts/install.sh" 2>/dev/null || true)"
+  if [[ "$installer_script" =~ NODE_VERSION=\"([0-9]+)\" ]]; then
+    node_version="${BASH_REMATCH[1]}"
+  else
+    return 0
+  fi
+
+  local node_os node_arch
+  case "$(uname -s)" in
+    Linux*) node_os=linux ;;
+    Darwin*) node_os=darwin ;;
+    *) return 0 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) node_arch=x64 ;;
+    aarch64|arm64) node_arch=arm64 ;;
+    armv7l) node_arch=armv7l ;;
+    *) return 0 ;;
+  esac
+
+  local node_dir="$HTTP_FIXTURE_ROOT/nodejs.org/dist/latest-v${node_version}.x"
+  local node_index="$node_dir/index.html"
+  mkdir -p "$node_dir"
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if curl -fsSL --retry 3 --retry-delay 2 \
+        "https://nodejs.org/dist/latest-v${node_version}.x/" \
+        -o "$node_index" 2>/dev/null && [ -s "$node_index" ]; then
       break
     fi
     sleep 3
   done
-fi
-# Also cache the uv tarball for both download hosts the installer tries, keyed
-# by the version the fetched installer resolves to.
-if [ -n "$UV_INSTALLER_FIXTURE" ]; then
-  UV_VER="$(grep -om1 'releases/download/[0-9][0-9.]*' "$UV_SCRIPT" | cut -d/ -f3)"
-  if [ -n "$UV_VER" ]; then
-    _uv_rel="github/uv/releases/download/$UV_VER/uv-x86_64-unknown-linux-gnu.tar.gz"
-    mkdir -p "$UV_FIXTURE_DIR/releases.astral.sh/$(dirname "$_uv_rel")" \
-             "$UV_FIXTURE_DIR/github.com/astral-sh/$(dirname "${_uv_rel#github/}")"
-    curl -fsSL --retry 3 --retry-delay 2 \
-      "https://releases.astral.sh/$_uv_rel" \
-      -o "$UV_FIXTURE_DIR/releases.astral.sh/$_uv_rel" 2>/dev/null \
-      && cp "$UV_FIXTURE_DIR/releases.astral.sh/$_uv_rel" \
-         "$UV_FIXTURE_DIR/github.com/astral-sh/${_uv_rel#github/}" \
-      || echo "⚠ could not prefetch uv $UV_VER tarball; binary will fetch upstream" >&2
+  [ -s "$node_index" ] || {
+    echo "⚠ could not prefetch Node v$node_version index; install will fetch upstream" >&2
+    return 0
+  }
+
+  local index_text tarball=""
+  index_text="$(cat "$node_index")"
+  if [[ "$index_text" =~ (node-v${node_version}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz) ]]; then
+    tarball="${BASH_REMATCH[1]}"
+  elif [[ "$index_text" =~ (node-v${node_version}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz) ]]; then
+    tarball="${BASH_REMATCH[1]}"
   fi
-  ok "prefetched uv installer for sandbox fixture"
-else
-  echo "⚠ could not prefetch uv installer; install will fetch astral.sh directly" >&2
-fi
+  [ -n "$tarball" ] || fail "Node v$node_version index had no $node_os-$node_arch archive"
+
+  for attempt in 1 2 3 4 5; do
+    if curl -fsSL --retry 3 --retry-delay 2 \
+        "https://nodejs.org/dist/latest-v${node_version}.x/$tarball" \
+        -o "$node_dir/$tarball" 2>/dev/null && [ -s "$node_dir/$tarball" ]; then
+      HTTP_FIXTURE_READY=true
+      ok "prefetched Node $tarball for sandbox fixture"
+      return 0
+    fi
+    sleep 3
+  done
+  rm -f -- "$node_dir/$tarball"
+  echo "⚠ could not prefetch $tarball; install will fetch it upstream" >&2
+}
+
+# ── install the earlier Hermes ─────────────────────────────────────────────
+prepare_submodule_seed "$INSTALL_REF"
+prepare_http_fixtures
 
 step "installing upstream $INSTALL_REF (real curl | install.sh: uv, Python, Node, venv)"
 install_in_sandbox "install of upstream $INSTALL_REF" "$INSTALL_REF" install
