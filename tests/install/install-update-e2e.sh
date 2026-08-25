@@ -179,7 +179,7 @@ installer_supports() {
   local script=""
   script="$(git show "$ref:scripts/install.sh" 2>/dev/null)" || {
     git fetch -q --depth 1 "$UPSTREAM_URL" "$ref" 2>/dev/null || return 1
-    script="$(git show FETCH_HEAD:scripts/install.sh" 2>/dev/null)" || return 1
+    script="$(git show FETCH_HEAD:scripts/install.sh 2>/dev/null)" || return 1
   }
   [[ "$script" == *"$flag"* ]]
 }
