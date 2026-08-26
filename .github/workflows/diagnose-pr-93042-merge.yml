@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - automation/sync-pr-93042-main-03537d69
+      - automation/diagnose-pr-93042-run
 
 permissions:
   contents: read
