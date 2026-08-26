@@ -1,56 +1,101 @@
-name: Finalize dependency-security restack
+name: Materialize exact PR 91906 dependency payload
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/finalize-dependency-restack.yml
-  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: materialize-pr91906-current-main
+  cancel-in-progress: false
+
+env:
+  SOURCE_MAIN_SHA: f751a8c5467c41500e505d90cb0eb8b70929080f
+  MATERIALIZER_BRANCH: automation/install-pr91906-upstream-materializer
+  MATERIALIZER_SHA: dcee4b2fdee5d0f595b1260477f132ad0aba2279
+  TARGET_BRANCH: restack/pr89479-current-main
+  EXPECTED_TARGET_HEAD: 0cb69a4499ca355b82cabb7d3071432362387fda
+
 jobs:
-  finalize:
+  materialize:
     if: >-
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository &&
-       github.event.pull_request.head.ref == 'automation/trigger-dependency-restack') ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/trigger-dependency-restack-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - name: Check out exact staging head
-        uses: actions/checkout@v4
+      - name: Check out fork control repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: restack/pr89479-current-main
+          ref: main
           fetch-depth: 0
+          persist-credentials: true
 
-      - name: Assert staging head
-        run: test "$(git rev-parse HEAD)" = "18eb288092b3230911454e822f10d93aef190d91"
+      - name: Bind exact upstream main and exact materializer source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags upstream refs/heads/main
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_MAIN_SHA"
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
+          git fetch --no-tags origin \
+            "refs/heads/$MATERIALIZER_BRANCH:refs/remotes/origin/$MATERIALIZER_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/$MATERIALIZER_BRANCH)" = "$MATERIALIZER_SHA"
+          git show "$MATERIALIZER_SHA:.github/scripts/materialize_pr91906_dependency_security.py" \
+            > /tmp/materialize_pr91906_dependency_security.py
+          git show "$MATERIALIZER_SHA:.github/scripts/materialize_pr91906_website_nanoid.py" \
+            > /tmp/materialize_pr91906_website_nanoid.py
+
+          git fetch --no-tags origin \
+            "refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/$TARGET_BRANCH)" = "$EXPECTED_TARGET_HEAD"
+
+          git checkout --detach "$SOURCE_MAIN_SHA"
+          git clean -ffd
+          test "$(git rev-parse HEAD)" = "$SOURCE_MAIN_SHA"
+          mkdir -p .github/scripts
+          cp /tmp/materialize_pr91906_dependency_security.py \
+            .github/scripts/materialize_pr91906_dependency_security.py
+          cp /tmp/materialize_pr91906_website_nanoid.py \
+            .github/scripts/materialize_pr91906_website_nanoid.py
+
+      - name: Set up Node 22.22.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.0
 
-      - name: Use repository-authorized npm
+      - name: Use repository-authorized npm 11.17.0
         run: npm install --global npm@11.17.0
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - name: Set up uv 0.12.5
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.12.5'
 
-      - name: Generate and verify exact final graph
+      - name: Generate the exact current-main dependency graph
+        shell: bash
         run: |
           set -euo pipefail
-          python3 .github/scripts/restack_dependency_security.py apply
+          python3 .github/scripts/materialize_pr91906_dependency_security.py apply
+          python3 .github/scripts/materialize_pr91906_website_nanoid.py apply
           npm install --package-lock-only --ignore-scripts --include=optional
           npm update nanoid --package-lock-only --ignore-scripts --include=optional
+          (
+            cd website
+            npm install --package-lock-only --ignore-scripts --include=optional
+          )
           uv lock --upgrade-package 'h2==4.4.1'
-          python3 .github/scripts/restack_dependency_security.py verify
+
+      - name: Verify advisory, lock, website, Desktop, and ARM64 closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/materialize_pr91906_dependency_security.py verify
+          python3 .github/scripts/materialize_pr91906_website_nanoid.py verify
           node --test apps/desktop/scripts/packaged-app-layout.test.mjs
           uv lock --check
           git diff --check
@@ -58,36 +103,87 @@ jobs:
           npm audit --workspace web --audit-level=high
           npm audit --workspace ui-tui --audit-level=high
           npm audit --workspace apps/desktop --audit-level=high
+          (
+            cd website
+            npm audit --audit-level=high
+          )
 
-      - name: Publish one exact current-main commit
-        env:
-          BASE_SHA: 7d6db4efb885856078e4d19f804035226df81e0d
-          STAGING_SHA: 18eb288092b3230911454e822f10d93aef190d91
-          BRANCH: restack/pr89479-current-main
+      - name: Prove a bounded product-only delta
+        shell: bash
         run: |
           set -euo pipefail
-          tmp="$(mktemp -d)"
-          mkdir -p "$tmp/apps/desktop/scripts"
-          cp .npmrc package.json package-lock.json uv.lock "$tmp/"
-          cp apps/desktop/package.json "$tmp/apps/desktop/package.json"
-          cp apps/desktop/scripts/packaged-app-layout.mjs "$tmp/apps/desktop/scripts/"
-          cp apps/desktop/scripts/packaged-app-layout.test.mjs "$tmp/apps/desktop/scripts/"
-          cp apps/desktop/scripts/test-desktop.mjs "$tmp/apps/desktop/scripts/"
+          rm -f .github/scripts/materialize_pr91906_dependency_security.py
+          rm -f .github/scripts/materialize_pr91906_website_nanoid.py
 
-          git reset --hard "$BASE_SHA"
-          cp "$tmp/.npmrc" .npmrc
-          cp "$tmp/package.json" package.json
-          cp "$tmp/package-lock.json" package-lock.json
-          cp "$tmp/uv.lock" uv.lock
-          mkdir -p apps/desktop/scripts
-          cp "$tmp/apps/desktop/package.json" apps/desktop/package.json
-          cp "$tmp/apps/desktop/scripts/packaged-app-layout.mjs" apps/desktop/scripts/packaged-app-layout.mjs
-          cp "$tmp/apps/desktop/scripts/packaged-app-layout.test.mjs" apps/desktop/scripts/packaged-app-layout.test.mjs
-          cp "$tmp/apps/desktop/scripts/test-desktop.mjs" apps/desktop/scripts/test-desktop.mjs
+          git add -- \
+            .npmrc \
+            package.json \
+            package-lock.json \
+            uv.lock \
+            apps/desktop/package.json \
+            apps/desktop/scripts/packaged-app-layout.mjs \
+            apps/desktop/scripts/packaged-app-layout.test.mjs \
+            apps/desktop/scripts/test-desktop.mjs \
+            website/.npmrc \
+            website/package.json \
+            website/package-lock.json
 
-          git add -- .npmrc package.json package-lock.json uv.lock apps/desktop/package.json apps/desktop/scripts/packaged-app-layout.mjs apps/desktop/scripts/packaged-app-layout.test.mjs apps/desktop/scripts/test-desktop.mjs
+          cat > /tmp/allowed-files <<'FILES'
+          .npmrc
+          apps/desktop/package.json
+          apps/desktop/scripts/packaged-app-layout.mjs
+          apps/desktop/scripts/packaged-app-layout.test.mjs
+          apps/desktop/scripts/test-desktop.mjs
+          package-lock.json
+          package.json
+          uv.lock
+          website/.npmrc
+          website/package-lock.json
+          website/package.json
+          FILES
+          git diff --cached --name-only | sort > /tmp/actual-files
+          test -s /tmp/actual-files
+          comm -23 /tmp/actual-files /tmp/allowed-files > /tmp/outside-domain
+          test ! -s /tmp/outside-domain
           git diff --cached --check
+          test -z "$(git ls-files --others --exclude-standard)"
+
+      - name: Publish one immutable child of current upstream main
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name 'Axl Ibiza, MBA'
           git config user.email 'andrexibiza@gmail.com'
-          git commit -m 'fix(deps): close current advisory graph on current main' -m 'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
-          git push --force-with-lease="refs/heads/$BRANCH:$STAGING_SHA" origin "HEAD:refs/heads/$BRANCH"
+          git commit -s \
+            -m 'fix(deps): close current advisory graph on landing main' \
+            -m 'Materialize the verified Electron, root and standalone-website Nano ID, and h2 advisory closure from exact upstream main while preserving React Compiler movement, Nano ID v6 isolation, native Desktop packaging, and Linux x64/ARM64 layout semantics.' \
+            -m $'Refs #85916\nRefs #89335\nRefs #89479\nRefs #90486\nRefs #91042\nRefs #92543\nRefs #92573\n\nCo-authored-by: hdy2001 <hdy2001@users.noreply.github.com>\nCo-authored-by: SovereignSignal <SovereignSignal@users.noreply.github.com>\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>\nCo-authored-by: mrxmoex <mrxmoex@users.noreply.github.com>'
+
+          final_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$SOURCE_MAIN_SHA"
+          test "$(git rev-list --count "$SOURCE_MAIN_SHA..HEAD")" = '1'
+          git diff --name-only "$SOURCE_MAIN_SHA..HEAD" | sort > /tmp/final-files
+          test -s /tmp/final-files
+          comm -23 /tmp/final-files /tmp/allowed-files > /tmp/final-outside-domain
+          test ! -s /tmp/final-outside-domain
+
+          {
+            echo "## PR 91906 exact dependency payload"
+            echo
+            echo "- source main: \`$SOURCE_MAIN_SHA\`"
+            echo "- materializer: \`$MATERIALIZER_SHA\`"
+            echo "- payload: \`$final_sha\`"
+            echo "- parent: \`$(git rev-parse HEAD^)\`"
+            echo "- changed paths: \`$(wc -l < /tmp/final-files | tr -d ' ')\`"
+            echo
+            echo '```'
+            sha256sum $(cat /tmp/final-files)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_TARGET_HEAD" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "head=$final_sha" >> "$GITHUB_OUTPUT"
+          echo "Published exact product payload $final_sha"
