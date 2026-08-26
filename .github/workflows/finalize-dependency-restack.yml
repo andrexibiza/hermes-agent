@@ -3,6 +3,10 @@ name: Materialize exact PR 91906 dependency payload
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    paths:
+      - .github/triggers/pr91906-materializer-v2.txt
 
 permissions:
   contents: write
@@ -21,8 +25,10 @@ env:
 jobs:
   materialize:
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'automation/trigger-dependency-restack-v2'
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'automation/trigger-dependency-restack-v2')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
