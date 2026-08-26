@@ -1,8 +1,9 @@
 name: Publish #88796 exact manager-lifetime product
 
 on:
-  push:
+  pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -15,14 +16,17 @@ jobs:
   publish:
     if: >-
       github.actor == 'andrexibiza' &&
-      contains(github.event.head_commit.message, 'ci(#88796): publish exact manager-lifetime product')
+      github.event.pull_request.head.repo.full_name == 'andrexibiza/hermes-agent' &&
+      github.event.pull_request.head.ref == 'automation/trigger-88796-product-publisher'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CURRENT_MAIN: 86ae906e88b280215067c5f9726f2f8cec6178b3
+      CURRENT_MAIN: d0351e32309bd68a1012c302157947b955323fca
       CARRIER_HEAD: d15981663be9f55cd76178174d439a5ad40e652f
       PRODUCT_BRANCH: fix/memory-prefetch-quarantine-finalization
       MATERIALIZER_PATH: .github/workflows/materialize-88796-manager-lifetime.py
+      EXPECTED_MANAGER_SHA256: 9931e42ce06f343e7a8b15e448b84a40a29013cd4b6c008e2fcf5c133b903cb5
+      EXPECTED_TEST_SHA256: 8143b92b6eebc2e45ce8f390435d4848ad403e0569b2c17f345bdd0aaad19c0c
     steps:
       - name: Checkout write-authorized fork main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -31,7 +35,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Capture exact reviewed materializer and current upstream base
+      - name: Capture reviewed materializer and exact upstream base
         shell: bash
         run: |
           set -euo pipefail
@@ -43,8 +47,7 @@ jobs:
           git remote add upstream https://github.com/NousResearch/hermes-agent.git 2>/dev/null || \
             git remote set-url upstream https://github.com/NousResearch/hermes-agent.git
           git fetch --no-tags upstream "$CURRENT_MAIN"
-          git fetch --no-tags origin "$PRODUCT_BRANCH" || true
-          git checkout -B "$PRODUCT_BRANCH" "$CURRENT_MAIN"
+          git checkout --detach "$CURRENT_MAIN"
           test "$(git rev-parse HEAD)" = "$CURRENT_MAIN"
 
       - name: Install uv
@@ -65,7 +68,7 @@ jobs:
           --extra anthropic --extra mistral --extra fal --extra modal
           --extra daytona --extra hindsight --extra parallel-web
 
-      - name: Materialize and independently verify exact product object
+      - name: Materialize, test, and commit exact two-file product
         shell: bash
         run: |
           set -euo pipefail
@@ -83,20 +86,35 @@ jobs:
             tests/agent/test_memory_async_sync.py \
             tests/run_agent/test_memory_provider_init.py
 
-          mapfile -t changed < <(git diff --name-only "$CURRENT_MAIN" | sort)
+          mapfile -t changed < <(git diff --name-only "$CURRENT_MAIN" -- | sort)
           expected=(agent/memory_manager.py tests/agent/test_memory_async_sync.py)
           if [[ "${changed[*]}" != "${expected[*]}" ]]; then
             printf 'unexpected product manifest: %s\n' "${changed[*]}" >&2
             exit 1
           fi
 
+          mapfile -t status < <(git diff --name-status "$CURRENT_MAIN" -- | sort -k2)
+          expected_status=(
+            $'M\tagent/memory_manager.py'
+            $'M\ttests/agent/test_memory_async_sync.py'
+          )
+          if [[ "${status[*]}" != "${expected_status[*]}" ]]; then
+            printf 'unexpected product status manifest: %s\n' "${status[*]}" >&2
+            exit 1
+          fi
+
+          printf '%s  %s\n' \
+            "$EXPECTED_MANAGER_SHA256" agent/memory_manager.py \
+            "$EXPECTED_TEST_SHA256" tests/agent/test_memory_async_sync.py \
+            | sha256sum --check -
+
           git config user.name 'Axl Ibiza, MBA'
           git config user.email 'andrexibiza@gmail.com'
           git add agent/memory_manager.py tests/agent/test_memory_async_sync.py
           git commit \
-            -m 'fix(memory): quarantine provider after prefetch timeout' \
-            -m 'Bind an uncancellable external-prefetch timeout to one MemoryManager lifetime, recheck admission at every semantic edge, and leave shutdown as cleanup-only.' \
-            -m 'Supersedes the workflow-only carrier in #88796 while preserving its reviewed invariant and provenance.' \
+            -m 'fix(memory): quarantine providers after prefetch timeout' \
+            -m 'Bind uncancellable external-prefetch timeouts to a monotonic MemoryManager-lifetime quarantine, recheck admission at every semantic fanout edge, and keep shutdown cleanup available.' \
+            -m 'Refs #84263. Supersedes the workflow-only carrier in #88796.' \
             -m 'Signed-off-by: Axl Ibiza, MBA <andrexibiza@gmail.com>'
 
           PRODUCT_HEAD=$(git rev-parse HEAD)
@@ -137,7 +155,7 @@ jobs:
           sha256sum /tmp/pr88796-product.patch | tee /tmp/pr88796-product.patch.sha256
           cat /tmp/pr88796-product-manifest.json >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish exact two-file product branch
+      - name: Publish exact product branch
         shell: bash
         run: |
           set -euo pipefail
