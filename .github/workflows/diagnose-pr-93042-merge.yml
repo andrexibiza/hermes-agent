@@ -1,0 +1,59 @@
+name: Diagnose PR 93042 merge
+
+on:
+  push:
+    branches:
+      - automation/sync-pr-93042-main-03537d69
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Phase 4 branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: andrexibiza/hermes-agent
+          ref: phase4-desktop-fleet
+          fetch-depth: 0
+
+      - name: Merge current upstream main and capture exact conflicts
+        shell: bash
+        run: |
+          set -uo pipefail
+          git config user.name "Andrex Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags upstream main
+
+          set +e
+          git merge --no-commit --no-ff upstream/main
+          merge_exit=$?
+          set -e
+
+          mkdir -p merge-diagnostics/conflicted-files
+          git diff --name-only --diff-filter=U | tee merge-diagnostics/conflicts.txt
+          git status --porcelain=v2 > merge-diagnostics/status.txt
+          git diff --cc > merge-diagnostics/conflicts.patch
+
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            mkdir -p "merge-diagnostics/conflicted-files/$(dirname "$path")"
+            cp -- "$path" "merge-diagnostics/conflicted-files/$path"
+          done < merge-diagnostics/conflicts.txt
+
+          echo "MERGE_EXIT=$merge_exit"
+          echo "CONFLICTS_START"
+          cat merge-diagnostics/conflicts.txt
+          echo "CONFLICTS_END"
+
+      - name: Upload merge diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-93042-merge-diagnostics
+          path: merge-diagnostics
+          retention-days: 1
