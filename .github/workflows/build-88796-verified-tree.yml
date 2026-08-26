@@ -27,6 +27,20 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
+      - name: Pin materializer and reset to exact current main
+        env:
+          CURRENT_MAIN: 98e87ac886a0b53e2ff80ac767df5283bf7d17ed
+          MATERIALIZER: .github/workflows/materialize-88796-manager-lifetime.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$MATERIALIZER"
+          cp "$MATERIALIZER" /tmp/materialize-88796-manager-lifetime.py
+          python3 -m py_compile /tmp/materialize-88796-manager-lifetime.py
+          git fetch --no-tags origin "$CURRENT_MAIN"
+          git reset --hard "$CURRENT_MAIN"
+          test "$(git rev-parse HEAD)" = "$CURRENT_MAIN"
+
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
         with:
@@ -45,80 +59,37 @@ jobs:
           --extra anthropic --extra mistral --extra fal --extra modal
           --extra daytona --extra hindsight --extra parallel-web
 
-      - name: Materialize and verify exact manager-lifetime product tree
+      - name: Materialize, lint, test, and commit exact product tree
         env:
           CURRENT_MAIN: 98e87ac886a0b53e2ff80ac767df5283bf7d17ed
-          BRANCH: fix/memory-prefetch-cancel
-          CARRIER: .github/workflows/one-shot-fix-88796.yml
-          FORK_REPOSITORY: andrexibiza/hermes-agent
+          TRIGGER_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$CARRIER"
-          TRIGGER_HEAD=$(git rev-parse HEAD)
-          export CURRENT_MAIN BRANCH TRIGGER_HEAD
-
-          # Resolve every carrier test through the exact locked environment.
           export PATH="$PWD/.venv/bin:$PATH"
 
-          # The two supplemental materializers deliberately expand quarantine
-          # beyond one MemoryManager lifetime. They are excluded here because
-          # this extraction is bound to #88796's narrower owning-manager law.
-          mkdir -p /tmp/hermes-tools
+          python3 /tmp/materialize-88796-manager-lifetime.py
+          python3 -m py_compile \
+            agent/memory_manager.py \
+            tests/agent/test_memory_async_sync.py
+          git diff --check
+          uv run ruff check \
+            agent/memory_manager.py \
+            tests/agent/test_memory_async_sync.py
+          python -m pytest -q tests/agent/test_memory_async_sync.py
 
-          REAL_GIT=$(command -v git)
-          cat > /tmp/hermes-tools/git <<EOF
-          #!/usr/bin/env bash
-          set -euo pipefail
-          args=("\$@")
-          if [[ \${args[0]:-} == push ]]; then
-            echo '[verified-tree] blocked carrier push' >&2
-            exit 0
+          git config user.name 'Axl Ibiza, MBA'
+          git config user.email 'andrexibiza@gmail.com'
+          git add agent/memory_manager.py tests/agent/test_memory_async_sync.py
+          mapfile -t staged < <(git diff --cached --name-only)
+          expected=(agent/memory_manager.py tests/agent/test_memory_async_sync.py)
+          if [[ "${staged[*]}" != "${expected[*]}" ]]; then
+            printf 'unexpected staged manifest: %s\n' "${staged[*]}" >&2
+            exit 1
           fi
-          for i in "\${!args[@]}"; do
-            if [[ \${args[\$i]} == origin ]]; then
-              args[\$i]=https://github.com/${FORK_REPOSITORY}.git
-            fi
-          done
-          exec "$REAL_GIT" "\${args[@]}"
-          EOF
-          chmod +x /tmp/hermes-tools/git
-          export PATH="/tmp/hermes-tools:$PATH"
-
-          cp "$CARRIER" /tmp/carrier.yml
-          python3 - <<'PY'
-          from pathlib import Path
-
-          lines = Path('/tmp/carrier.yml').read_text().splitlines()
-          starts = [i for i, line in enumerate(lines) if line.strip() == 'run: |']
-          if not starts:
-              raise SystemExit('carrier has no literal run block')
-          for number, start in enumerate(starts):
-              key_indent = len(lines[start]) - len(lines[start].lstrip())
-              prefix = ' ' * (key_indent + 2)
-              end = len(lines)
-              for index in range(start + 1, len(lines)):
-                  line = lines[index]
-                  stripped = line.lstrip()
-                  indent = len(line) - len(stripped)
-                  if indent == 6 and stripped.startswith('- '):
-                      end = index
-                      break
-              body = [
-                  line[len(prefix):] if line.startswith(prefix) else line
-                  for line in lines[start + 1:end]
-              ]
-              while body and not body[-1].strip():
-                  body.pop()
-              if not body:
-                  raise SystemExit(f'empty carrier run block {number}')
-              Path(f'/tmp/carrier-{number}.sh').write_text('\n'.join(body) + '\n')
-          PY
-
-          for script in /tmp/carrier-*.sh; do
-            bash -n "$script"
-            bash "$script"
-          done
+          git commit -m 'fix(memory): quarantine provider after prefetch timeout' \
+            -m 'Bind an uncancellable external-prefetch timeout to one MemoryManager lifetime, recheck admission at every semantic edge, and leave shutdown as cleanup-only.' \
+            -m 'Signed-off-by: Axl Ibiza, MBA <andrexibiza@gmail.com>'
 
           python3 - <<'PY'
           from pathlib import Path
@@ -138,15 +109,7 @@ jobs:
               if not line.strip():
                   continue
               status, path = line.split('\t', 1)
-              if path.startswith('.github/workflows/'):
-                  continue
-              if path.startswith('contributors/emails/'):
-                  continue
-              if path.startswith('tests/e2e/test__authority_repair_materializer.py'):
-                  continue
               entries.append((status, path))
-          if not entries:
-              raise SystemExit('materialized product diff is empty')
           expected = {
               ('M', 'agent/memory_manager.py'),
               ('M', 'tests/agent/test_memory_async_sync.py'),
@@ -157,13 +120,18 @@ jobs:
                   f'actual={sorted(entries)}'
               )
 
+          source_hashes = {}
+          for _, path in entries:
+              source_hashes[path] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
           manifest = {
               'base': base,
-              'carrier_source_head': '${{ github.event.pull_request.head.sha }}',
+              'carrier_source_head': os.environ['TRIGGER_HEAD'],
               'entries': entries,
               'materialized_head': subprocess.check_output(
                   ['git', 'rev-parse', 'HEAD'], text=True
               ).strip(),
+              'source_sha256': source_hashes,
           }
           output = Path('/tmp/verified-tree.tar.gz')
           with tarfile.open(output, 'w:gz') as archive:
@@ -172,7 +140,7 @@ jobs:
               info.size = len(data)
               info.mode = 0o644
               archive.addfile(info, io.BytesIO(data))
-              for status, path in entries:
+              for status, path in sorted(entries):
                   if not status.startswith('D'):
                       archive.add(path, arcname=path, recursive=False)
           digest = hashlib.sha256(output.read_bytes()).hexdigest()
