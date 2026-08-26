@@ -1,12 +1,13 @@
 name: Publish #88796 exact manager-lifetime product
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: publish-88796-manager-lifetime-product
@@ -15,18 +16,22 @@ concurrency:
 jobs:
   publish:
     if: >-
-      github.actor == 'andrexibiza' &&
-      github.event.pull_request.head.repo.full_name == 'andrexibiza/hermes-agent' &&
-      github.event.pull_request.head.ref == 'automation/trigger-88796-product-publisher'
+      github.repository == 'andrexibiza/hermes-agent' &&
+      github.event.issue.number == 243 &&
+      github.event.comment.user.login == 'andrexibiza' &&
+      github.event.comment.body == '/publish-88796'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CURRENT_MAIN: d0351e32309bd68a1012c302157947b955323fca
+      ARTIFACT_BASE: 98e87ac886a0b53e2ff80ac767df5283bf7d17ed
       CARRIER_HEAD: d15981663be9f55cd76178174d439a5ad40e652f
       PRODUCT_BRANCH: fix/memory-prefetch-quarantine-finalization
       MATERIALIZER_PATH: .github/workflows/materialize-88796-manager-lifetime.py
       EXPECTED_MANAGER_SHA256: 9931e42ce06f343e7a8b15e448b84a40a29013cd4b6c008e2fcf5c133b903cb5
       EXPECTED_TEST_SHA256: 8143b92b6eebc2e45ce8f390435d4848ad403e0569b2c17f345bdd0aaad19c0c
+      EXPECTED_MANAGER_BLOB: 7f6626486f666001a6ab99d8ceba236dc37a60ab
+      EXPECTED_TEST_BLOB: b201d98f78cd31fea446d4b930e1c79821270f4b
+
     steps:
       - name: Checkout write-authorized fork main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -35,7 +40,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Capture reviewed materializer and exact upstream base
+      - name: Capture reviewed materializer and live upstream base
         shell: bash
         run: |
           set -euo pipefail
@@ -46,12 +51,25 @@ jobs:
 
           git remote add upstream https://github.com/NousResearch/hermes-agent.git 2>/dev/null || \
             git remote set-url upstream https://github.com/NousResearch/hermes-agent.git
-          git fetch --no-tags upstream "$CURRENT_MAIN"
+          git fetch --no-tags upstream main
+          CURRENT_MAIN="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$ARTIFACT_BASE^{commit}"
+
+          if ! git diff --quiet "$ARTIFACT_BASE" "$CURRENT_MAIN" -- \
+            agent/memory_manager.py tests/agent/test_memory_async_sync.py
+          then
+            echo 'Upstream changed a product path after artifact verification; refusing stale reconstruction.' >&2
+            git diff --name-status "$ARTIFACT_BASE" "$CURRENT_MAIN" -- \
+              agent/memory_manager.py tests/agent/test_memory_async_sync.py >&2
+            exit 1
+          fi
+
+          printf 'CURRENT_MAIN=%s\n' "$CURRENT_MAIN" >> "$GITHUB_ENV"
           git checkout --detach "$CURRENT_MAIN"
           test "$(git rev-parse HEAD)" = "$CURRENT_MAIN"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           version: "0.9.28"
           enable-cache: true
@@ -69,6 +87,7 @@ jobs:
           --extra daytona --extra hindsight --extra parallel-web
 
       - name: Materialize, test, and commit exact two-file product
+        id: product
         shell: bash
         run: |
           set -euo pipefail
@@ -82,7 +101,7 @@ jobs:
           uv run ruff check \
             agent/memory_manager.py \
             tests/agent/test_memory_async_sync.py
-          python -m pytest -q \
+          uv run python -m pytest -q \
             tests/agent/test_memory_async_sync.py \
             tests/run_agent/test_memory_provider_init.py
 
@@ -107,6 +126,8 @@ jobs:
             "$EXPECTED_MANAGER_SHA256" agent/memory_manager.py \
             "$EXPECTED_TEST_SHA256" tests/agent/test_memory_async_sync.py \
             | sha256sum --check -
+          test "$(git hash-object agent/memory_manager.py)" = "$EXPECTED_MANAGER_BLOB"
+          test "$(git hash-object tests/agent/test_memory_async_sync.py)" = "$EXPECTED_TEST_BLOB"
 
           git config user.name 'Axl Ibiza, MBA'
           git config user.email 'andrexibiza@gmail.com'
@@ -114,11 +135,17 @@ jobs:
           git commit \
             -m 'fix(memory): quarantine providers after prefetch timeout' \
             -m 'Bind uncancellable external-prefetch timeouts to a monotonic MemoryManager-lifetime quarantine, recheck admission at every semantic fanout edge, and keep shutdown cleanup available.' \
+            -m 'Source-artifact: NousResearch/hermes-agent Actions run 32965244433, artifact 9605434778.' \
             -m 'Refs #84263. Supersedes the workflow-only carrier in #88796.' \
             -m 'Signed-off-by: Axl Ibiza, MBA <andrexibiza@gmail.com>'
 
-          PRODUCT_HEAD=$(git rev-parse HEAD)
-          export PRODUCT_HEAD
+          PRODUCT_HEAD="$(git rev-parse HEAD)"
+          read -r COMMIT PARENT EXTRA <<<"$(git rev-list --parents -n 1 HEAD)"
+          test "$COMMIT" = "$PRODUCT_HEAD"
+          test "$PARENT" = "$CURRENT_MAIN"
+          test -z "${EXTRA:-}"
+          printf 'product_head=%s\n' "$PRODUCT_HEAD" >> "$GITHUB_OUTPUT"
+
           python3 - <<'PY'
           from pathlib import Path
           import hashlib
@@ -132,8 +159,11 @@ jobs:
           ]
           manifest = {
               'base': os.environ['CURRENT_MAIN'],
+              'artifact_base': os.environ['ARTIFACT_BASE'],
               'carrier_head': os.environ['CARRIER_HEAD'],
-              'product_head': os.environ['PRODUCT_HEAD'],
+              'product_head': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
               'branch': os.environ['PRODUCT_BRANCH'],
               'entries': [['M', path] for path in paths],
               'source_sha256': {
@@ -155,12 +185,25 @@ jobs:
           sha256sum /tmp/pr88796-product.patch | tee /tmp/pr88796-product.patch.sha256
           cat /tmp/pr88796-product-manifest.json >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish exact product branch
+      - name: Re-attest upstream and publish exact product branch
+        id: publish
         shell: bash
         run: |
           set -euo pipefail
-          git push origin "HEAD:refs/heads/$PRODUCT_BRANCH" --force-with-lease
-          echo "published_head=$(git rev-parse HEAD)"
+          git fetch --no-tags upstream main
+          test "$(git rev-parse FETCH_HEAD)" = "$CURRENT_MAIN"
+
+          ref="refs/heads/$PRODUCT_BRANCH"
+          old_head="$(git ls-remote origin "$ref" | awk '{print $1}')"
+          if [[ -n "$old_head" ]]; then
+            git push origin "HEAD:$ref" --force-with-lease="$ref:$old_head"
+          else
+            git push origin "HEAD:$ref"
+          fi
+          published_head="$(git ls-remote origin "$ref" | awk '{print $1}')"
+          test "$published_head" = "$(git rev-parse HEAD)"
+          printf 'published_head=%s\n' "$published_head" >> "$GITHUB_OUTPUT"
+          printf 'previous_head=%s\n' "$old_head" >> "$GITHUB_OUTPUT"
 
       - name: Upload publication evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -173,3 +216,27 @@ jobs:
             /tmp/pr88796-product.patch.sha256
           retention-days: 7
           if-no-files-found: error
+
+      - name: Post exact publication receipt
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          PRODUCT_HEAD: ${{ steps.product.outputs.product_head }}
+          PUBLISHED_HEAD: ${{ steps.publish.outputs.published_head }}
+          PREVIOUS_HEAD: ${{ steps.publish.outputs.previous_head }}
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          Publication status: **${JOB_STATUS}**
+
+          - upstream base: \`${CURRENT_MAIN:-unresolved}\`
+          - product head: \`${PRODUCT_HEAD:-unpublished}\`
+          - remote read-back: \`${PUBLISHED_HEAD:-unpublished}\`
+          - previous branch head: \`${PREVIOUS_HEAD:-unknown}\`
+          - exact paths: \`agent/memory_manager.py\`, \`tests/agent/test_memory_async_sync.py\`
+          - artifact evidence: https://github.com/NousResearch/hermes-agent/actions/runs/32965244433
+          EOF
+          )
+          gh pr comment 243 --repo "$GITHUB_REPOSITORY" --body "$body"
