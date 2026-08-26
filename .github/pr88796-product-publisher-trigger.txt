@@ -1,0 +1,3 @@
+Trigger the exact two-file #88796 product publisher.
+Base workflow: abd80c443f4311757323958dfda6eeab8772d051
+Upstream product base: d0351e32309bd68a1012c302157947b955323fca
