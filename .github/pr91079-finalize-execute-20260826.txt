@@ -1,0 +1,6 @@
+One-use execution trigger for the exact #91079 current-main finalizer.
+
+Base: f751a8c5467c41500e505d90cb0eb8b70929080f
+Reviewed implementation: db32f7bb0864f5944c6ed9f505d0b979bedc8f2f
+Expected old public head: ef6cef5d1733d185a972ccee051d5c6bcb35ea86
+The workflow must publish only after the exact real packaged-Windows rebuild witness passes.
