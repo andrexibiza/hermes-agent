@@ -3,6 +3,8 @@ name: "@andrexibiza GitHub review support"
 on:
   schedule:
     - cron: "17,47 * * * *"
+  issues:
+    types: [opened]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -28,7 +30,10 @@ concurrency:
 jobs:
   review-support:
     name: Graph-first review support
-    if: github.repository == 'andrexibiza/hermes-agent'
+    if: >-
+      github.repository == 'andrexibiza/hermes-agent' &&
+      (github.event_name != 'issues' ||
+       github.event.issue.title == '[automation-control] run andrexibiza review support')
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
