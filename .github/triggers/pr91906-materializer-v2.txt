@@ -1,0 +1,4 @@
+source_main=f751a8c5467c41500e505d90cb0eb8b70929080f
+materializer=dcee4b2fdee5d0f595b1260477f132ad0aba2279
+expected_delivery_head=0cb69a4499ca355b82cabb7d3071432362387fda
+purpose=trigger exact-main dependency payload materialization for NousResearch/hermes-agent#91906
