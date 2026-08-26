@@ -1,6 +1,8 @@
 name: Publish PR 91906 exact dependency closure (temporary)
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
@@ -9,63 +11,77 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-pr-91906-dependency-closure
+  group: publish-pr91906-current-main
   cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: restack/pr89479-current-main
+  EXPECTED_HEAD: dbdda7ff9943ab442a9620a3e18ae90de5c182b6
+  BASE_SHA: f751a8c5467c41500e505d90cb0eb8b70929080f
 
 jobs:
   publish:
-    name: Generate, verify, and publish the exact eight-file closure
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'automation/dependency-security-finalize-91906-v2')
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      TARGET_BRANCH: restack/pr89479-current-main
-      EXPECTED_HEAD: c35060427bbd1011604502e9d4a4a2121e03a500
-      BASE_SHA: b6bcb3e791c673e63974029bbab40cc9326803ff
-      WORKFLOW_PATH: .github/workflows/publish-pr-91906-dependency-closure-temp.yml
+    timeout-minutes: 60
     steps:
-      - name: Check out the exact staging branch
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check out exact materialization object
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Gate exact source and base objects
+      - name: Gate source, landing main, and materializer identity
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git fetch --no-tags https://github.com/NousResearch/hermes-agent.git "$BASE_SHA"
-          test "$(git rev-parse FETCH_HEAD)" = "$BASE_SHA"
           test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 1
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags upstream refs/heads/main
+          test "$(git rev-parse FETCH_HEAD)" = "$BASE_SHA"
+          git diff --name-only "$BASE_SHA..HEAD" | sort > /tmp/control
+          printf '%s\n' \
+            .github/scripts/materialize_pr91906_dependency_security.py \
+            .github/scripts/materialize_pr91906_website_nanoid.py \
+            .github/workflows/restack-dependency-security.yml > /tmp/expected-control
+          diff -u /tmp/expected-control /tmp/control
+          test "$(git hash-object .github/scripts/materialize_pr91906_dependency_security.py)" = c092011a7135296b0e9c7c672810ca0f45dcac7d
+          test "$(git hash-object .github/scripts/materialize_pr91906_website_nanoid.py)" = d73cd5151a2378d2e7f262e2dd4974470b809c50
 
-      - name: Set up Node 22.22.0
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.0
-
-      - name: Use the repository-authorized npm version
-        run: npm install --global npm@11.17.0
-
-      - name: Set up uv 0.12.5
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: npm install --global npm@11.17.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: '0.12.5'
 
-      - name: Generate the canonical current-main lock graph
+      - name: Generate exact dependency graph
         shell: bash
         run: |
           set -euo pipefail
-          python3 .github/scripts/restack_dependency_security.py apply
+          python3 .github/scripts/materialize_pr91906_dependency_security.py apply
+          python3 .github/scripts/materialize_pr91906_website_nanoid.py apply
           npm install --package-lock-only --ignore-scripts --include=optional
           npm update nanoid --package-lock-only --ignore-scripts --include=optional
+          (cd website && npm install --package-lock-only --ignore-scripts --include=optional)
           uv lock --upgrade-package 'h2==4.4.1'
 
-      - name: Verify semantic closure and focused regressions
+      - name: Verify advisory, lock, Desktop, native, ARM64, and website closure
         shell: bash
         run: |
           set -euo pipefail
-          python3 .github/scripts/restack_dependency_security.py verify
+          python3 .github/scripts/materialize_pr91906_dependency_security.py verify
+          python3 .github/scripts/materialize_pr91906_website_nanoid.py verify
           node --test apps/desktop/scripts/packaged-app-layout.test.mjs
           uv lock --check
           git diff --check
@@ -73,115 +89,108 @@ jobs:
           npm audit --workspace web --audit-level=high
           npm audit --workspace ui-tui --audit-level=high
           npm audit --workspace apps/desktop --audit-level=high
+          (cd website && npm audit --audit-level=high)
 
-      - name: Prove byte identity with artifact 9466562504
+      - name: Bind bytes to artifact 9589956219
         shell: bash
         run: |
           set -euo pipefail
-          cat > /tmp/expected-sha256s <<'SUMS'
+          cat > /tmp/sums <<'SUMS'
           46e922c1fc1dd16ee9a1623a2b76d1f4e4a11ab03f225803beed058356535eda  .npmrc
-          56f4cdb46f65a4a075e570f6acdad1f6c05fb903b37d9d01b1323842ef62bb2f  apps/desktop/package.json
+          a5e2e86bd17f87db26f09e172be01db9e1175fbe423b8dad993d93af671e0c7d  apps/desktop/package.json
           9838203f20c16bdf38484cc605458bcd85181bbf2bcc37afbb076a5569a2f54f  apps/desktop/scripts/packaged-app-layout.mjs
           b1c90a8f0ca86f499985dd5e9837b27302eaf1af9f56671aabaaa530b4841d36  apps/desktop/scripts/packaged-app-layout.test.mjs
           9dc343e3e40b6aad5c479f48b879afef8c243a8e3e87727d0f85d438af0cee61  apps/desktop/scripts/test-desktop.mjs
-          025cdcc245dbccda191c41c001a57f6aa9dfcaefa4ccc19aed418f28d918e84a  package-lock.json
+          c8b3d110ea4d98f69ce06a7c4965e2916030b7a1e959218584abad5312edeed4  package-lock.json
           9cd7dd3823c2af968b66178efc7dc7f489ac9e72fd6dbaaa7e875494a6cd7e4d  package.json
-          c72c4fe0e636f971564432599f60257e040b0d3396061fe733610575a48aaaa3  uv.lock
+          8ae8a064108e8908dcd947b67a74268f29ac2b56c6f5a9c957fb9cc5d2ad3e68  uv.lock
+          15124301297f7d5ddae9162b61eef79e41c2887a10cb2df0b61960ccf635baab  website/.npmrc
+          d14972563d599e251d4a6269fc78124e011ba45e33fe9b1de8612584ab6daa29  website/package-lock.json
+          c5ef11e7d257b15ce530861037bc3609c928131ecfc9142fcbb0e0b10ef116b7  website/package.json
           SUMS
-          sha256sum -c /tmp/expected-sha256s
+          sha256sum -c /tmp/sums
 
-      - name: Publish one clean current-main commit
+      - name: Publish one immutable product child
         id: publish
         shell: bash
         run: |
           set -euo pipefail
-
           payload=$(mktemp -d)
-          mkdir -p "$payload/apps/desktop/scripts"
+          mkdir -p "$payload/apps/desktop/scripts" "$payload/website"
           cp -a .npmrc package.json package-lock.json uv.lock "$payload/"
           cp -a apps/desktop/package.json "$payload/apps/desktop/package.json"
-          cp -a apps/desktop/scripts/packaged-app-layout.mjs "$payload/apps/desktop/scripts/"
-          cp -a apps/desktop/scripts/packaged-app-layout.test.mjs "$payload/apps/desktop/scripts/"
-          cp -a apps/desktop/scripts/test-desktop.mjs "$payload/apps/desktop/scripts/"
+          cp -a apps/desktop/scripts/{packaged-app-layout.mjs,packaged-app-layout.test.mjs,test-desktop.mjs} "$payload/apps/desktop/scripts/"
+          cp -a website/.npmrc website/package.json website/package-lock.json "$payload/website/"
 
           git reset --hard "$BASE_SHA"
-          cp -a "$payload/.npmrc" .npmrc
-          cp -a "$payload/package.json" package.json
-          cp -a "$payload/package-lock.json" package-lock.json
-          cp -a "$payload/uv.lock" uv.lock
+          cp -a "$payload/.npmrc" "$payload/package.json" "$payload/package-lock.json" "$payload/uv.lock" .
           cp -a "$payload/apps/desktop/package.json" apps/desktop/package.json
-          cp -a "$payload/apps/desktop/scripts/packaged-app-layout.mjs" apps/desktop/scripts/
-          cp -a "$payload/apps/desktop/scripts/packaged-app-layout.test.mjs" apps/desktop/scripts/
-          cp -a "$payload/apps/desktop/scripts/test-desktop.mjs" apps/desktop/scripts/
+          cp -a "$payload/apps/desktop/scripts/"* apps/desktop/scripts/
+          cp -a "$payload/website/.npmrc" "$payload/website/package.json" "$payload/website/package-lock.json" website/
+          sha256sum -c /tmp/sums
 
-          sha256sum -c /tmp/expected-sha256s
-          git add -- \
-            .npmrc \
-            package.json \
-            package-lock.json \
-            uv.lock \
+          git add -- .npmrc package.json package-lock.json uv.lock \
             apps/desktop/package.json \
             apps/desktop/scripts/packaged-app-layout.mjs \
             apps/desktop/scripts/packaged-app-layout.test.mjs \
-            apps/desktop/scripts/test-desktop.mjs
-
-          cat > /tmp/expected-files <<'FILES'
-          .npmrc
-          apps/desktop/package.json
-          apps/desktop/scripts/packaged-app-layout.mjs
-          apps/desktop/scripts/packaged-app-layout.test.mjs
-          apps/desktop/scripts/test-desktop.mjs
-          package-lock.json
-          package.json
-          uv.lock
-          FILES
+            apps/desktop/scripts/test-desktop.mjs \
+            website/.npmrc website/package.json website/package-lock.json
+          printf '%s\n' \
+            .npmrc \
+            apps/desktop/package.json \
+            apps/desktop/scripts/packaged-app-layout.mjs \
+            apps/desktop/scripts/packaged-app-layout.test.mjs \
+            apps/desktop/scripts/test-desktop.mjs \
+            package-lock.json package.json uv.lock \
+            website/.npmrc website/package-lock.json website/package.json > /tmp/expected-files
           git diff --cached --name-only | sort > /tmp/actual-files
           diff -u /tmp/expected-files /tmp/actual-files
           git diff --cached --check
+          test -z "$(git ls-files --others --exclude-standard)"
 
-          git config user.name 'Axl Ibiza'
+          git config user.name 'Axl Ibiza, MBA'
           git config user.email 'andrexibiza@gmail.com'
           tree=$(git write-tree)
-          message=$(cat <<'COMMIT_MESSAGE'
-          fix(deps): close current advisory graph on current main
+          message=$(cat <<'COMMIT'
+          fix(deps): close current advisory graph on landing main
 
-          Consolidate the live Electron, Nano ID, and h2 advisory closure on
-          the current-main dependency graph while preserving React Compiler
-          movement, Nano ID v6 isolation, and packaged Desktop architecture.
+          Consolidate the verified Electron, root and standalone-website Nano ID,
+          and h2 advisory closure on exact landing main. Preserve React Compiler
+          movement, Nano ID v6 isolation, native Desktop packaging, and Linux
+          x64/ARM64 packaged-app layout semantics.
 
+          Refs #85916
+          Refs #89335
           Refs #89479
           Refs #90486
           Refs #91042
+          Refs #92543
+          Refs #92573
 
+          Co-authored-by: hdy2001 <hdy2001@users.noreply.github.com>
+          Co-authored-by: SovereignSignal <SovereignSignal@users.noreply.github.com>
           Co-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>
           Co-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>
-          Signed-off-by: Axl Ibiza <andrexibiza@gmail.com>
-          COMMIT_MESSAGE
+          Co-authored-by: mrxmoex <mrxmoex@users.noreply.github.com>
+          Signed-off-by: Axl Ibiza, MBA <andrexibiza@gmail.com>
+          COMMIT
           )
           commit=$(printf '%s\n' "$message" | git commit-tree "$tree" -p "$BASE_SHA")
           git reset --hard "$commit"
           test "$(git rev-parse HEAD^)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA..HEAD")" = '1'
-          test "$(git diff --name-only "$BASE_SHA..HEAD" | wc -l | tr -d ' ')" = '8'
-
-          git push \
-            --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_HEAD" \
-            origin "HEAD:refs/heads/$TARGET_BRANCH"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 1
+          git diff --name-only "$BASE_SHA..HEAD" | sort > /tmp/final-files
+          diff -u /tmp/expected-files /tmp/final-files
+          sha256sum -c /tmp/sums
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_HEAD" origin "HEAD:refs/heads/$TARGET_BRANCH"
           echo "head=$commit" >> "$GITHUB_OUTPUT"
-          echo "Published exact final head $commit"
 
-      - name: Retire this one-shot publisher
+      - name: Record receipt
         if: steps.publish.outcome == 'success'
-        shell: bash
         run: |
-          set -euo pipefail
-          control=$(mktemp -d)
-          git clone --no-checkout "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "$control"
-          cd "$control"
-          git checkout main
-          test -f "$WORKFLOW_PATH"
-          git rm -- "$WORKFLOW_PATH"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'chore(ci): retire completed PR 91906 publisher'
-          git push origin HEAD:main
+          echo '## PR 91906 exact product publication' >> "$GITHUB_STEP_SUMMARY"
+          echo "- source main: \`$BASE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- materializer: \`$EXPECTED_HEAD\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- product: \`${{ steps.publish.outputs.head }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo '- product paths: `11`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- artifact: `9589956219` / run `32921389471`' >> "$GITHUB_STEP_SUMMARY"
