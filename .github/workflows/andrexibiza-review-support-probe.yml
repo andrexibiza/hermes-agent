@@ -1,0 +1,17 @@
+name: "@andrexibiza review-support control probe"
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+jobs:
+  probe:
+    if: github.event.pull_request.title == '[automation-control] run andrexibiza review support'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prove GitHub Actions event delivery
+        run: |
+          printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+          printf 'event=%s\n' "$GITHUB_EVENT_NAME"
+          printf 'base_sha=%s\n' "${{ github.event.pull_request.base.sha }}"
+          printf 'control_pr=%s\n' "${{ github.event.pull_request.number }}"
