@@ -1,0 +1,158 @@
+name: TEMP PR 88796 live product publisher
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr88796-live-product-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      CARRIER_HEAD: d15981663be9f55cd76178174d439a5ad40e652f
+      EXPECTED_OLD_HEAD: d15981663be9f55cd76178174d439a5ad40e652f
+      TARGET_BRANCH: fix/memory-prefetch-cancel
+      MATERIALIZER_PATH: .github/workflows/materialize-88796-manager-lifetime.py
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Capture live upstream main and reviewed materializer
+        id: compose
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REPOSITORY" = "andrexibiza/hermes-agent"
+
+          current_target="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$current_target" = "$EXPECTED_OLD_HEAD"
+          git fetch --no-tags origin "$CARRIER_HEAD"
+          git show "$CARRIER_HEAD:$MATERIALIZER_PATH" > /tmp/materialize-88796-manager-lifetime.py
+          python3 -m py_compile /tmp/materialize-88796-manager-lifetime.py
+          materializer_sha="$(sha256sum /tmp/materialize-88796-manager-lifetime.py | awk '{print $1}')"
+
+          git fetch --no-tags https://github.com/NousResearch/hermes-agent.git \
+            +refs/heads/main:refs/remotes/upstream/main
+          base="$(git rev-parse refs/remotes/upstream/main)"
+          git switch --detach "$base"
+          test "$(git rev-parse HEAD)" = "$base"
+
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "materializer_sha=$materializer_sha" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install locked test environment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra all --extra dev \
+            --extra anthropic --extra mistral --extra fal --extra modal \
+            --extra daytona --extra hindsight --extra parallel-web
+
+      - name: Materialize, verify, and commit two-file product
+        id: product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export PATH="$PWD/.venv/bin:$PATH"
+          base='${{ steps.compose.outputs.base }}'
+
+          python3 /tmp/materialize-88796-manager-lifetime.py
+          python3 -m py_compile agent/memory_manager.py tests/agent/test_memory_async_sync.py
+          git diff --check
+          uv run ruff check agent/memory_manager.py tests/agent/test_memory_async_sync.py
+          uv run --python 3.11 pytest -q \
+            tests/agent/test_memory_async_sync.py \
+            tests/run_agent/test_memory_provider_init.py
+
+          mapfile -t changed < <(git diff --name-only "$base" | sort)
+          expected=(agent/memory_manager.py tests/agent/test_memory_async_sync.py)
+          test "${changed[*]}" = "${expected[*]}"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('agent/memory_manager.py').read_text(encoding='utf-8')
+          required = (
+              'class _ProviderGateState:',
+              'quarantined: bool = False',
+              '_provider_call_allowed',
+              '_quarantine_external_prefetch',
+              '_provider_gate_condition',
+          )
+          for token in required:
+              assert token in source, token
+          tests = Path('tests/agent/test_memory_async_sync.py').read_text(encoding='utf-8')
+          for token in ('timeout', 'quarantin', 'late', 'shutdown'):
+              assert token in tests.lower(), token
+          PY
+
+          git config user.name 'Axl Ibiza, MBA'
+          git config user.email 'andrexibiza@gmail.com'
+          git add agent/memory_manager.py tests/agent/test_memory_async_sync.py
+          git commit -s \
+            -m 'fix(memory): quarantine provider after prefetch timeout' \
+            -m 'Bind an uncancellable external-prefetch timeout to one MemoryManager lifetime, recheck admission at every semantic edge, preserve finalization fencing, and leave shutdown as cleanup-only. Supersedes the workflow-only #88796 carrier while preserving its reviewed invariant.'
+
+          product="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = 1
+          git diff --name-only "$base"..HEAD | sort >/tmp/final-paths
+          printf '%s\n' agent/memory_manager.py tests/agent/test_memory_async_sync.py >/tmp/expected-paths
+          diff -u /tmp/expected-paths /tmp/final-paths
+          echo "product=$product" >> "$GITHUB_OUTPUT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, subprocess
+          paths=['agent/memory_manager.py','tests/agent/test_memory_async_sync.py']
+          manifest={
+            'base':'${{ steps.compose.outputs.base }}',
+            'carrier_head':os.environ['CARRIER_HEAD'],
+            'product_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+            'materializer_sha256':'${{ steps.compose.outputs.materializer_sha }}',
+            'source_sha256':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths},
+          }
+          Path('/tmp/pr88796-product-manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(manifest,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr88796-product-${{ steps.product.outputs.product }}
+          path: /tmp/pr88796-product-manifest.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Re-attest live graph and publish exact product head
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base='${{ steps.compose.outputs.base }}'
+          product='${{ steps.product.outputs.product }}'
+          test "$(git rev-parse HEAD)" = "$product"
+
+          git fetch --no-tags https://github.com/NousResearch/hermes-agent.git \
+            +refs/heads/main:refs/remotes/upstream/main
+          test "$(git rev-parse refs/remotes/upstream/main)" = "$base"
+          current_target="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$current_target" = "$EXPECTED_OLD_HEAD"
+
+          git push origin "$product:refs/heads/$TARGET_BRANCH" \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_OLD_HEAD"
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$product"
