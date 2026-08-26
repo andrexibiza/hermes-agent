@@ -1,0 +1,281 @@
+name: TEMP PR 91079 scheduled Windows finalizer
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr91079-scheduled-windows-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      IMPLEMENTATION: db32f7bb0864f5944c6ed9f505d0b979bedc8f2f
+      EXPECTED_OLD_HEAD: ef6cef5d1733d185a972ccee051d5c6bcb35ea86
+      TARGET_BRANCH: fix/windows-desktop-pack-transaction
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.0
+          cache: npm
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Compose one exact live-main product child
+        id: compose
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REPOSITORY -ne 'andrexibiza/hermes-agent') { throw 'wrong repository' }
+
+          git fetch --no-tags https://github.com/NousResearch/hermes-agent.git +refs/heads/main:refs/remotes/upstream/main
+          $base = (git rev-parse refs/remotes/upstream/main).Trim()
+          $targetLine = (git ls-remote origin "refs/heads/$env:TARGET_BRANCH").Trim()
+          if (-not $targetLine) { throw 'target branch missing' }
+          $currentTarget = ($targetLine -split '\s+')[0]
+          if ($currentTarget -ne $env:EXPECTED_OLD_HEAD) { throw "target moved: $currentTarget" }
+
+          git switch --detach $base
+          $paths = @(
+            'apps/desktop/scripts/before-pack-recovery.mjs',
+            'apps/desktop/scripts/before-pack.mjs',
+            'apps/desktop/scripts/before-pack.test.mjs',
+            'apps/desktop/scripts/desktop-builder-runtime.mjs',
+            'apps/desktop/scripts/desktop-pack-recovery-composition.test.mjs',
+            'apps/desktop/scripts/desktop-pack-transaction.mjs',
+            'apps/desktop/scripts/desktop-pack-transaction.test.mjs',
+            'apps/desktop/scripts/run-electron-builder.mjs',
+            'apps/desktop/scripts/stage-native-deps-recovery.mjs',
+            'apps/desktop/scripts/stage-native-deps-recovery.test.mjs',
+            'apps/desktop/vitest.config.ts',
+            'tests/hermes_cli/test_desktop_pack_transaction_windows.py'
+          )
+          git checkout $env:IMPLEMENTATION -- $paths
+
+          @'
+          import json
+          from pathlib import Path
+          p = Path('apps/desktop/package.json')
+          data = json.loads(p.read_text(encoding='utf-8'))
+          scripts = data['scripts']
+          old = 'node scripts/stage-native-deps.mjs'
+          new = 'node scripts/stage-native-deps-recovery.mjs'
+          if old not in scripts['build']:
+              raise SystemExit(f"current-main Desktop build contract changed: {scripts['build']}")
+          scripts['build'] = scripts['build'].replace(old, new, 1)
+          prefix = 'node --test scripts/stage-native-deps-recovery.test.mjs && '
+          if not scripts['check:test:desktop:all'].startswith(prefix):
+              scripts['check:test:desktop:all'] = prefix + scripts['check:test:desktop:all']
+          data['build']['beforePack'] = 'scripts/before-pack-recovery.mjs'
+          p.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+          '@ | python -
+
+          @'
+          from pathlib import Path
+          import textwrap
+          p = Path('hermes_cli/main.py')
+          s = p.read_text(encoding='utf-8')
+          start = 'def _rollback_desktop_from_backup(packaged_executable: Path) -> Optional[Path]:\n'
+          end = '\ndef _ensure_desktop_exe_launchable(\n'
+          if s.count(start) != 1 or s.count(end) != 1:
+              raise SystemExit('desktop rollback composition anchors are not unique')
+          a = s.index(start)
+          b = s.index(end, a)
+          replacement = textwrap.dedent('''\
+          def _rollback_desktop_from_backup(packaged_executable: Path) -> Optional[Path]:
+              """Restore the previous unpacked app without destroying either generation."""
+              unpacked = packaged_executable.parent
+              backup_dir = _desktop_backup_unpacked_dir(packaged_executable)
+              backup_exe = backup_dir / packaged_executable.name
+              if not backup_exe.exists():
+                  return None
+              if _desktop_exe_integrity_error(backup_exe) is not None:
+                  return None
+
+              corrupt_dir = unpacked.parent / (unpacked.name + ".corrupt")
+              marker_path = backup_dir.with_name(backup_dir.name + ".session")
+              if corrupt_dir.exists():
+                  try:
+                      shutil.rmtree(corrupt_dir)
+                  except FileNotFoundError:
+                      pass
+                  except OSError:
+                      return None
+
+              try:
+                  unpacked.rename(corrupt_dir)
+              except OSError:
+                  return None
+
+              try:
+                  backup_dir.rename(unpacked)
+              except OSError:
+                  try:
+                      corrupt_dir.rename(unpacked)
+                  except OSError:
+                      pass
+                  return None
+
+              try:
+                  marker_path.unlink()
+              except OSError:
+                  pass
+              restored = unpacked / packaged_executable.name
+              return restored if restored.exists() else None
+          ''')
+          p.write_text(s[:a] + replacement + s[b:], encoding='utf-8')
+          '@ | python -
+
+          python -m py_compile hermes_cli/main.py
+          foreach ($f in $paths) {
+            if ($f.EndsWith('.mjs')) { node --check $f }
+          }
+          git add apps/desktop/package.json hermes_cli/main.py $paths
+          git diff --cached --check
+          $expected = @(
+            'apps/desktop/package.json',
+            'apps/desktop/scripts/before-pack-recovery.mjs',
+            'apps/desktop/scripts/before-pack.mjs',
+            'apps/desktop/scripts/before-pack.test.mjs',
+            'apps/desktop/scripts/desktop-builder-runtime.mjs',
+            'apps/desktop/scripts/desktop-pack-recovery-composition.test.mjs',
+            'apps/desktop/scripts/desktop-pack-transaction.mjs',
+            'apps/desktop/scripts/desktop-pack-transaction.test.mjs',
+            'apps/desktop/scripts/run-electron-builder.mjs',
+            'apps/desktop/scripts/stage-native-deps-recovery.mjs',
+            'apps/desktop/scripts/stage-native-deps-recovery.test.mjs',
+            'apps/desktop/vitest.config.ts',
+            'hermes_cli/main.py',
+            'tests/hermes_cli/test_desktop_pack_transaction_windows.py'
+          ) | Sort-Object
+          $actual = @(git diff --cached --name-only) | Sort-Object
+          if (Compare-Object $expected $actual) { throw 'final path set is not exactly 14 product/test paths' }
+
+          $source = Get-Content hermes_cli/main.py -Raw
+          $block = ($source -split [regex]::Escape('def _rollback_desktop_from_backup(packaged_executable: Path) -> Optional[Path]:'))[1]
+          $block = ($block -split [regex]::Escape('def _ensure_desktop_exe_launchable('))[0]
+          if ($block.Contains('shutil.rmtree(unpacked')) { throw 'destructive live-tree rollback remains' }
+          foreach ($token in @('unpacked.rename(corrupt_dir)', 'backup_dir.rename(unpacked)', 'corrupt_dir.rename(unpacked)')) {
+            if (-not $block.Contains($token)) { throw "missing rollback token $token" }
+          }
+
+          git config user.name 'Axl Ibiza, MBA'
+          git config user.email 'andrexibiza@gmail.com'
+          $body = @"
+          Rematerialize the reviewed Desktop package transaction as one exact child of live upstream main $base. Preserve current-main package and CLI semantics, retain the previous generation until the Python launchability authority accepts the replacement, and make rollback promotion non-destructive under Windows rename failures.
+
+          Co-authored-by: Andrew Blyth <abmultimedia1@gmail.com>
+          Co-authored-by: Gabriel Laute <gabriel@laute.tech>
+          Co-authored-by: Thomas Medley <me@thomasmedley.dev>
+          Co-authored-by: André Sahakian <60937654+noshado@users.noreply.github.com>
+          "@
+          git commit -s -m 'fix(desktop): make Windows package replacement fully transactional (#91079)' -m $body
+          $candidate = (git rev-parse HEAD).Trim()
+          if ((git rev-parse HEAD^).Trim() -ne $base) { throw 'candidate is not a direct child of live main' }
+          if ([int](git rev-list --count "$base..HEAD") -ne 1) { throw 'candidate is not one commit ahead' }
+          "base=$base" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "candidate=$candidate" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Bind npm-selected Node runtime
+        shell: pwsh
+        run: |
+          npm i -g npm@11.17.0
+          $direct = (node -p "process.execPath").Trim()
+          $selected = (npm exec -- node -p "process.execPath").Trim()
+          if ((Resolve-Path $direct).Path -ne (Resolve-Path $selected).Path) { throw 'npm-selected Node differs' }
+          node --version
+          npm --version
+
+      - name: Install exact dependency graphs
+        shell: pwsh
+        run: |
+          npm ci
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Run focused transaction suite
+        shell: pwsh
+        run: |
+          node --test `
+            apps/desktop/scripts/before-pack.test.mjs `
+            apps/desktop/scripts/desktop-pack-recovery-composition.test.mjs `
+            apps/desktop/scripts/desktop-pack-transaction.test.mjs `
+            apps/desktop/scripts/stage-native-deps-recovery.test.mjs
+          uv run --python 3.11 pytest -q `
+            tests/hermes_cli/test_desktop_exe_integrity.py `
+            tests/hermes_cli/test_desktop_pack_transaction_windows.py
+
+      - name: Build twice and settle through Python launchability authority
+        shell: pwsh
+        run: |
+          npm --prefix apps/desktop run build
+          npm --prefix apps/desktop run builder -- --win --dir --publish never
+          $exe = Join-Path $PWD 'apps/desktop/release/win-unpacked/Hermes.exe'
+          if (-not (Test-Path $exe)) { throw 'first packaged Hermes.exe missing' }
+          $first = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          npm --prefix apps/desktop run builder -- --win --dir --publish never
+          $backup = Join-Path $PWD 'apps/desktop/release/win-unpacked.bak/Hermes.exe'
+          if (-not (Test-Path $exe)) { throw 'rebuilt Hermes.exe missing' }
+          if (-not (Test-Path $backup)) { throw 'rollback package missing' }
+          @'
+          from pathlib import Path
+          from hermes_cli import main as cli_main
+          desktop = Path('apps/desktop').resolve()
+          exe = desktop / 'release' / 'win-unpacked' / 'Hermes.exe'
+          backup = desktop / 'release' / 'win-unpacked.bak' / 'Hermes.exe'
+          verified, rolled_back = cli_main._ensure_desktop_exe_launchable(desktop, exe)
+          assert verified.resolve() == exe.resolve()
+          assert rolled_back is False
+          assert backup.is_file(), 'accepted generation destroyed rollback material'
+          '@ | Set-Content pr91079_gate.py -Encoding utf8
+          uv run --python 3.11 python pr91079_gate.py
+          $manifest = [ordered]@{
+            base = '${{ steps.compose.outputs.base }}'
+            candidate = '${{ steps.compose.outputs.candidate }}'
+            node = (node --version).Trim()
+            npm = (npm --version).Trim()
+            first_sha256 = $first
+            rebuilt_sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            rollback_sha256 = (Get-FileHash $backup -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $manifest | ConvertTo-Json | Set-Content pr91079-windows-witness.json -Encoding utf8
+          Get-Content pr91079-windows-witness.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr91079-windows-${{ steps.compose.outputs.candidate }}
+          path: pr91079-windows-witness.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Re-attest live main and publish exact witnessed candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = '${{ steps.compose.outputs.base }}'
+          $candidate = '${{ steps.compose.outputs.candidate }}'
+          if ((git rev-parse HEAD).Trim() -ne $candidate) { throw 'working head moved' }
+          git fetch --no-tags https://github.com/NousResearch/hermes-agent.git +refs/heads/main:refs/remotes/upstream/main
+          if ((git rev-parse refs/remotes/upstream/main).Trim() -ne $base) { throw 'upstream main moved during Windows witness' }
+          $line = (git ls-remote origin "refs/heads/$env:TARGET_BRANCH").Trim()
+          $currentTarget = ($line -split '\s+')[0]
+          if ($currentTarget -ne $env:EXPECTED_OLD_HEAD) { throw "target moved during witness: $currentTarget" }
+          git push origin "$candidate`:refs/heads/$env:TARGET_BRANCH" --force-with-lease="refs/heads/$env:TARGET_BRANCH`:$env:EXPECTED_OLD_HEAD"
+          $readback = ((git ls-remote origin "refs/heads/$env:TARGET_BRANCH").Trim() -split '\s+')[0]
+          if ($readback -ne $candidate) { throw 'target read-back mismatch' }
