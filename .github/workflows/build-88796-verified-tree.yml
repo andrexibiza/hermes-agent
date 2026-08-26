@@ -29,7 +29,7 @@ jobs:
 
       - name: Pin materializer and reset to exact current main
         env:
-          CURRENT_MAIN: 98e87ac886a0b53e2ff80ac767df5283bf7d17ed
+          CURRENT_MAIN: 86ae906e88b280215067c5f9726f2f8cec6178b3
           MATERIALIZER: .github/workflows/materialize-88796-manager-lifetime.py
         shell: bash
         run: |
@@ -61,7 +61,7 @@ jobs:
 
       - name: Materialize, lint, test, and commit exact product tree
         env:
-          CURRENT_MAIN: 98e87ac886a0b53e2ff80ac767df5283bf7d17ed
+          CURRENT_MAIN: 86ae906e88b280215067c5f9726f2f8cec6178b3
           TRIGGER_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
