@@ -1,4 +1,5 @@
 source_main=f751a8c5467c41500e505d90cb0eb8b70929080f
 materializer=dbdda7ff9943ab442a9620a3e18ae90de5c182b6
 artifact=9589956219
+attempt=2
 purpose=publish the exact eleven-path product payload for NousResearch/hermes-agent#91906
