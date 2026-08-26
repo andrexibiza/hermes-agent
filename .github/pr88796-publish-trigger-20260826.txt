@@ -1,0 +1,6 @@
+One-use trigger for the exact #88796 product publisher installed on fork main.
+
+Expected base: f0187332d13679e2ace74d1f0eb399eb91a90571
+Expected carrier head: d15981663be9f55cd76178174d439a5ad40e652f
+Target: fix/memory-prefetch-cancel
+Final submitted object must contain only agent/memory_manager.py and tests/agent/test_memory_async_sync.py.
