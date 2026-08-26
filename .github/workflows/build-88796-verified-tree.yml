@@ -1,4 +1,4 @@
-name: Build #88796 verified provider-quarantine tree
+name: Build #88796 manager-lifetime provider-quarantine tree
 
 on:
   pull_request:
@@ -45,9 +45,9 @@ jobs:
           --extra anthropic --extra mistral --extra fal --extra modal
           --extra daytona --extra hindsight --extra parallel-web
 
-      - name: Materialize and verify exact product tree
+      - name: Materialize and verify exact manager-lifetime product tree
         env:
-          CURRENT_MAIN: fc7523ca31eeb6eff9114afe384c2cf6380359df
+          CURRENT_MAIN: 98e87ac886a0b53e2ff80ac767df5283bf7d17ed
           BRANCH: fix/memory-prefetch-cancel
           CARRIER: .github/workflows/one-shot-fix-88796.yml
           FORK_REPOSITORY: andrexibiza/hermes-agent
@@ -58,14 +58,13 @@ jobs:
           TRIGGER_HEAD=$(git rev-parse HEAD)
           export CURRENT_MAIN BRANCH TRIGGER_HEAD
 
-          # All carrier and supplemental verification must resolve Python from
-          # the exact `uv sync --locked` environment above. Child scripts use
-          # both `python` and `python3`; make that interpreter authority global
-          # for the complete materialization step rather than patching callers.
+          # Resolve every carrier test through the exact locked environment.
           export PATH="$PWD/.venv/bin:$PATH"
 
-          mkdir -p /tmp/hermes-tools /tmp/hermes-supplements
-          cp .github/workflows/materialize-*.py /tmp/hermes-supplements/ 2>/dev/null || true
+          # The two supplemental materializers deliberately expand quarantine
+          # beyond one MemoryManager lifetime. They are excluded here because
+          # this extraction is bound to #88796's narrower owning-manager law.
+          mkdir -p /tmp/hermes-tools
 
           REAL_GIT=$(command -v git)
           cat > /tmp/hermes-tools/git <<EOF
@@ -120,10 +119,6 @@ jobs:
             bash -n "$script"
             bash "$script"
           done
-          for supplement in /tmp/hermes-supplements/*.py; do
-            [ -e "$supplement" ] || continue
-            python3 "$supplement"
-          done
 
           python3 - <<'PY'
           from pathlib import Path
@@ -152,6 +147,15 @@ jobs:
               entries.append((status, path))
           if not entries:
               raise SystemExit('materialized product diff is empty')
+          expected = {
+              ('M', 'agent/memory_manager.py'),
+              ('M', 'tests/agent/test_memory_async_sync.py'),
+          }
+          if set(entries) != expected:
+              raise SystemExit(
+                  f'manager-lifetime manifest drifted: expected={sorted(expected)} '
+                  f'actual={sorted(entries)}'
+              )
 
           manifest = {
               'base': base,
@@ -182,7 +186,7 @@ jobs:
       - name: Upload exact tested tree
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: pr-88796-verified-tree
+          name: pr-88796-manager-lifetime-verified-tree
           path: |
             /tmp/verified-tree.tar.gz
             /tmp/verified-tree.sha256
