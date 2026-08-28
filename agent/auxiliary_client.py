@@ -5346,6 +5346,147 @@ def _fallback_destination_from_entry(
     return _complete_fallback_destination(provider, base_url, api_mode, model)
 
 
+
+def _rebind_aux_ceiling_for_fallback(
+    destination: "_FallbackDestination",
+    *,
+    api_key: str = "",
+):
+    """Scope the auxiliary effective ceiling to a fallback destination.
+
+    ``call_llm`` / ``async_call_llm`` publish the ceiling for the INITIAL
+    destination once (see ``_call_llm_impl`` / ``_async_call_llm_impl``).  The
+    relay-helper physical gates read that ambient ContextVar.  When the
+    fallback candidates (``_call_fallback_candidate_sync`` /
+    ``_call_fallback_candidate_async``) dispatch to a DIFFERENT provider /
+    model / base_url, they must rebind the ceiling to the fallback's own
+    ``effective = min(raw_capability, profile_ceiling)`` — otherwise the
+    initial destination's stale ceiling is inherited (P1 from review
+    5049973836: a 900K initial ceiling lets a ~200K request through to a 128K
+    fallback model; a 128K initial ceiling falsely refuses a ~300K request on
+    a 900K fallback).
+
+    The ceiling is set via ``set_aux_ceiling`` and reset via the returned
+    token in a ``finally`` — so the prior value (the initial destination's
+    ceiling) is restored after the fallback attempt completes, whether it
+    succeeds, is ceiling-refused, or fails for another reason.  This keeps
+    the initial destination's ceiling available for the NEXT fallback layer
+    in the chain (which is itself a different destination and will rebind
+    again).
+
+    ``api_key`` is threaded into the resolver so the raw capability lookup is
+    credential-aware (the existing ``_candidate_context_window()`` path
+    already carries ``api_key`` for authenticated endpoint probing; the
+    initial resolver in ``_call_llm_impl`` was omitting it).
+
+    Usage (sync)::
+
+        with _rebind_aux_ceiling_for_fallback(destination, api_key=...) as _ce:
+            ...relay call...
+
+    Usage (async)::
+
+        async with _rebind_aux_ceiling_for_fallback_async(destination, api_key=...) as _ce:
+            ...await relay call...
+
+    ``as _ce`` is the ceiling value (or ``None`` if resolution failed) so
+    tests can assert the exact limit used by the gate.
+    """
+    import contextlib
+    from agent.model_metadata import (
+        effective_context_length as _ecl,
+        set_aux_ceiling as _set,
+        reset_aux_ceiling as _reset,
+    )
+    _model = destination.model or ""
+    _base = destination.base_url or ""
+    try:
+        _ceiling = _ecl(
+            model=_model,
+            base_url=_base,
+            api_key=api_key or "",
+            provider=destination.provider or "",
+        )
+    except Exception:
+        _ceiling = None
+    if _ceiling is None:
+        # No ceiling resolvable for this destination — leave the ambient
+        # ceiling as-is (the gate will see the initial's ceiling, which is
+        # the best available).  This preserves the pre-fix behaviour when
+        # the resolver cannot determine a value.
+        return contextlib.nullcontext()
+    _token = _set(_ceiling)
+
+    @contextlib.contextmanager
+    def _scoped():
+        try:
+            yield _ceiling
+        finally:
+            _reset(_token)
+
+    return _scoped()
+
+
+def _rebind_aux_ceiling_for_fallback_async(
+    destination: "_FallbackDestination",
+    *,
+    api_key: str = "",
+):
+    """Async variant of :func:`_rebind_aux_ceiling_for_fallback`.
+
+    Returns an ``asynccontextmanager`` that resolves the destination's ceiling
+    in a background thread (``asyncio.to_thread``) so blocking HTTP probes do
+    not freeze the asyncio event loop, then sets/resets the ContextVar token.
+    Same scoped semantics as the sync variant: the prior value is restored in
+    the ``finally`` after the fallback attempt, whether it succeeds, is
+    ceiling-refused, or fails for another reason.
+
+    Usage::
+
+        async with _rebind_aux_ceiling_for_fallback_async(destination, api_key=...) as _ce:
+            ...await relay call...
+    """
+    import asyncio
+    import contextlib
+    from agent.model_metadata import (
+        effective_context_length as _ecl,
+        set_aux_ceiling as _set,
+        reset_aux_ceiling as _reset,
+    )
+    _model = destination.model or ""
+    _base = destination.base_url or ""
+
+    @contextlib.asynccontextmanager
+    async def _scoped():
+        # Resolve the ceiling off the event loop.  ``_ecl`` is a sync
+        # function; ``asyncio.to_thread`` runs it in a worker thread.
+        try:
+            _ceiling = await asyncio.to_thread(
+                _ecl,
+                model=_model,
+                base_url=_base,
+                api_key=api_key or "",
+                provider=destination.provider or "",
+            )
+        except Exception:
+            _ceiling = None
+        if not (isinstance(_ceiling, int) and not isinstance(_ceiling, bool) and _ceiling > 0):
+            # No ceiling resolvable for this destination — leave the ambient
+            # ceiling as-is (the gate will see the initial's ceiling, which is
+            # the best available).  Preserves the pre-fix behaviour when the
+            # resolver cannot determine a value.
+            yield None
+            return
+        _token = _set(_ceiling)
+        try:
+            yield _ceiling
+        finally:
+            _reset(_token)
+
+    return _scoped()
+
+
+
 def _fallback_destination(
     task: Optional[str],
     fb_client: Any,
@@ -5468,24 +5609,26 @@ def _call_fallback_candidate_sync(
         fb_kwargs.update(
             auxiliary_max_tokens_param(fallback_max_tokens, model=destination.model)
         )
+    _fb_api_key = _fallback_entry_api_key(fallback_entry) or ""
     try:
-        return _validate_llm_response(
-            _relay_sync_completion(
-                fb_client,
-                fb_kwargs,
-                provider=destination.provider,
-                api_mode=destination.api_mode,
-                create=lambda request: _create_with_progress(
+        with _rebind_aux_ceiling_for_fallback(destination, api_key=_fb_api_key):
+            return _validate_llm_response(
+                _relay_sync_completion(
                     fb_client,
-                    request,
-                    task,
-                    force_stream=_provider_requires_stream(
-                        destination.provider, destination.base_url
+                    fb_kwargs,
+                    provider=destination.provider,
+                    api_mode=destination.api_mode,
+                    create=lambda request: _create_with_progress(
+                        fb_client,
+                        request,
+                        task,
+                        force_stream=_provider_requires_stream(
+                            destination.provider, destination.base_url
+                        ),
                     ),
                 ),
-            ),
-            task,
-        )
+                task,
+            )
     except Exception as fb_err:
         if not _is_auth_error(fb_err):
             raise
@@ -5539,24 +5682,27 @@ def _call_fallback_candidate_sync(
                         )
                     )
                 try:
-                    return _validate_llm_response(
-                        _relay_sync_completion(
-                            retry_client,
-                            retry_kwargs,
-                            provider=retry_destination.provider,
-                            api_mode=retry_destination.api_mode,
-                            create=lambda request: _create_with_progress(
+                    with _rebind_aux_ceiling_for_fallback(
+                        retry_destination, api_key=_fb_api_key
+                    ):
+                        return _validate_llm_response(
+                            _relay_sync_completion(
                                 retry_client,
-                                request,
-                                task,
-                                force_stream=_provider_requires_stream(
-                                    retry_destination.provider,
-                                    retry_destination.base_url,
+                                retry_kwargs,
+                                provider=retry_destination.provider,
+                                api_mode=retry_destination.api_mode,
+                                create=lambda request: _create_with_progress(
+                                    retry_client,
+                                    request,
+                                    task,
+                                    force_stream=_provider_requires_stream(
+                                        retry_destination.provider,
+                                        retry_destination.base_url,
+                                    ),
                                 ),
                             ),
-                        ),
-                        task,
-                    )
+                            task,
+                        )
                 except Exception as retry_err:
                     if not _is_auth_error(retry_err):
                         raise
@@ -5608,16 +5754,26 @@ async def _call_fallback_candidate_async(
         tools=fallback_tools, timeout=effective_timeout,
         extra_body=effective_extra_body, reasoning_config=reasoning_config,
         base_url=destination.base_url, task=task)
+    # The async mirror does not retain the configured-chain entry (the sync
+    # path does) — resolve the credential from the same helper the sync path
+    # uses, via the task/label chain entry lookup.  Best-effort: when no
+    # configured entry exists the key resolves to "" and the resolver falls
+    # back to the endpoint's own credentials.
+    _fb_entry = _fallback_chain_entry(task, fb_label) or {}
+    _fb_api_key = _fallback_entry_api_key(_fb_entry) or ""
     try:
-        return _validate_llm_response(
-            await _relay_async_completion(
-                fb_client,
-                fb_kwargs,
-                provider=destination.provider,
-                api_mode=destination.api_mode,
-            ),
-            task,
-        )
+        async with _rebind_aux_ceiling_for_fallback_async(
+            destination, api_key=_fb_api_key
+        ):
+            return _validate_llm_response(
+                await _relay_async_completion(
+                    fb_client,
+                    fb_kwargs,
+                    provider=destination.provider,
+                    api_mode=destination.api_mode,
+                ),
+                task,
+            )
     except Exception as fb_err:
         if not _is_auth_error(fb_err):
             raise
@@ -5655,15 +5811,18 @@ async def _call_fallback_candidate_async(
                     reasoning_config=reasoning_config,
                     base_url=retry_destination.base_url, task=task)
                 try:
-                    return _validate_llm_response(
-                        await _relay_async_completion(
-                            retry_client,
-                            retry_kwargs,
-                            provider=retry_destination.provider,
-                            api_mode=retry_destination.api_mode,
-                        ),
-                        task,
-                    )
+                    async with _rebind_aux_ceiling_for_fallback_async(
+                        retry_destination, api_key=_fb_api_key
+                    ):
+                        return _validate_llm_response(
+                            await _relay_async_completion(
+                                retry_client,
+                                retry_kwargs,
+                                provider=retry_destination.provider,
+                                api_mode=retry_destination.api_mode,
+                            ),
+                            task,
+                        )
                 except Exception as retry_err:
                     if not _is_auth_error(retry_err):
                         raise
