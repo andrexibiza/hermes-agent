@@ -1,0 +1,37 @@
+name: Export exact Hermes source snapshot
+
+on:
+  push:
+    branches:
+      - tooling/export-godfile-20260828
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out export branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Archive exact upstream base
+        run: |
+          git cat-file -e 3340bbbdad8368e7f3d9f6827d61692adbbd87d6^{commit}
+          git archive \
+            --format=tar.gz \
+            --output=hermes-agent-3340bbbdad8368e7f3d9f6827d61692adbbd87d6.tar.gz \
+            3340bbbdad8368e7f3d9f6827d61692adbbd87d6
+          sha256sum hermes-agent-3340bbbdad8368e7f3d9f6827d61692adbbd87d6.tar.gz > source.sha256
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-agent-source-3340bbbdad
+          path: |
+            hermes-agent-3340bbbdad8368e7f3d9f6827d61692adbbd87d6.tar.gz
+            source.sha256
+          retention-days: 1
+          if-no-files-found: error
