@@ -1,0 +1,101 @@
+name: Build unified slash commands PR 1
+
+on:
+  push:
+    branches:
+      - commands/pr1-stable-identity
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout carrier commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Build and verify clean PR stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee /tmp/pr1-build.log) 2>&1
+          set -x
+
+          BASE_SHA=79ef9f89d3afca243f0c9a983389db92cf683a44
+          BUILDER=/tmp/pr1_build.py
+          gzip -dc "$GITHUB_WORKSPACE/.github/pr1_build.py.gz" > "$BUILDER"
+          WORKTREE=/tmp/hermes-pr1
+
+          rm -rf "$WORKTREE"
+          git worktree add --detach "$WORKTREE" "$BASE_SHA"
+          cd "$WORKTREE"
+          git config user.name "Axl Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra dev
+
+          python "$BUILDER" extract "$WORKTREE"
+          git add hermes_cli/commands.py hermes_cli/command_completion.py
+          git diff --cached --check
+          uv run ruff check hermes_cli/commands.py hermes_cli/command_completion.py
+          uv run pytest tests/hermes_cli/test_commands.py -q
+          git commit --no-gpg-sign \
+            -m "refactor(commands): extract completion presentation" \
+            -m "Move prompt-toolkit completion and inline suggestion behavior into a bounded presentation module while preserving the current registry owner and compatibility exports." \
+            -m "Refs NousResearch/hermes-agent#96692"
+
+          python "$BUILDER" schema "$WORKTREE"
+          git add \
+            hermes_cli/commands.py \
+            docs/architecture/command-plane/pr1-schema.json \
+            tests/conformance/test_command_plane_characterization.py \
+            tests/hermes_cli/test_command_schema.py
+          git diff --cached --check
+          python -m json.tool docs/architecture/command-plane/pr1-schema.json >/dev/null
+          uv run ruff check \
+            hermes_cli/commands.py \
+            hermes_cli/command_completion.py \
+            tests/conformance/test_command_plane_characterization.py \
+            tests/hermes_cli/test_command_schema.py
+          uv run pytest \
+            tests/hermes_cli/test_commands.py \
+            tests/hermes_cli/test_command_schema.py \
+            tests/conformance/test_command_plane_characterization.py \
+            -q
+          git commit --no-gpg-sign \
+            -m "feat(commands): add stable core command identities" \
+            -m "Pin explicit semantic IDs on the current core owner, reject duplicate IDs/names/aliases before lookup construction, and expose the minimum JSON-safe versioned metadata slice without claiming later catalog, policy, binding, invocation, or result contracts." \
+            -m "Part of NousResearch/hermes-agent#96692"
+
+          git diff --check "$BASE_SHA..HEAD"
+          test "$(wc -l < hermes_cli/commands.py)" -lt 2000
+          test "$(wc -l < hermes_cli/command_completion.py)" -lt 2000
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" -eq 2
+          test "$(git log --format='%an <%ae>' "$BASE_SHA..HEAD" | sort -u)" = \
+            "Axl Ibiza, MBA <andrexibiza@gmail.com>"
+          test "$(git log --format='%cn <%ce>' "$BASE_SHA..HEAD" | sort -u)" = \
+            "Axl Ibiza, MBA <andrexibiza@gmail.com>"
+
+          git log --oneline --decorate "$BASE_SHA..HEAD"
+          git diff --stat "$BASE_SHA..HEAD"
+          git status --short
+          git push origin HEAD:refs/heads/commands/pr1-stable-identity --force
+
+      - name: Preserve build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr1-build-evidence
+          path: /tmp/pr1-build.log
+          if-no-files-found: error
+          retention-days: 7
