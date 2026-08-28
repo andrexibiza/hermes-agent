@@ -1,0 +1,74 @@
+name: Export kanban godfile worktree
+
+on:
+  push:
+    branches:
+      - refactor/kill-kanban-live-20260828
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build exact-source archive and inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz --output=hermes-agent-source.tar.gz HEAD
+          python - <<'PY'
+          import ast
+          import hashlib
+          import json
+          from pathlib import Path
+
+          path = Path("hermes_cli/kanban_db.py")
+          source = path.read_text(encoding="utf-8")
+          tree = ast.parse(source)
+          items = []
+          for node in tree.body:
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                  items.append(
+                      {
+                          "kind": type(node).__name__,
+                          "name": node.name,
+                          "start": node.lineno,
+                          "end": node.end_lineno,
+                          "decorators": [ast.unparse(item) for item in node.decorator_list],
+                      }
+                  )
+          report = {
+              "commit": __import__("subprocess").check_output(
+                  ["git", "rev-parse", "HEAD"], text=True
+              ).strip(),
+              "path": str(path),
+              "line_count": len(source.splitlines()),
+              "sha256": hashlib.sha256(source.encode()).hexdigest(),
+              "top_level_items": items,
+          }
+          Path("kanban-inventory.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+          git status --short > export-status.txt
+          git rev-parse HEAD > export-head.txt
+          sha256sum hermes_cli/kanban_db.py hermes-agent-source.tar.gz > export-sha256.txt
+
+      - name: Upload exact worktree
+        uses: actions/upload-artifact@v4
+        with:
+          name: kill-kanban-worktree
+          path: |
+            hermes-agent-source.tar.gz
+            kanban-inventory.json
+            export-status.txt
+            export-head.txt
+            export-sha256.txt
+          if-no-files-found: error
+          retention-days: 1
