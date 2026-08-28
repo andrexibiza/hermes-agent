@@ -1,0 +1,128 @@
+name: PR 92905 auxiliary ceiling shard
+
+on:
+  push:
+    branches:
+      - fix/92905-shard-aux-context-ceiling
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-92905-auxiliary-ceiling-shard
+  cancel-in-progress: false
+
+jobs:
+  shard-and-certify:
+    name: Shard and certify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR head mirror
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: fix/92905-shard-aux-context-ceiling
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        uses: ./.github/actions/retry
+        with:
+          command: uv python install 3.11
+
+      - name: Install locked test dependencies
+        uses: ./.github/actions/retry
+        with:
+          command: uv sync --locked --python 3.11 --extra dev
+
+      - name: Extract auxiliary context-ceiling owner
+        run: uv run python scripts/axl_shard_92905.py
+
+      - name: Remove one-shot delivery machinery
+        run: |
+          git rm .github/workflows/axl-shard-92905.yml
+          git rm scripts/axl_shard_92905.py
+
+      - name: Format extracted files
+        run: |
+          uv run ruff check --fix \
+            agent/auxiliary_context_ceiling.py \
+            tests/agent/test_auxiliary_context_ceiling_shard.py
+          uv run ruff format \
+            agent/auxiliary_context_ceiling.py \
+            tests/agent/test_auxiliary_context_ceiling_shard.py
+
+      - name: Run blocking repository lint
+        run: uv run ruff check .
+
+      - name: Run context-ceiling regression suite
+        run: |
+          uv run pytest -q \
+            tests/agent/test_auxiliary_context_ceiling_shard.py \
+            tests/agent/test_context_ceiling_round5_aux_ownership.py \
+            tests/agent/test_context_ceiling_round5_fallback_rebind.py \
+            tests/agent/test_context_ceiling_round5_streaming.py \
+            tests/agent/test_context_ceiling_round4_topo.py \
+            tests/agent/test_context_ceiling_round3.py \
+            tests/agent/test_context_ceiling_remediation.py \
+            tests/agent/test_context_ceiling_checkpoints.py \
+            tests/agent/test_max_context_length.py \
+            tests/agent/test_output_reservation_coherence.py
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+      - name: Compile and import exact result
+        run: |
+          uv run python -m compileall -q \
+            agent/auxiliary_context_ceiling.py \
+            agent/auxiliary_client.py \
+            tests/agent/test_auxiliary_context_ceiling_shard.py
+          uv run python - <<'PY'
+          from agent import auxiliary_client
+          from agent import auxiliary_context_ceiling
+
+          assert auxiliary_client._aux_relay_gate is auxiliary_context_ceiling._aux_relay_gate
+          assert auxiliary_client.ContextCeilingExceeded is auxiliary_context_ceiling.ContextCeilingExceeded
+          print("auxiliary ceiling shard import contract: ok")
+          PY
+
+      - name: Verify exact diff and whitespace
+        env:
+          BASE_SHA: 852febc65580859d0675ee5fd51b5dc3c57632bb
+        run: |
+          git diff --check
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA" | sort)
+          expected=(
+            agent/auxiliary_client.py
+            agent/auxiliary_context_ceiling.py
+            tests/agent/test_auxiliary_context_ceiling_shard.py
+          )
+          printf 'changed: %s\n' "${changed[@]}"
+          diff -u <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${changed[@]}")
+
+      - name: Publish one certified commit
+        env:
+          BASE_SHA: 852febc65580859d0675ee5fd51b5dc3c57632bb
+          BRANCH: fix/92905-shard-aux-context-ceiling
+        run: |
+          git add -A
+          git diff --cached --check
+          git reset --soft "$BASE_SHA"
+          git config user.name "Axl Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+          git commit \
+            --author="Axl Ibiza, MBA <andrexibiza@gmail.com>" \
+            -m "refactor(aux): extract context ceiling dispatch policy" \
+            -m "Move auxiliary invocation publication, final provider-boundary enforcement, and per-fallback ceiling rebinding out of agent/auxiliary_client.py into a bounded policy owner. Preserve the existing agent.auxiliary_client import and monkeypatch seams through compatibility wiring."
+          test "$(git diff-tree --no-commit-id --name-only -r HEAD | wc -l)" -eq 3
+          git push --force-with-lease origin "HEAD:$BRANCH"
