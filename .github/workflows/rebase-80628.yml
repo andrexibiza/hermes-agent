@@ -1,0 +1,205 @@
+name: One-shot rebase PR 80628
+
+on:
+  push:
+    branches:
+      - ops/rebase-80628-*
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-rebase-80628
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TARGET_BRANCH: gfg/cc-lb2-skill-prune-2
+      ORIGINAL_HEAD: 98f08756fdff97e525b6b42b51d5e256f1a6cc5b
+      ORIGINAL_TEXT_COMMIT: 2b7a1b9780706fe78a007c596e71093cee61592b
+      ORIGINAL_SKILL_COMMIT: 98f08756fdff97e525b6b42b51d5e256f1a6cc5b
+    steps:
+      - name: Check out one-shot branch with full history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Preserve rebase helper and validate source head
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/rebase_80628.py /tmp/rebase_80628.py
+          chmod +x /tmp/rebase_80628.py
+          python -m py_compile /tmp/rebase_80628.py
+          git cat-file -e "${ORIGINAL_HEAD}^{commit}"
+          git cat-file -e "${ORIGINAL_TEXT_COMMIT}^{commit}"
+          remote_head="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test "$remote_head" = "$ORIGINAL_HEAD"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Re-materialize both commits on current upstream main
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch upstream main --prune
+          BASE_SHA="$(git rev-parse upstream/main)"
+          echo "base_sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
+
+          git switch --detach "$BASE_SHA"
+          git switch -C rebase-80628-work
+          git config user.name "Axl Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra dev
+
+          python /tmp/rebase_80628.py text-utils \
+            --original-commit "$ORIGINAL_TEXT_COMMIT"
+
+          git add \
+            agent/context_compressor.py \
+            agent/context_compressor_text_utils.py \
+            tests/agent/test_context_compressor_text_utils_seam.py
+          mapfile -t changed < <(git diff --cached --name-only)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 3
+          printf '%s\n' "${changed[@]}" | sort -u > /tmp/changed-1
+          printf '%s\n' \
+            agent/context_compressor.py \
+            agent/context_compressor_text_utils.py \
+            tests/agent/test_context_compressor_text_utils_seam.py \
+            | sort -u > /tmp/expected-1
+          diff -u /tmp/expected-1 /tmp/changed-1
+
+          git diff --cached --check
+          GIT_AUTHOR_DATE="$(git show -s --format=%aI "$ORIGINAL_TEXT_COMMIT")" \
+            git commit --no-gpg-sign \
+              --author="$(git show -s --format='%an <%ae>' "$ORIGINAL_TEXT_COMMIT")" \
+              -F <(git show -s --format=%B "$ORIGINAL_TEXT_COMMIT")
+          FIRST_SHA="$(git rev-parse HEAD)"
+          echo "first_sha=${FIRST_SHA}" >> "$GITHUB_OUTPUT"
+
+          uv run ruff check \
+            agent/context_compressor.py \
+            agent/context_compressor_text_utils.py \
+            tests/agent/test_context_compressor_text_utils_seam.py
+          git diff --check HEAD^
+          source .venv/bin/activate
+          scripts/run_tests.sh \
+            tests/agent/test_context_compressor_text_utils_seam.py \
+            tests/agent/test_context_compressor.py \
+            tests/agent/test_compaction_redaction_boundaries.py \
+            tests/agent/test_ghost_skill_pruning.py \
+            tests/agent/test_context_compressor_zero_user_provenance.py \
+            -q
+
+          python /tmp/rebase_80628.py skill-prune \
+            --original-commit "$ORIGINAL_SKILL_COMMIT"
+
+          git add \
+            agent/context_compressor.py \
+            agent/context_compressor_skill_prune.py \
+            tests/agent/test_context_compressor_skill_prune_seam.py
+          mapfile -t changed < <(git diff --cached --name-only)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 3
+          printf '%s\n' "${changed[@]}" | sort -u > /tmp/changed-2
+          printf '%s\n' \
+            agent/context_compressor.py \
+            agent/context_compressor_skill_prune.py \
+            tests/agent/test_context_compressor_skill_prune_seam.py \
+            | sort -u > /tmp/expected-2
+          diff -u /tmp/expected-2 /tmp/changed-2
+
+          git diff --cached --check
+          GIT_AUTHOR_DATE="$(git show -s --format=%aI "$ORIGINAL_SKILL_COMMIT")" \
+            git commit --no-gpg-sign \
+              --author="$(git show -s --format='%an <%ae>' "$ORIGINAL_SKILL_COMMIT")" \
+              -F <(git show -s --format=%B "$ORIGINAL_SKILL_COMMIT")
+          FINAL_SHA="$(git rev-parse HEAD)"
+          echo "final_sha=${FINAL_SHA}" >> "$GITHUB_OUTPUT"
+
+          uv run ruff check \
+            agent/context_compressor.py \
+            agent/context_compressor_text_utils.py \
+            agent/context_compressor_skill_prune.py \
+            tests/agent/test_context_compressor_text_utils_seam.py \
+            tests/agent/test_context_compressor_skill_prune_seam.py
+          git diff --check HEAD^
+          source .venv/bin/activate
+          scripts/run_tests.sh \
+            tests/agent/test_context_compressor_text_utils_seam.py \
+            tests/agent/test_context_compressor_skill_prune_seam.py \
+            tests/agent/test_context_compressor.py \
+            tests/agent/test_compaction_redaction_boundaries.py \
+            tests/agent/test_ghost_skill_pruning.py \
+            tests/agent/test_context_compressor_zero_user_provenance.py \
+            -q
+
+          test "$(git rev-parse "${FIRST_SHA}^")" = "$BASE_SHA"
+          test "$(git rev-parse "${FINAL_SHA}^")" = "$FIRST_SHA"
+          mapfile -t final_changed < <(git diff --name-only "$BASE_SHA" "$FINAL_SHA")
+          printf '%s\n' "${final_changed[@]}" | sort -u > /tmp/final-changed
+          printf '%s\n' \
+            agent/context_compressor.py \
+            agent/context_compressor_skill_prune.py \
+            agent/context_compressor_text_utils.py \
+            tests/agent/test_context_compressor_skill_prune_seam.py \
+            tests/agent/test_context_compressor_text_utils_seam.py \
+            | sort -u > /tmp/final-expected
+          diff -u /tmp/final-expected /tmp/final-changed
+          test -z "$(git status --porcelain)"
+          ! git ls-tree -r --name-only "$FINAL_SHA" | grep -qE '^\.github/(rebase_80628\.py|workflows/rebase-80628\.yml)$'
+
+          # Do not publish against a main that moved during reconstruction.
+          git fetch upstream main --prune
+          test "$(git rev-parse upstream/main)" = "$BASE_SHA"
+
+      - name: Force-with-lease the rebased stack to the PR branch
+        shell: bash
+        env:
+          FINAL_SHA: ${{ steps.build.outputs.final_sha }}
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test "$remote_head" = "$ORIGINAL_HEAD"
+          git push \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${ORIGINAL_HEAD}" \
+            origin "${FINAL_SHA}:refs/heads/${TARGET_BRANCH}"
+          test "$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')" = "$FINAL_SHA"
+
+      - name: Record exact objects
+        if: success()
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.build.outputs.base_sha }}
+          FIRST_SHA: ${{ steps.build.outputs.first_sha }}
+          FINAL_SHA: ${{ steps.build.outputs.final_sha }}
+        run: |
+          {
+            echo "## PR #80628 rebase objects"
+            echo "- base: \`${BASE_SHA}\`"
+            echo "- commit 1: \`${FIRST_SHA}\`"
+            echo "- commit 2 / head: \`${FINAL_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete one-shot branch
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          git push origin --delete "$GITHUB_REF_NAME"
