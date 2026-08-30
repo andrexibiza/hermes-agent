@@ -11,7 +11,7 @@ from pathlib import Path
 import subprocess
 
 _RUN_ID = "32293970161"
-_CARRIER_SHA = "061bcf3a3cb68e33f73168f8d533b7e369dda5d0"
+_CARRIER_SHA = "061bc7540b3c372b62c66e17d620c46aee0c1030"
 _SENTINEL = Path("/tmp/pr98776-materializer-started")
 
 
@@ -50,8 +50,6 @@ def _should_run() -> bool:
 
 
 if _should_run():
-    # Set before spawning any child Python process so sitecustomize cannot
-    # recursively invoke the carrier.
     _SENTINEL.write_text("started\n", encoding="utf-8")
     subprocess.run(
         [
