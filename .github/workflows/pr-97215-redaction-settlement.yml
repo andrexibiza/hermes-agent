@@ -1,0 +1,341 @@
+name: Settle PR 97215 redaction boundary
+
+on:
+  push:
+    branches:
+      - automation/pr-97215-redaction-settlement-20260830
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-97215-redaction-settlement
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TARGET_BRANCH: security/redaction-file-boundary
+      EXPECTED_HEAD: 8fae61503233fb9cc2239408fe5a20fb49124a0a
+      AUTHOR_NAME: "Axl Ibiza, MBA"
+      AUTHOR_EMAIL: andrexibiza@gmail.com
+    steps:
+      - name: Checkout builder branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Restack target branch on exact upstream main
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags origin "$TARGET_BRANCH"
+          git fetch --no-tags upstream main
+
+          remote_head="$(git rev-parse "origin/$TARGET_BRANCH")"
+          if [ "$remote_head" != "$EXPECTED_HEAD" ]; then
+            echo "Target branch moved: expected $EXPECTED_HEAD, found $remote_head" >&2
+            exit 1
+          fi
+
+          git config user.name "$AUTHOR_NAME"
+          git config user.email "$AUTHOR_EMAIL"
+          export GIT_COMMITTER_NAME="$AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$AUTHOR_EMAIL"
+
+          git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
+          git rebase upstream/main
+
+          echo "UPSTREAM_SHA=$(git rev-parse upstream/main)" >> "$GITHUB_ENV"
+          echo "REBASED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Add adversarial regression tests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/agent/test_redact.py")
+          text = path.read_text(encoding="utf-8")
+          marker = "def test_code_file_placeholder_substrings_do_not_bypass_strong_keys"
+          if marker in text:
+              raise SystemExit("PR 97215 settlement tests already present")
+          if not text.rstrip().endswith("assert json_secret not in result"):
+              raise SystemExit("test_redact.py tail anchor drifted")
+
+          addition = r'''
+              def test_code_file_placeholder_substrings_do_not_bypass_strong_keys(self):
+                  for value in (
+                      "contestwinner123456789",
+                      "unexampledproductiontoken123456789",
+                      "dummyproofcredential123456789",
+                      "fixtureservicecredential123456789",
+                      "placeholderservicecredential123456789",
+                  ):
+                      result = redact_sensitive_text(
+                          f"SERVICE_API_KEY={value}", force=True, code_file=True
+                      )
+                      assert value not in result
+
+              def test_code_file_preserves_explicit_placeholder_literals(self):
+                  for value in (
+                      "test",
+                      "example_token",
+                      "dummy-secret",
+                      "fixture_api_key",
+                      "placeholder_value_here",
+                  ):
+                      result = redact_sensitive_text(
+                          f'{{"apiKey": "{value}"}}', force=True, code_file=True
+                      )
+                      assert result == f'{{"apiKey": "{value}"}}'
+
+              def test_yaml_single_quoted_doubled_quote_is_fully_redacted(self):
+                  # YAML doubles apostrophes inside single-quoted scalars. PR #53741
+                  # captured this grammar; the broader forced-boundary parser must
+                  # consume the doubled quote instead of leaking the suffix.
+                  secret = "abc''defsecretvalue123456789"
+                  content = f"password: '{secret}'"
+
+                  result = redact_sensitive_text(content, force=True, file_read=True)
+
+                  assert secret not in result
+                  assert "defsecretvalue123456789" not in result
+                  assert result == "password: '«redacted-secret»'"
+
+              def test_yaml_unterminated_quote_is_line_bounded_and_fails_closed(self):
+                  secret = "unterminated secret value 123456789"
+                  content = f'password: "{secret}\r\nhost: example.com'
+
+                  result = redact_sensitive_text(content, force=True, file_read=True)
+
+                  assert secret not in result
+                  assert result == "password: «redacted-secret»\r\nhost: example.com"
+
+              def test_yaml_double_quote_escape_does_not_cross_crlf(self):
+                  content = 'password: "abc' + "\\" + "\r\nhost: example.com"
+
+                  result = redact_sensitive_text(content, force=True, file_read=True)
+
+                  assert result == "password: «redacted-secret»\r\nhost: example.com"
+          '''
+
+          path.write_text(
+              text.rstrip() + "\n\n" + addition.strip("\n") + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install exact test environment
+        run: |
+          uv sync --locked --python 3.11 \
+            --extra all \
+            --extra dev \
+            --extra anthropic \
+            --extra mistral \
+            --extra fal \
+            --extra modal \
+            --extra daytona \
+            --extra hindsight \
+            --extra parallel-web
+
+      - name: Prove new regressions fail before the fix
+        run: |
+          set +e
+          .venv/bin/python -m pytest -q \
+            tests/agent/test_redact.py::TestForcedFileContentRedaction::test_code_file_placeholder_substrings_do_not_bypass_strong_keys \
+            tests/agent/test_redact.py::TestForcedFileContentRedaction::test_yaml_single_quoted_doubled_quote_is_fully_redacted \
+            tests/agent/test_redact.py::TestForcedFileContentRedaction::test_yaml_unterminated_quote_is_line_bounded_and_fails_closed \
+            tests/agent/test_redact.py::TestForcedFileContentRedaction::test_yaml_double_quote_escape_does_not_cross_crlf \
+            2>&1 | tee /tmp/pr97215-red.log
+          status="${PIPESTATUS[0]}"
+          set -e
+
+          test "$status" -eq 1
+          grep -q "test_code_file_placeholder_substrings_do_not_bypass_strong_keys" /tmp/pr97215-red.log
+          grep -q "test_yaml_single_quoted_doubled_quote_is_fully_redacted" /tmp/pr97215-red.log
+          grep -q "test_yaml_unterminated_quote_is_line_bounded_and_fails_closed" /tmp/pr97215-red.log
+          grep -q "test_yaml_double_quote_escape_does_not_cross_crlf" /tmp/pr97215-red.log
+
+      - name: Close placeholder and YAML parser bypasses
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("agent/redact.py")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label} anchor count is {count}, expected 1")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''_SOURCE_PLACEHOLDER_RE = re.compile(
+              r"(?:placeholder|example|dummy|fixture|test)",
+              re.IGNORECASE,
+          )''',
+              '''_SOURCE_PLACEHOLDER_RE = re.compile(
+              r"(?:placeholder|example|dummy|fixture|test)"
+              r"(?:[_-](?:value|secret|token|api[_-]?key|key|credential|password|here|\\d+))*",
+              re.IGNORECASE,
+          )''',
+              "source placeholder grammar",
+          )
+          replace_once(
+              '''    if _SOURCE_PLACEHOLDER_RE.search(normalized_value) and len(value) < 80:
+                  return False''',
+              '''    if len(value) < 80 and _SOURCE_PLACEHOLDER_RE.fullmatch(normalized_value):
+                  return False''',
+              "source placeholder decision",
+          )
+          replace_once(
+              '''# is masked by _AUTH_HEADER_RE); ``auth_token``/``auth-token`` still match via
+          # the ``token`` keyword. Quoted values defer to _JSON_FIELD_RE via the lookahead.''',
+              '''# is masked by _AUTH_HEADER_RE); ``auth_token``/``auth-token`` still match via
+          # the ``token`` keyword. Bare-key quoted values are matched separately because
+          # _JSON_FIELD_RE requires a quoted key. Double-quoted escapes, YAML doubled
+          # single quotes, and unterminated scalars are bounded to one line and fail closed.''',
+              "YAML grammar comment",
+          )
+          replace_once(
+              '''_YAML_QUOTED_ASSIGN_RE = re.compile(
+              rf"(^[ \\t]*+[A-Za-z0-9_.\\-]*{_YAML_CFG_NAMES}[A-Za-z0-9_.\\-]*+)(:[ \\t]*+)"
+              r"(['\\\"])((?:\\\\.|(?!\\3)[^\\r\\n])*)\\3",
+              re.IGNORECASE | re.MULTILINE,
+          )''',
+              '''_YAML_QUOTED_ASSIGN_RE = re.compile(
+              rf"(^[ \\t]*+[A-Za-z0-9_.\\-]*{_YAML_CFG_NAMES}[A-Za-z0-9_.\\-]*+)(:[ \\t]*+)(?:"
+              r'"((?:\\\\[^\\r\\n]|[^"\\\\\\r\\n])*)"'
+              r"|'((?:''|[^'\\r\\n])*)'"
+              r"|([\\\"'])([^\\r\\n]*)"
+              r")",
+              re.IGNORECASE | re.MULTILINE,
+          )''',
+              "quoted YAML grammar",
+          )
+          replace_once(
+              '''        # Unquoted YAML / colon config: password: ***  (after JSON so quoted
+                  # values are handled there; the lookahead in _YAML_ASSIGN_RE skips
+                  # quotes). Skip URLs — web-URL query params pass through by design.''',
+              '''        # YAML / colon config: password: *** / password: "***". Bare-key
+                  # quoted values are handled here because the JSON rule requires quoted
+                  # keys. Skip URLs — web-URL query params pass through by design.''',
+              "quoted YAML call-site comment",
+          )
+          replace_once(
+              '''            def _redact_yaml_quoted(m):
+                          key, sep, quote, value = m.groups()
+                          if _ENV_LOOKUP_VALUE_RE.match(value) or not _key_has_secret_keyword(key):
+                              return m.group(0)
+                          return f"{key}{sep}{quote}{_mask_structured_value(value, key)}{quote}"''',
+              '''            def _redact_yaml_quoted(m):
+                          key, sep = m.group(1), m.group(2)
+                          if m.group(3) is not None:
+                              quote, value = '"', m.group(3)
+                          elif m.group(4) is not None:
+                              quote, value = "'", m.group(4)
+                          else:
+                              quote, value = "", m.group(6)
+                          if _ENV_LOOKUP_VALUE_RE.match(value) or not _key_has_secret_keyword(key):
+                              return m.group(0)
+                          masked = _mask_structured_value(value, key)
+                          if quote:
+                              return f"{key}{sep}{quote}{masked}{quote}"
+                          return f"{key}{sep}{masked}"''',
+              "quoted YAML redactor",
+          )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Run affected test and lint gates
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m pytest -q \
+            tests/agent/test_redact.py \
+            tests/tools/test_file_tools.py \
+            tests/tools/test_terminal_output_transform_hook.py::test_terminal_output_transform_still_runs_strip_and_redact
+          .venv/bin/ruff check \
+            agent/redact.py \
+            tests/agent/test_redact.py \
+            tests/tools/test_file_tools.py
+          .venv/bin/python -m py_compile \
+            agent/redact.py \
+            tests/agent/test_redact.py \
+            tests/tools/test_file_tools.py
+          git diff --check
+
+      - name: Publish one exact current-main commit
+        run: |
+          set -euo pipefail
+
+          expected_files=$'agent/redact.py\ntests/agent/test_redact.py\ntests/tools/test_file_tools.py'
+          actual_files="$(git diff --name-only "$UPSTREAM_SHA" | sort)"
+          if [ "$actual_files" != "$expected_files" ]; then
+            echo "Unexpected file list:" >&2
+            printf '%s\n' "$actual_files" >&2
+            exit 1
+          fi
+
+          git reset --soft "$UPSTREAM_SHA"
+
+          export GIT_AUTHOR_NAME="$AUTHOR_NAME"
+          export GIT_AUTHOR_EMAIL="$AUTHOR_EMAIL"
+          export GIT_COMMITTER_NAME="$AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$AUTHOR_EMAIL"
+
+          git commit \
+            -m "fix(agent): harden forced file-content redaction" \
+            -m "Force agent-visible file content through structured secret redaction while preserving source-shaped literals and canonical non-reusable markers." \
+            -m "Close two parser bypasses: placeholder exemptions now require a complete fixture-shaped value, and YAML quoted scalars consume doubled single quotes while failing closed at line-bounded unterminated quotes." \
+            -m "Supersedes the stale quoted-YAML implementation in NousResearch/hermes-agent#53741 while retaining its escape and CRLF boundary cases."
+
+          published_sha="$(git rev-parse HEAD)"
+          identity="$(git show -s --format='%an <%ae>|%cn <%ce>' HEAD)"
+          expected_identity="$AUTHOR_NAME <$AUTHOR_EMAIL>|$AUTHOR_NAME <$AUTHOR_EMAIL>"
+
+          test "$(git rev-parse HEAD^)" = "$UPSTREAM_SHA"
+          test "$(git rev-list --count "$UPSTREAM_SHA"..HEAD)" -eq 1
+          test "$identity" = "$expected_identity"
+          test "$(git diff --name-only "$UPSTREAM_SHA"..HEAD | sort)" = "$expected_files"
+          git diff --check "$UPSTREAM_SHA"..HEAD
+
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_HEAD" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
+
+          echo "PUBLISHED_SHA=$published_sha" >> "$GITHUB_ENV"
+
+      - name: Exact publication receipt
+        run: |
+          {
+            echo "### PR 97215 redaction settlement published"
+            echo
+            echo "- upstream base: \`$UPSTREAM_SHA\`"
+            echo "- prior PR head: \`$EXPECTED_HEAD\`"
+            echo "- rebased pre-squash head: \`$REBASED_SHA\`"
+            echo "- published head: \`$PUBLISHED_SHA\`"
+            echo "- commit identity: \`$AUTHOR_NAME <$AUTHOR_EMAIL>\`"
+            echo "- focused tests, ruff, py_compile, and diff check: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary builder branch
+        if: success()
+        run: |
+          git push origin --delete "$GITHUB_REF_NAME" || true
