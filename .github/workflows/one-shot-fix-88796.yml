@@ -1,109 +1,220 @@
-name: One-shot process-sticky memory-provider quarantine carrier
+name: One-shot exact PR 98776 repair carrier
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   repair:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - name: Checkout exact branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: fix/memory-prefetch-cancel
-          fetch-depth: 0
-
-      - name: Execute reviewed base carrier with current-main structural anchors
+      - name: Materialize, verify, and publish the exact PR product
+        shell: bash
         run: |
           set -euo pipefail
-          original_carrier_commit=96e61712cbe19bfe6d258bb83647e574a7d03346
-          carrier_path=.github/workflows/one-shot-fix-88796.yml
 
-          git fetch --no-tags origin "$original_carrier_commit"
-          git show "$original_carrier_commit:$carrier_path" > /tmp/original-88796-carrier.yml
+          SOURCE_BASE=4f22543509d1b91dc45bcb369447126c5eb14fb7
+          SOURCE_HEAD=372c4e2c6620a7718d1497a313598e26a3fcfa55
+          EXPECTED_OLD=a3be0281b4899d1c3cc925788d30ec4b6a0fec27
+          PRODUCT_BRANCH=security/auth-store-corruption
+
+          product_paths=(
+            agent/credential_pool.py
+            hermes_cli/auth.py
+            hermes_cli/auth_commands.py
+            hermes_cli/auth_store.py
+            hermes_cli/subcommands/auth.py
+            tests/agent/test_credential_pool_oauth_writethrough.py
+            tests/hermes_cli/test_auth_commands.py
+            tests/hermes_cli/test_auth_store_r3_cand_018.py
+            tests/hermes_cli/test_auth_store_r3_cand_018_adversarial.py
+            tests/hermes_cli/test_auth_store_read_failure.py
+            tests/hermes_cli/test_auth_store_windows_encoding.py
+          )
+
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/NousResearch/hermes-agent.git
+
+          git fetch --no-tags origin "refs/heads/${PRODUCT_BRANCH}"
+          LIVE_OLD=$(git rev-parse FETCH_HEAD)
+          test "$LIVE_OLD" = "$EXPECTED_OLD"
+          git cat-file -e "${SOURCE_BASE}^{commit}"
+          git cat-file -e "${SOURCE_HEAD}^{commit}"
+
+          git fetch --no-tags upstream refs/heads/main
+          CURRENT_MAIN=$(git rev-parse FETCH_HEAD)
+          test -n "$CURRENT_MAIN"
+          echo "current_main=$CURRENT_MAIN"
+          echo "source_head=$SOURCE_HEAD"
+          echo "replacing_head=$LIVE_OLD"
+
+          git checkout -B "$PRODUCT_BRANCH" "$CURRENT_MAIN"
+          git diff --binary "$SOURCE_BASE" "$SOURCE_HEAD" -- "${product_paths[@]}" > /tmp/pr98776-product.patch
+          test -s /tmp/pr98776-product.patch
+          git apply --3way /tmp/pr98776-product.patch
 
           python3 - <<'PY'
           from pathlib import Path
 
-          source = Path('/tmp/original-88796-carrier.yml').read_text(encoding='utf-8')
-          lines = source.splitlines()
-          starts = [i for i, line in enumerate(lines) if line.strip() == 'run: |']
-          if len(starts) != 1:
-              raise SystemExit(f'expected one run block, found {len(starts)}')
-          start = starts[0]
-          key_indent = len(lines[start]) - len(lines[start].lstrip())
-          prefix = ' ' * (key_indent + 2)
-          end = len(lines)
-          for index in range(start + 1, len(lines)):
-              line = lines[index]
-              stripped = line.lstrip()
-              indent = len(line) - len(stripped)
-              if indent == 6 and stripped.startswith('- '):
-                  end = index
-                  break
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
 
-          # The historical carrier embeds generated Python inside triple-quoted
-          # literals. Some literal payload lines intentionally begin with 10+
-          # spaces, so blindly stripping the YAML run-block prefix from every
-          # such line corrupts the generated program. Dedent only executable
-          # carrier lines; preserve literal payload indentation byte-for-byte.
-          body = []
-          in_triple_single = False
-          for line in lines[start + 1:end]:
-              normalized = line
-              if not in_triple_single and line.startswith(prefix):
-                  normalized = line[len(prefix):]
-              body.append(normalized)
-              if normalized.count("'''") % 2:
-                  in_triple_single = not in_triple_single
-          if in_triple_single:
-              raise SystemExit('unterminated triple-quoted carrier literal')
+          path = Path("hermes_cli/auth_store.py")
+          text = path.read_text(encoding="utf-8")
 
-          while body and not body[-1].strip():
-              body.pop()
-
-          opens = [i for i, line in enumerate(body) if line.strip() == "python3 - <<'PY'"]
-          if len(opens) != 1:
-              raise SystemExit(f'expected one Python materializer heredoc, found {len(opens)}')
-          open_index = opens[0]
-          closes = [
-              i
-              for i in range(open_index + 1, len(body))
-              if body[i].strip() == 'PY'
-          ]
-          if len(closes) != 1:
-              raise SystemExit(f'expected one Python materializer close, found {len(closes)}')
-          close_index = closes[0]
-
-          materializer = '\n'.join(body[open_index + 1:close_index]) + '\n'
-          Path('/tmp/materialize-88796-base.sh').write_text(materializer, encoding='utf-8')
-
-          executable = (
-              body[:open_index]
-              + ['python3 /tmp/materialize-88796-base.sh']
-              + body[close_index + 1:]
+          text = replace_once(
+              text,
+              "_ORIGINAL_PATH_READ_TEXT = Path.read_text\n",
+              "_ORIGINAL_PATH_READ_TEXT = Path.read_text\n_ORIGINAL_OS_REPLACE = os.replace\n",
+              "capture original os.replace",
           )
-          Path('/tmp/execute-88796-base.sh').write_text(
-              '\n'.join(executable) + '\n', encoding='utf-8'
+
+          text = replace_once(
+              text,
+              '''    try:\n        os.fchmod(parent_fd, 0o700)\n    except OSError:\n        pass\n\n\ndef _path_key(path: Path) -> str:\n''',
+              '''    try:\n        os.fchmod(parent_fd, 0o700)\n    except OSError:\n        pass\n\n\ndef _posix_replace_relative(source: Path, destination: Path, parent_fd: int) -> None:\n    """Replace two entries through a retained parent, preserving test seams."""\n    try:\n        os.replace(\n            source.name,\n            destination.name,\n            src_dir_fd=parent_fd,\n            dst_dir_fd=parent_fd,\n        )\n    except TypeError as exc:\n        # Existing durability tests replace ``os.replace`` with a two-argument\n        # failure injector. Keep that public seam without weakening production:\n        # the original function and kwargs-aware wrappers always use dirfds.\n        if (\n            os.replace is _ORIGINAL_OS_REPLACE\n            or "unexpected keyword argument" not in str(exc)\n        ):\n            raise\n        os.replace(os.fspath(source), os.fspath(destination))\n\n\ndef _path_key(path: Path) -> str:\n''',
+              "insert POSIX relative replace seam",
           )
+
+          text = replace_once(
+              text,
+              '''    return {\n        "version": AUTH_STORE_VERSION,\n        "providers": providers,\n        "active_provider": "nous" if providers else None,\n    }\n\n\ndef _validate_recovery_store(auth_store: Any) -> None:\n''',
+              '''    return {\n        "version": AUTH_STORE_VERSION,\n        "providers": providers,\n        "active_provider": "nous" if providers else None,\n    }\n\n\n_LEGACY_CANONICAL_KEYS = frozenset(\n    {\n        "providers",\n        "credential_pool",\n        "active_provider",\n        "updated_at",\n        "metadata",\n        "suppressed_sources",\n    }\n)\n\n\ndef _migrate_unversioned_legacy_store(raw: Any) -> Optional[Dict[str, Any]]:\n    """Normalize the pre-version canonical store without relaxing v1."""\n    if (\n        not isinstance(raw, dict)\n        or "version" in raw\n        or "systems" in raw\n        or (raw and not any(key in raw for key in _LEGACY_CANONICAL_KEYS))\n    ):\n        return None\n\n    migrated = dict(raw)\n    suppressed = migrated.get("suppressed_sources")\n    if suppressed is not None:\n        if not isinstance(suppressed, dict):\n            raise ValueError("Auth store suppressed_sources must be an object")\n        normalized: Dict[str, list[str]] = {}\n        for provider_id, sources in suppressed.items():\n            if not isinstance(provider_id, str):\n                raise ValueError("Auth store suppressed_sources keys must be strings")\n            if isinstance(sources, dict):\n                normalized[provider_id] = [str(name) for name in sources]\n            elif isinstance(sources, list):\n                normalized[provider_id] = list(sources)\n            else:\n                raise ValueError("Auth store suppressed_sources values must be arrays of strings")\n        migrated["suppressed_sources"] = normalized\n\n    if "providers" not in migrated and "credential_pool" not in migrated:\n        migrated["providers"] = {}\n    migrated["version"] = AUTH_STORE_VERSION\n    _validate_auth_store_schema(migrated, require_section=True)\n    return migrated\n\n\ndef _validate_recovery_store(auth_store: Any) -> None:\n''',
+              "insert unversioned legacy migration",
+          )
+
+          text = replace_once(
+              text,
+              '''            return isinstance(systems, dict) and all(\n                isinstance(key, str) and isinstance(value, dict)\n                for key, value in systems.items()\n            )\n        _validate_auth_store_schema(raw, require_section=True)\n''',
+              '''            return isinstance(systems, dict) and all(\n                isinstance(key, str) and isinstance(value, dict)\n                for key, value in systems.items()\n            )\n        migrated = _migrate_unversioned_legacy_store(raw)\n        if migrated is not None:\n            raw = migrated\n        _validate_auth_store_schema(raw, require_section=True)\n''',
+              "recognize healthy unversioned legacy bytes",
+          )
+
+          text = replace_once(
+              text,
+              '''        os.replace(\n            tmp_path.name,\n            auth_file.name,\n            src_dir_fd=parent_fd,\n            dst_dir_fd=parent_fd,\n        )\n''',
+              '''        _posix_replace_relative(tmp_path, auth_file, parent_fd)\n''',
+              "replace existing POSIX store",
+          )
+          text = replace_once(
+              text,
+              '''                os.replace(\n                    tmp_path.name,\n                    auth_file.name,\n                    src_dir_fd=parent_fd,\n                    dst_dir_fd=parent_fd,\n                )\n''',
+              '''                _posix_replace_relative(tmp_path, auth_file, parent_fd)\n''',
+              "publish fresh POSIX store",
+          )
+          text = replace_once(
+              text,
+              '''            os.replace(\n                tmp_path.name,\n                auth_file.name,\n                src_dir_fd=parent_fd,\n                dst_dir_fd=parent_fd,\n            )\n''',
+              '''            _posix_replace_relative(tmp_path, auth_file, parent_fd)\n''',
+              "publish unchecked POSIX store",
+          )
+
+          text = replace_once(
+              text,
+              '''        else:\n            try:\n                # ``allow_legacy_empty`` is retained for source compatibility\n                # with pool readers, but it is not a schema bypass. Legacy\n                # suppression mappings are normalized only on an otherwise\n                # complete current document; an existing object without a\n                # persistence section remains corruption.\n                if (\n                    allow_legacy_empty\n                    and isinstance(raw, dict)\n                    and ("providers" in raw or "credential_pool" in raw)\n                ):\n                    suppressed = raw.get("suppressed_sources")\n                    if isinstance(suppressed, dict):\n                        for provider_id, sources in list(suppressed.items()):\n                            if isinstance(sources, dict):\n                                suppressed[provider_id] = [str(name) for name in sources]\n                _validate_auth_store_schema(raw, require_section=True)\n            except ValueError as exc:\n                _raise_preserved_corruption(auth_file, raw_bytes, exc)\n''',
+              '''        else:\n            try:\n                migrated = _migrate_unversioned_legacy_store(raw)\n                if migrated is not None:\n                    raw = migrated\n                elif (\n                    allow_legacy_empty\n                    and isinstance(raw, dict)\n                    and ("providers" in raw or "credential_pool" in raw)\n                ):\n                    # Versioned stores retain the historical suppression-map\n                    # compatibility only for explicitly scoped pool readers.\n                    suppressed = raw.get("suppressed_sources")\n                    if isinstance(suppressed, dict):\n                        for provider_id, sources in list(suppressed.items()):\n                            if isinstance(sources, dict):\n                                suppressed[provider_id] = [str(name) for name in sources]\n                _validate_auth_store_schema(raw, require_section=True)\n            except ValueError as exc:\n                _raise_preserved_corruption(auth_file, raw_bytes, exc)\n''',
+              "load unversioned legacy stores",
+          )
+
+          text = replace_once(
+              text,
+              '''    _validate_recovery_store(auth_store) if recovery else _validate_auth_store_schema(auth_store)\n    expected_digest = recovery_expected_digest if recovery else _snapshot_for(auth_store, auth_file)\n''',
+              '''    if recovery:\n        _validate_recovery_store(auth_store)\n    else:\n        migrated_input = _migrate_unversioned_legacy_store(auth_store)\n        if migrated_input is not None:\n            auth_store.clear()\n            auth_store.update(migrated_input)\n        _validate_auth_store_schema(auth_store)\n    expected_digest = recovery_expected_digest if recovery else _snapshot_for(auth_store, auth_file)\n''',
+              "migrate ordinary save input",
+          )
+
+          text = replace_once(
+              text,
+              '''            migrated_store = _migrate_legacy_systems_store(current_store)\n            if migrated_store is not None:\n                current_store = migrated_store\n''',
+              '''            migrated_store = _migrate_legacy_systems_store(current_store)\n            if migrated_store is None:\n                migrated_store = _migrate_unversioned_legacy_store(current_store)\n            if migrated_store is not None:\n                current_store = migrated_store\n''',
+              "validate existing unversioned legacy store",
+          )
+
+          text = replace_once(
+              text,
+              '''            if parent_fd is not None:\n                current_bytes = _posix_relative_read(parent_fd, auth_file.name)\n            elif auth_file.exists():\n''',
+              '''            if parent_fd is not None:\n                try:\n                    current_bytes = _posix_relative_read(parent_fd, auth_file.name)\n                except FileNotFoundError:\n                    current_bytes = b""\n            elif auth_file.exists():\n''',
+              "preserve fresh-store empty snapshot",
+          )
+
+          path.write_text(text, encoding="utf-8")
+
+          auth_path = Path("hermes_cli/auth.py")
+          auth_text = auth_path.read_text(encoding="utf-8")
+          auth_text = replace_once(
+              auth_text,
+              '''    "tencent-tokenhub": ProviderConfig(\n        id="tencent-tokenhub",\n        name="Tencent TokenHub",\n        auth_type="api_key",\n        inference_base_url="https://tokenhub.tencentmaas.com/v1",\n        api_key_env_vars=("TOKENHUB_API_KEY",),\n        base_url_env_var="TOKENHUB_BASE_URL",\n    ),\n    "ollama-cloud": ProviderConfig(\n''',
+              '''    "tencent-tokenhub": ProviderConfig(\n        id="tencent-tokenhub",\n        name="Tencent TokenHub",\n        auth_type="api_key",\n        inference_base_url="https://tokenhub.tencentmaas.com/v1",\n        api_key_env_vars=("TOKENHUB_API_KEY",),\n        base_url_env_var="TOKENHUB_BASE_URL",\n    ),\n    "tencent-tokenplan": ProviderConfig(\n        id="tencent-tokenplan",\n        name="Tencent TokenPlan",\n        auth_type="api_key",\n        inference_base_url="https://api.lkeap.cloud.tencent.com/plan/anthropic",\n        api_key_env_vars=("TOKENPLAN_API_KEY",),\n        base_url_env_var="TOKENPLAN_BASE_URL",\n    ),\n    "ollama-cloud": ProviderConfig(\n''',
+              "register TokenPlan credential metadata",
+          )
+          auth_path.write_text(auth_text, encoding="utf-8")
           PY
 
-          python3 .github/workflows/patch-88796-carrier-idempotence.py
-          python3 -m py_compile /tmp/materialize-88796-base.sh
-          bash -n /tmp/execute-88796-base.sh
-          # The verified-tree workflow installs the locked test environment into
-          # .venv but does not activate it. The historical carrier deliberately
-          # invokes `python -m pytest`; when a locked venv exists, resolve that
-          # interpreter first instead of silently falling back to /usr/bin/python.
-          if [ -x .venv/bin/python ]; then
-            export PATH="$PWD/.venv/bin:$PATH"
-          fi
-          if ! bash /tmp/execute-88796-base.sh; then
-            echo '--- generated memory_manager.py syntax context ---'
-            nl -ba agent/memory_manager.py | sed -n '400,470p'
+          expected_paths=$(printf '%s\n' "${product_paths[@]}" | sort)
+          actual_paths=$(git diff --name-only "$CURRENT_MAIN" | sort)
+          if [[ "$actual_paths" != "$expected_paths" ]]; then
+            echo "unexpected product manifest" >&2
+            echo "expected:" >&2
+            printf '%s\n' "$expected_paths" >&2
+            echo "actual:" >&2
+            printf '%s\n' "$actual_paths" >&2
             exit 1
           fi
+          test ! -e .github/workflows/_repair_pr_98776.yml
+          test ! -e artifacts/remediation/r3-cand-018/repair-final.json
+          test ! -e artifacts/remediation/r3-cand-018/review-final-105ad211-correctness.md
+          test ! -e artifacts/remediation/r3-cand-018/review-final-correctness.md
+          test ! -e artifacts/remediation/r3-cand-018/review-final-d26a219a-correctness.md
+          test ! -e artifacts/remediation/r3-cand-018/review-repair1-correctness.md
+          test ! -e artifacts/remediation/r3-cand-018/review-repair2-correctness.md
+
+          git diff --check
+          python3 -m compileall -q hermes_cli/auth_store.py hermes_cli/auth.py
+
+          python3 -m pip install --disable-pip-version-check uv
+          uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+          source .venv/bin/activate
+
+          uv run ruff check "${product_paths[@]}"
+          python -m pytest -q \
+            tests/hermes_cli/test_auth_store_r3_cand_018.py \
+            tests/hermes_cli/test_auth_store_r3_cand_018_adversarial.py \
+            tests/hermes_cli/test_auth_store_read_failure.py \
+            tests/hermes_cli/test_auth_store_windows_encoding.py \
+            tests/hermes_cli/test_auth_commands.py \
+            tests/agent/test_credential_pool_oauth_writethrough.py \
+            tests/agent/test_anthropic_credential_persist_failure.py \
+            tests/hermes_cli/test_provider_catalog.py \
+            tests/hermes_cli/test_provider_parity.py
+          python scripts/check-windows-footguns.py --diff "$CURRENT_MAIN"
+          HERMES_TEST_WORKERS=8 scripts/run_tests.sh
+
+          git config user.name "Axl Ibiza, MBA"
+          git config user.email "andrexibiza@gmail.com"
+          git add -- "${product_paths[@]}"
+          git commit \
+            -m "fix(security): preserve corrupt auth stores with explicit recovery" \
+            -m "Preserve corrupt bytes, require reviewed CAS-bound recovery, retain legacy-store compatibility, keep POSIX publication descriptor-bound, and expose complete provider credential metadata." \
+            -m "Signed-off-by: Axl Ibiza, MBA <andrexibiza@gmail.com>"
+
+          PRODUCT_HEAD=$(git rev-parse HEAD)
+          test "$(git rev-list --count "$CURRENT_MAIN"..HEAD)" = 1
+          test "$(git show -s --format=%an HEAD)" = "Axl Ibiza, MBA"
+          test "$(git show -s --format=%ae HEAD)" = "andrexibiza@gmail.com"
+          test "$(git show -s --format=%cn HEAD)" = "Axl Ibiza, MBA"
+          test "$(git show -s --format=%ce HEAD)" = "andrexibiza@gmail.com"
+          git show -s --format=%B HEAD | grep -Fx "Signed-off-by: Axl Ibiza, MBA <andrexibiza@gmail.com>"
+
+          git push origin "HEAD:refs/heads/${PRODUCT_BRANCH}" \
+            --force-with-lease="refs/heads/${PRODUCT_BRANCH}:${EXPECTED_OLD}"
+
+          echo "published_head=$PRODUCT_HEAD"
+          echo "published_base=$CURRENT_MAIN"
+          echo "published_manifest:"
+          git diff --name-status "$CURRENT_MAIN" HEAD
