@@ -1,0 +1,154 @@
+name: Repair PR 90888 publication provenance
+
+on:
+  push:
+    branches:
+      - automation/repair-90888-provenance-20260830
+
+permissions:
+  contents: write
+
+jobs:
+  rematerialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_BRANCH: fix/mcp-oauth-lifecycle-current-main
+      TRIGGER_BRANCH: automation/repair-90888-provenance-20260830
+      OUTPUT_BRANCH: automation/repair-90888-provenance-output
+      OLD_HEAD: fc6ce3de23cfbed719c408dfe1468a9a65d5d66f
+      OLD_BASE: 4209d371aa1bb8840ce8447555bdd863a1a96c38
+      SOURCE_HEAD: 8c346209d45bd8b971105936036ab4319e5242fa
+      EXPECTED_OLD_TREE: 8186172b73ce47025b1cd7cdb415d7b1c81afc66
+      AUTHOR_NAME: Axl Ibiza, MBA
+      AUTHOR_EMAIL: andrexibiza@gmail.com
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Build one current-main provenance-correct commit
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          readonly upstream_url="https://github.com/NousResearch/hermes-agent.git"
+          readonly workdir="${RUNNER_TEMP}/repair-90888"
+          readonly -a paths=(
+            "contributors/emails/igorhvr@iasylum.net"
+            "tests/tools/test_mcp_oauth_lifecycle_owner.py"
+            "tools/mcp_oauth_manager.py"
+          )
+
+          rm -rf "${workdir}"
+          git init "${workdir}"
+          cd "${workdir}"
+          git remote add origin "${repo_url}"
+          git remote add upstream "${upstream_url}"
+
+          git fetch --filter=blob:none --no-tags --depth=1 upstream \
+            refs/heads/main:refs/remotes/upstream/main
+          git fetch --filter=blob:none --no-tags --depth=2 origin \
+            "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/target"
+
+          readonly base="$(git rev-parse refs/remotes/upstream/main)"
+          readonly observed_old_head="$(git rev-parse refs/remotes/origin/target)"
+          test "${observed_old_head}" = "${OLD_HEAD}"
+          test "$(git rev-parse "${OLD_HEAD}^{tree}")" = "${EXPECTED_OLD_TREE}"
+          test "$(git rev-parse "${OLD_HEAD}^")" = "${OLD_BASE}"
+
+          # Fail closed if current main changed any path owned by this lifecycle child.
+          test "$(git rev-parse "${base}:tools/mcp_oauth_manager.py")" = \
+            "$(git rev-parse "${OLD_BASE}:tools/mcp_oauth_manager.py")"
+          for path in \
+            contributors/emails/igorhvr@iasylum.net \
+            tests/tools/test_mcp_oauth_lifecycle_owner.py
+          do
+            if git cat-file -e "${base}:${path}" 2>/dev/null; then
+              echo "Current main now owns ${path}; refusing silent composition." >&2
+              exit 1
+            fi
+          done
+
+          git sparse-checkout init --no-cone
+          printf '%s\n' \
+            '/contributors/emails/igorhvr@iasylum.net' \
+            '/tests/tools/test_mcp_oauth_lifecycle_owner.py' \
+            '/tools/mcp_oauth_manager.py' \
+            > .git/info/sparse-checkout
+          git checkout -b authored "${base}"
+
+          git diff --binary "${OLD_BASE}" "${OLD_HEAD}" -- "${paths[@]}" \
+            > "${RUNNER_TEMP}/repair-90888.patch"
+          test -s "${RUNNER_TEMP}/repair-90888.patch"
+          git apply --index "${RUNNER_TEMP}/repair-90888.patch"
+
+          readonly expected_paths="$(printf '%s\n' "${paths[@]}" | sort)"
+          readonly actual_paths="$(git diff --cached --name-only | sort)"
+          test "${actual_paths}" = "${expected_paths}"
+
+          for path in "${paths[@]}"; do
+            test "$(git rev-parse ":${path}")" = "$(git rev-parse "${OLD_HEAD}:${path}")"
+          done
+
+          readonly tree="$(git write-tree)"
+          cat > "${RUNNER_TEMP}/repair-90888-message" <<EOF
+          fix(mcp-oauth): compose lifecycle teardown with semaphore ownership
+
+          Rematerialize the credited #84963 lifecycle remainder on current upstream main as one submitted commit. It composes same-task delegated-generator closure with the merged #97458 semaphore owner, closes exactly once across natural completion, explicit outer close, cancellation, and the pre-existing retry exit, and preserves the primary flow error when cleanup also fails.
+
+          Current-main: ${base}
+          Source-head: ${SOURCE_HEAD}
+          Publication-predecessor: ${OLD_HEAD}
+          Composition-tree: ${tree}
+          Original-authority: #84963
+          Complement-owner: #97458 owns request serialization and stale-auth retry
+
+          Co-authored-by: THArrowofApollo <igorhvr@iasylum.net>
+          Signed-off-by: Axl Ibiza, MBA <andrexibiza@gmail.com>
+          EOF
+          sed -i 's/^          //' "${RUNNER_TEMP}/repair-90888-message"
+
+          GIT_AUTHOR_NAME="${AUTHOR_NAME}" \
+          GIT_AUTHOR_EMAIL="${AUTHOR_EMAIL}" \
+          GIT_COMMITTER_NAME="${AUTHOR_NAME}" \
+          GIT_COMMITTER_EMAIL="${AUTHOR_EMAIL}" \
+            git commit --cleanup=verbatim -F "${RUNNER_TEMP}/repair-90888-message"
+
+          readonly new_head="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "${base}"
+          test "$(git rev-parse HEAD^{tree})" = "${tree}"
+          test "$(git rev-list --count "${base}"..HEAD)" = "1"
+          test "$(git show -s --format=%an HEAD)" = "${AUTHOR_NAME}"
+          test "$(git show -s --format=%ae HEAD)" = "${AUTHOR_EMAIL}"
+          test "$(git show -s --format=%cn HEAD)" = "${AUTHOR_NAME}"
+          test "$(git show -s --format=%ce HEAD)" = "${AUTHOR_EMAIL}"
+          test "$(git diff --name-only "${base}"..HEAD | sort)" = "${expected_paths}"
+          git diff --check "${base}"..HEAD
+          python -m py_compile \
+            tools/mcp_oauth_manager.py \
+            tests/tools/test_mcp_oauth_lifecycle_owner.py
+
+          git push --force origin "HEAD:refs/heads/${OUTPUT_BRANCH}"
+          printf 'new_head=%s\nbase=%s\ntree=%s\n' \
+            "${new_head}" "${base}" "${tree}" | tee "${RUNNER_TEMP}/repair-90888-result"
+          echo "new_head=${new_head}" >> "${GITHUB_OUTPUT}"
+
+      - name: Remove temporary branches after PR head publication
+        if: ${{ steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          readonly expected="${{ steps.build.outputs.new_head }}"
+
+          for _ in $(seq 1 180); do
+            observed="$(git ls-remote "${repo_url}" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+            if [ "${observed}" = "${expected}" ]; then
+              git push "${repo_url}" --delete "${OUTPUT_BRANCH}" "${TRIGGER_BRANCH}"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Target branch did not publish ${expected}; temporary branches retained for diagnosis." >&2
+          exit 1
