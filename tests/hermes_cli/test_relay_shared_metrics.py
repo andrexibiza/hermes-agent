@@ -148,18 +148,18 @@ def _legacy_dimensions() -> dict[str, str]:
 class _ConcurrentStore(SharedMetricsStore):
     """Exercise transaction integrity without the foreground telemetry time budget."""
 
-    def _connection(self, *, busy_timeout_ms=30_000):
+    def _connection(self, *, busy_timeout_ms=5_000):
         return super()._connection(busy_timeout_ms=busy_timeout_ms)
 
-    def _write(self, *, busy_timeout_ms=30_000):
+    def _write(self, *, busy_timeout_ms=5_000):
         return super()._write(busy_timeout_ms=busy_timeout_ms)
 
 
 def _run_owned_processes(processes):
     """Bound the complete startup/write protocol and always reap our children."""
     started = []
-    # Includes the 30s startup barrier and 30s SQLite contention budget; use
-    # one deadline for the whole group, not an additional budget per child.
+    # Ten writes x 5s, plus the 30s barrier and 5s schema budget, fit within
+    # this shared deadline with headroom. Do not add a budget per child.
     deadline = time.monotonic() + 120
     try:
         for process in processes:
