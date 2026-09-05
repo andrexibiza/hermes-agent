@@ -7,9 +7,10 @@
     "runtime-policy.ps1",
     "host-prerequisites.ps1",
     "repository.ps1",
-    "python-environment.ps1"
+    "python-environment.ps1",
+    "installation-registration.ps1"
   ],
   "kill_track": {
-    "install.ps1": 2559
+    "install.ps1": 2264
   }
 }
