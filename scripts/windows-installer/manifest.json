@@ -2,9 +2,10 @@
   "version": 1,
   "entry": "install.ps1",
   "files": [
-    "install.ps1"
+    "install.ps1",
+    "browser-ensure.ps1"
   ],
   "kill_track": {
-    "install.ps1": 5082
+    "install.ps1": 5007
   }
 }
