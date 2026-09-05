@@ -18,7 +18,9 @@ if ($parseErrors.Count -gt 0) { throw 'Installer parse failed' }
 
 $functionNames = @(
     'Install-Venv',
+    'Get-VenvTransactionDirectory',
     'Get-PendingVenvBackup',
+    'Write-PendingVenvBackup',
     'Restore-VenvBackup',
     'Complete-VenvTransaction'
 )
@@ -170,7 +172,7 @@ try {
     Write-Host ''
     Write-Host '-- interruption before the original rename --'
     $script:InstallDir = New-TestCase -Name 'before-rename' -SeedLiveVenv
-    $orphanMarkerName = 'venv.stale.pre-rename'
+    $orphanMarkerName = 'venv.stale.20260905120000-11111111111111111111111111111111'
     Set-Content -LiteralPath (Join-Path $script:InstallDir 'venv.pending-backup') -Value $orphanMarkerName -Encoding ascii
     Install-Venv
     Restore-VenvBackup
@@ -193,7 +195,7 @@ try {
     Write-Host ''
     Write-Host '-- interruption after the original rename --'
     $script:InstallDir = New-TestCase -Name 'after-rename'
-    $parkedOriginal = 'venv.stale.after-rename'
+    $parkedOriginal = 'venv.stale.20260905120001-22222222222222222222222222222222'
     $parkedPath = Join-Path $script:InstallDir $parkedOriginal
     [IO.Directory]::CreateDirectory($parkedPath) | Out-Null
     [IO.File]::WriteAllText((Join-Path $parkedPath 'generation.txt'), 'ORIGINAL_WORKING_ENV')
@@ -202,9 +204,7 @@ try {
     Restore-VenvBackup
     Assert-Equal 'ORIGINAL_WORKING_ENV' (Read-LiveGeneration) 'a retry after rename-before-create restores the original generation'
 } finally {
-    if (Test-Path -LiteralPath $testRoot) {
-        Microsoft.PowerShell.Management\Remove-Item -LiteralPath $testRoot -Recurse -Force
-    }
+    Write-Host "Fixture evidence retained at $testRoot"
 }
 
 if ($script:Failures -gt 0) {
