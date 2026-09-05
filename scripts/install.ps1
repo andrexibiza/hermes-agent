@@ -2956,7 +2956,13 @@ function Install-Dependencies {
     Push-Location $InstallDir
 
     try {
-    if (-not $NoVenv) { [void](Get-PendingVenvBackup) }
+    if (-not $NoVenv -and -not (Get-PendingVenvBackup)) {
+        # The bootstrap retries this exact stage after a no-frame host exit.
+        # Rollback may already have restored the original and cleared its marker;
+        # never let that retry install packages into the only working generation.
+        # Direct dependency-stage invocations need the same recovery boundary.
+        Install-Venv
+    }
 
     if (-not $NoVenv) {
         # Tell uv to install into our venv (no activation needed)

@@ -94,7 +94,9 @@ def _stage(install: Path, stage: str, mode: str = "ok", *, no_venv: bool = False
             continue
         if isinstance(value, dict) and value.get("stage") == stage:
             frames.append(value)
-    if completed.returncode not in (91, 92, 93, 94):
+    if completed.returncode in (-1, 4294967295):
+        assert not frames, "bootstrap retryable process death must have no terminal frame"
+    elif completed.returncode not in (91, 92, 93):
         assert len(frames) == 1, output
         assert frames[0]["ok"] == (completed.returncode == 0), output
     native_log = root / "native-events.txt"
@@ -200,7 +202,7 @@ def test_marker_publication_failure_never_loses_original(install: Path):
 def test_crash_after_restore_preserves_original_and_reconciles_marker(install: Path):
     assert _stage(install, "venv")[0] == 0
     backup = install / _pending(install)
-    assert _stage(install, "dependencies", "crash-after-restore")[0] == 94
+    assert _stage(install, "dependencies", "crash-after-restore")[0] in (-1, 4294967295)
     assert _generation(install / "venv") == ORIGINAL
     assert not backup.exists()
     assert (install / "venv.pending-backup").exists()
@@ -413,3 +415,32 @@ def test_non_ascii_marker_encoding_is_rejected_before_provisioning(install: Path
     assert marker.read_bytes() == contents
     assert _generation(install / "venv") == ORIGINAL
     assert not (install.parent.parent / "native-events.txt").exists()
+
+
+@pytest.mark.parametrize("mode", ["deps-fail", "crash-after-restore", "crash-after-rollback-clear"])
+def test_dependency_only_retry_protects_restored_original(install: Path, mode: str):
+    assert _stage(install, "venv")[0] == 0
+    code, output = _stage(install, "dependencies", mode)
+    assert code != 0, output
+    assert _generation(install / "venv") == ORIGINAL
+    # The native bootstrap retries this same stage on no-frame exit -1. Do not
+    # run venv here: retry must establish recovery before uv mutates its target.
+    code, output = _stage(install, "dependencies", "deps-fail")
+    assert code != 0, output
+    assert _generation(install / "venv") == ORIGINAL
+    assert not (install / "venv.pending-backup").exists()
+    code, output = _stage(install, "dependencies")
+    assert code == 0, output
+    assert _generation(install / "venv") == VALIDATED
+    assert not (install / "venv.pending-backup").exists()
+
+
+@pytest.mark.parametrize("mode", ["ok", "deps-fail"])
+def test_direct_dependencies_establishes_recovery_before_mutation(install: Path, mode: str):
+    code, output = _stage(install, "dependencies", mode)
+    assert (code == 0) == (mode == "ok"), output
+    assert _generation(install / "venv") == (VALIDATED if mode == "ok" else ORIGINAL)
+    if mode == "ok":
+        events = (install.parent.parent / "validation-events.txt").read_text()
+        assert "baseline:pending=True" in events
+    assert not (install / "venv.pending-backup").exists()

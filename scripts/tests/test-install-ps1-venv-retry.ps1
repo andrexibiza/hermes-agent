@@ -86,7 +86,8 @@ public class InstallerFixture {
             bool webRepair = args.Length == 4 && args[0] == "pip" && args[1] == "install" && args[2] == "-e" && args[3] == ".[web]";
             Record(root, webRepair ? "uv-web-repair" : args[0] == "sync" ? "uv-sync" : "uv-pip-install");
             if (webRepair && mode == "optional-web-fail") return 12;
-            return mode == "deps-fail" || mode == "rollback-park-fail" || mode == "rollback-restore-fail" || mode == "rollback-marker-clear-fail" || mode == "crash-after-restore" ? 7 : 0;
+            if (mode == "deps-fail") File.WriteAllText(Path.Combine(install, "venv", "generation.txt"), "DAMAGED_BY_FAILED_DEPENDENCY_INSTALL");
+            return mode == "deps-fail" || mode == "rollback-park-fail" || mode == "rollback-restore-fail" || mode == "rollback-marker-clear-fail" || mode == "crash-after-restore" || mode == "crash-after-rollback-clear" ? 7 : 0;
         }
         throw new Exception("Unexpected provisioning command: " + joined);
     }
@@ -133,7 +134,7 @@ function global:Rename-Item {
     if ($Mode -eq 'marker-write-fail' -and $NewName -eq 'venv.pending-backup') { throw 'fixture: marker publication denied' }
     Microsoft.PowerShell.Management\Rename-Item @PSBoundParameters
     if ($Mode -eq 'crash-after-park' -and $parkingOriginal) { [Environment]::Exit(92) }
-    if ($Mode -eq 'crash-after-restore' -and $leaf -like 'venv.stale.*' -and $NewName -eq 'venv') { [Environment]::Exit(94) }
+    if ($Mode -eq 'crash-after-restore' -and $leaf -like 'venv.stale.*' -and $NewName -eq 'venv') { [Environment]::Exit(-1) }
 }
 
 function global:Move-Item {
@@ -164,6 +165,9 @@ function global:Remove-Item {
         }
     }
     Microsoft.PowerShell.Management\Remove-Item @PSBoundParameters
+    if ($Mode -eq 'crash-after-rollback-clear' -and [IO.Path]::GetFileName($target) -eq 'venv.pending-backup') {
+        [Environment]::Exit(-1)
+    }
 }
 
 $homePath = Join-Path $rootPath 'home'
