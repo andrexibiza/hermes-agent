@@ -37,7 +37,7 @@ def verify_history(base_ref: str, head_ref: str = "HEAD", repo_root: Path = REPO
 
     base = git("rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}").decode().strip()
     head = git("rev-parse", "--verify", "--end-of-options", f"{head_ref}^{{commit}}").decode().strip()
-    git("merge-base", "--is-ancestor", base, head)
+    base = git("merge-base", base, head).decode().strip()
     path = "scripts/windows-installer/manifest.json"
     revisions = git("log", "--reverse", "--format=%H", f"{base}..{head}", "--", path).decode().splitlines()
     for revision in revisions:

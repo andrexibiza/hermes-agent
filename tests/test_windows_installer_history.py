@@ -61,9 +61,11 @@ def _state(repo: Path, ceilings: dict[str, int], sources: dict[str, bytes], buil
     ([INITIAL, EMPTY, INITIAL], True, False),
     ([INITIAL, INCREASE, SHRINK], True, False),
     ([INITIAL], False, False),
+    ([INITIAL, SHRINK, EMPTY], "diverged", True),
 ], ids=[
     "mechanism-shrink-empty", "raised-ceiling", "new-oversized-shard", "dishonest-initial-source",
     "dishonest-initial-ceiling", "reintroduced-after-empty", "intermediate-increase-hidden-at-head", "missing-base-ref",
+    "unrelated-upstream-progress",
 ])
 def test_committed_history_never_increases_installer_source_debt(tmp_path: Path, states, base_exists, accepted):
     builder = importlib.import_module("scripts.build_windows_installer")
@@ -77,6 +79,10 @@ def test_committed_history_never_increases_installer_source_debt(tmp_path: Path,
         _commit(tmp_path, f"Installer source graph revision {index}")
     head = _git(tmp_path, "rev-parse", "HEAD")
     requested_base = base if base_exists else "fixture-missing-base"
+    if base_exists == "diverged":
+        _git(tmp_path, "checkout", "-b", "upstream", base)
+        (tmp_path / "unrelated.txt").write_text("Upstream work outside the installer\n")
+        requested_base = _commit(tmp_path, "Unrelated upstream progress")
     if accepted:
         assert builder.verify_history(requested_base, head, tmp_path) is None
     else:
