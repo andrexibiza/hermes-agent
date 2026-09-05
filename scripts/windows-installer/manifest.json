@@ -6,9 +6,10 @@
     "browser-ensure.ps1",
     "runtime-policy.ps1",
     "host-prerequisites.ps1",
-    "repository.ps1"
+    "repository.ps1",
+    "python-environment.ps1"
   ],
   "kill_track": {
-    "install.ps1": 3168
+    "install.ps1": 2559
   }
 }
