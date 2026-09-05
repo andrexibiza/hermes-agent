@@ -155,6 +155,31 @@ class _ConcurrentStore(SharedMetricsStore):
         return super()._write(busy_timeout_ms=busy_timeout_ms)
 
 
+def _run_owned_processes(processes):
+    """Bound the complete startup/write protocol and always reap our children."""
+    started = []
+    # Includes the 30s startup barrier and 30s SQLite contention budget; use
+    # one deadline for the whole group, not an additional budget per child.
+    deadline = time.monotonic() + 120
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        for process in started:
+            process.join(timeout=max(0, deadline - time.monotonic()))
+            assert not process.is_alive(), "metrics worker exceeded the protocol budget"
+            assert process.exitcode == 0
+    finally:
+        for process in started:
+            if process.is_alive():
+                process.terminate()
+        cleanup_deadline = time.monotonic() + 10
+        for process in started:
+            process.join(timeout=max(0, cleanup_deadline - time.monotonic()))
+        assert not any(process.is_alive() for process in started)
+
+
+
 def _record_model_calls_in_process(
     database_path: str,
     outbox_directory: str,
@@ -1462,12 +1487,7 @@ def test_cross_process_model_call_updates_are_transactional(tmp_path):
         for _ in range(2)
     ]
 
-    for process in processes:
-        process.start()
-    for process in processes:
-        process.join(timeout=15)
-        assert not process.is_alive()
-        assert process.exitcode == 0
+    _run_owned_processes(processes)
 
     restarted = _ConcurrentStore(database_path, outbox_directory)
     assert restarted.counter_snapshot()[0]["value"] == 20
@@ -1486,12 +1506,7 @@ def test_cross_process_client_active_attempts_record_one_install(tmp_path):
         for _ in range(2)
     ]
 
-    for process in processes:
-        process.start()
-    for process in processes:
-        process.join(timeout=15)
-        assert not process.is_alive()
-        assert process.exitcode == 0
+    _run_owned_processes(processes)
 
     store = _ConcurrentStore(database_path, outbox_directory)
     [active] = store.counter_snapshot()

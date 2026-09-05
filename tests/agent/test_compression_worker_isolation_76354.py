@@ -106,9 +106,9 @@ def test_f3_mutating_engine_cannot_touch_live_transcript_after_timeout(
 
     def _mutating_engine(msgs, **_kwargs):
         # Legacy/plugin-engine contract: mutate the input list IN PLACE.
-        engine_started.set()
         msgs[:] = [{"role": "assistant", "content": "ENGINE GARBAGE"}]
         mutated_lists.append(msgs)
+        engine_started.set()  # Publish only after the mutation witness exists.
         assert release_engine.wait(timeout=30)
         return msgs
 
