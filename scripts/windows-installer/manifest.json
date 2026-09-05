@@ -8,9 +8,8 @@
     "host-prerequisites.ps1",
     "repository.ps1",
     "python-environment.ps1",
-    "installation-registration.ps1"
+    "installation-registration.ps1",
+    "tool-dependencies.ps1"
   ],
-  "kill_track": {
-    "install.ps1": 2264
-  }
+  "kill_track": {}
 }
