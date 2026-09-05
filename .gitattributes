@@ -36,4 +36,6 @@ docker/entrypoint.sh text eol=lf
 # The standalone Windows installer is assembled from these canonical LF inputs.
 # Keep the readable distribution artifact at the URL used by existing clients.
 scripts/install.ps1 text eol=lf linguist-generated=true
-scripts/windows-installer/source/** text eol=lf
+# Verbatim source includes inherited trailing spaces; exact assembly, not a
+# whitespace rewrite, preserves the distributed installer's original bytes.
+scripts/windows-installer/source/** text eol=lf whitespace=-blank-at-eol

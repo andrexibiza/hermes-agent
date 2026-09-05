@@ -39,21 +39,30 @@ def verify_history(base_ref: str, head_ref: str = "HEAD", repo_root: Path = REPO
     head = git("rev-parse", "--verify", "--end-of-options", f"{head_ref}^{{commit}}").decode().strip()
     base = git("merge-base", base, head).decode().strip()
     path = "scripts/windows-installer/manifest.json"
-    revisions = git("log", "--reverse", "--format=%H", f"{base}..{head}", "--", path).decode().splitlines()
+    # A path-filtered log can omit a merge that restores an older manifest.
+    # Walk the complete DAG and check every parent edge carrying source debt.
+    revisions = git("rev-list", "--reverse", "--topo-order", f"{base}..{head}").decode().splitlines()
     for revision in revisions:
+        parents = git("rev-list", "--parents", "-n", "1", revision).decode().split()[1:]
+        previous = []
+        for parent in parents:
+            if git("ls-tree", "--name-only", parent, "--", path).strip():
+                previous.append(json.loads(git("show", f"{parent}:{path}"), object_pairs_hook=_object)["kill_track"])
+        if not git("ls-tree", "--name-only", revision, "--", path).strip():
+            if previous:
+                raise AssemblyError(f"installer source ownership manifest was removed: {revision}")
+            continue
         current = json.loads(git("show", f"{revision}:{path}"), object_pairs_hook=_object)
-        parent = git("rev-parse", f"{revision}^").decode().strip()
-        previous_path = git("ls-tree", "--name-only", parent, "--", path).strip()
         ceilings = current["kill_track"]
-        if not previous_path:
-            original = git("show", f"{parent}:scripts/install.ps1")
+        if not previous:
+            original = git("show", f"{parents[0]}:scripts/install.ps1")
             source = git("show", f"{revision}:scripts/windows-installer/source/install.ps1")
             if source != original or ceilings != {"install.ps1": original.count(b"\n")}:
                 raise AssemblyError("initial kill-track source must exactly preserve its parent installer")
         else:
-            previous = json.loads(git("show", f"{parent}:{path}"), object_pairs_hook=_object)["kill_track"]
-            if any(name not in previous or ceiling > previous[name] for name, ceiling in ceilings.items()):
-                raise AssemblyError(f"kill-track ceilings may only shrink: {revision}")
+            for prior in previous:
+                if any(name not in prior or ceiling > prior[name] for name, ceiling in ceilings.items()):
+                    raise AssemblyError(f"kill-track ceilings may only shrink on every parent edge: {revision}")
 
 
 def _is_link(path: Path) -> bool:

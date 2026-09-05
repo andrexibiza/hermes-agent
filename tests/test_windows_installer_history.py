@@ -89,3 +89,34 @@ def test_committed_history_never_increases_installer_source_debt(tmp_path: Path,
         with pytest.raises(builder.AssemblyError):
             builder.verify_history(requested_base, head, tmp_path)
     assert _git(tmp_path, "status", "--porcelain") == "", "history verification must not mutate its checkout"
+
+
+@pytest.mark.parametrize("retired_first,restore_allowance", [(True, False), (True, True), (False, True)])
+def test_merge_resolution_cannot_restore_an_allowance_from_either_parent(tmp_path: Path, retired_first, restore_allowance):
+    builder = importlib.import_module("scripts.build_windows_installer")
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "core.autocrlf", "false")
+    _git(tmp_path, "config", "user.name", "Installer Fixture")
+    _git(tmp_path, "config", "user.email", "fixture@example.invalid")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/install.ps1").write_bytes(ORIGINAL)
+    base = _commit(tmp_path, "Original installer")
+    _state(tmp_path, *INITIAL, builder)
+    _commit(tmp_path, "Initial source ownership")
+    _git(tmp_path, "branch", "other")
+    _state(tmp_path, *EMPTY, builder)
+    _commit(tmp_path, "Retire source debt")
+    _git(tmp_path, "checkout", "other")
+    (tmp_path / "unrelated.txt").write_text("Diverged branch\n")
+    _commit(tmp_path, "Unrelated work")
+    if retired_first:
+        _git(tmp_path, "checkout", "main")
+    _git(tmp_path, "merge", "--no-commit", "--no-ff", "other" if retired_first else "main")
+    _state(tmp_path, *(INITIAL if restore_allowance else EMPTY), builder)
+    head = _commit(tmp_path, "Resolve source graph in a real merge")
+    assert len(_git(tmp_path, "rev-list", "--parents", "-n", "1", head).split()) == 3
+    if restore_allowance:
+        with pytest.raises(builder.AssemblyError):
+            builder.verify_history(base, head, tmp_path)
+    else:
+        assert builder.verify_history(base, head, tmp_path) is None
