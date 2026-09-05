@@ -32,3 +32,8 @@ docker/entrypoint.sh text eol=lf
 *.html  text eol=lf
 *.svg   text eol=lf
 *.ps1   text eol=crlf
+
+# The standalone Windows installer is assembled from these canonical LF inputs.
+# Keep the readable distribution artifact at the URL used by existing clients.
+scripts/install.ps1 text eol=lf linguist-generated=true
+scripts/windows-installer/source/** text eol=lf
