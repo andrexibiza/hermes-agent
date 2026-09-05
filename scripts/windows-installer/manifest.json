@@ -4,9 +4,10 @@
   "files": [
     "install.ps1",
     "browser-ensure.ps1",
-    "runtime-policy.ps1"
+    "runtime-policy.ps1",
+    "host-prerequisites.ps1"
   ],
   "kill_track": {
-    "install.ps1": 4388
+    "install.ps1": 3590
   }
 }
