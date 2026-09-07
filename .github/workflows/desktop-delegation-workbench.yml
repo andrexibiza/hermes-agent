@@ -1,0 +1,33 @@
+name: Delegation integration workbench
+on:
+  push:
+    branches: [build/desktop-delegation-workbench]
+    paths:
+      - .github/workflows/desktop-delegation-workbench.yml
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: a7198a8855ad98681114ff5138eb01fe132a62e7
+          persist-credentials: false
+      - name: Export exact source and provenance
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = a7198a8855ad98681114ff5138eb01fe132a62e7
+          git show -s --format=fuller HEAD > "$RUNNER_TEMP/source-provenance.txt"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/hermes-source.tar.gz"
+          sha256sum "$RUNNER_TEMP/hermes-source.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exact-main-delegation-source
+          path: |
+            ${{ runner.temp }}/hermes-source.tar.gz
+            ${{ runner.temp }}/source-provenance.txt
+          retention-days: 1
+          if-no-files-found: error
