@@ -89,6 +89,7 @@ _DISCORD_COMMAND_SYNC_MUTATION_INTERVAL_SECONDS = 4.5
 _DISCORD_COMMAND_SYNC_MAX_RATE_LIMIT_SLEEP_SECONDS = 30.0
 # Discord caps global slash commands at 100/app; exceeding it fails the ENTIRE sync (error 30032).
 _DISCORD_MAX_APP_COMMANDS = 100
+_SEMANTIC_THREAD_RENAMES_MAX = 2000
 # Native slash commands (registered before COMMAND_REGISTRY/plugins so they survive the 100 cap):
 #   (discord name, description, [(arg, type, default-or-_REQUIRED, arg description,
 #   [(choice label, value), ...] or None)], command-text template, follow-up message)
@@ -1112,6 +1113,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         self._voice_fx_cfg: Dict[str, Any] = self._load_voice_fx_config()
         # Threads the bot participated in (no @mention needed there); persisted across restarts.
         self._threads = ThreadParticipationTracker("discord")
+        # thread id -> (name it replaced, name it set, set name seen yet) for Hermes's own semantic
+        # renames; see _format_thread_chat_name. In memory: after a restart the next turn re-renders once.
+        self._semantic_thread_renames: Dict[str, Tuple[str, str, bool]] = {}
         # Persistent typing loops per channel (DMs don't reliably show bot typing events).
         self._typing_tasks: Dict[str, asyncio.Task] = {}
         self._bot_task: Optional[asyncio.Task] = None
@@ -4709,8 +4713,14 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             thread_id = str(interaction.channel_id)
         else:
             chat_type = "group"
+        # A slash turn re-pins the session-context prompt, so it names the chat exactly as a message
+        # there does; any other label re-renders the pinned prompt on every switch between the two.
         chat_name = ""
-        if not is_dm and hasattr(interaction.channel, "name"):
+        if is_dm:
+            chat_name = interaction.user.name
+        elif is_thread:
+            chat_name = self._format_thread_chat_name(interaction.channel)
+        elif hasattr(interaction.channel, "name"):
             chat_name = interaction.channel.name
             if hasattr(interaction.channel, "guild") and interaction.channel.guild:
                 chat_name = f"{interaction.channel.guild.name} / #{chat_name}"
@@ -4732,6 +4742,8 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         return MessageEvent(
             text=text, message_type=msg_type, source=source, raw_message=interaction,
             channel_prompt=self._resolve_channel_prompt(channel_id, parent_id or None),
+            # Bound skills load only when a session starts, and "/skill x" or "/queue" can start one.
+            auto_skill=self._resolve_channel_skills(channel_id, parent_id or None),
         )
 
     # --- Thread creation helpers ---
@@ -4766,25 +4778,18 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             await self._threads.mark_async(thread_id)
         starter = (message or "").strip()
         if starter and thread_id:
-            await self._dispatch_thread_session(interaction, thread_id, thread_name, starter)
+            await self._dispatch_thread_session(interaction, result["thread"], starter)
 
-    async def _dispatch_thread_session(
-        self, interaction: discord.Interaction, thread_id: str, thread_name: str, text: str,
-    ) -> None:
+    async def _dispatch_thread_session(self, interaction: discord.Interaction, thread: Any, text: str) -> None:
         """Build a MessageEvent pointing at a thread and send it through handle_message."""
-        guild_name = ""
-        if hasattr(interaction, "guild") and interaction.guild:
-            guild_name = interaction.guild.name
-        chat_name = f"{guild_name} / {thread_name}" if guild_name else thread_name
-        # Inherit forum topic when the thread was created inside a forum channel.
-        _chan = getattr(interaction, "channel", None)
-        chat_topic = self._get_effective_topic(_chan, is_thread=True) if _chan else None
-        _parent_channel = self._thread_parent_channel(getattr(interaction, "channel", None))
-        _parent_id = str(getattr(_parent_channel, "id", "") or "")
+        # Name, topic and parent come from the thread itself, as for a message posted in it: this
+        # turn opens the session and pins its context prompt, which the thread's messages then reuse.
+        thread_id = str(thread.id)
+        _parent_id = self._get_parent_channel_id(thread) or ""
         source = self.build_source(
-            chat_id=thread_id, chat_name=chat_name, chat_type="thread",
+            chat_id=thread_id, chat_name=self._format_thread_chat_name(thread), chat_type="thread",
             user_id=str(interaction.user.id), user_name=interaction.user.display_name,
-            thread_id=thread_id, chat_topic=chat_topic,
+            thread_id=thread_id, chat_topic=self._get_effective_topic(thread, is_thread=True),
             guild_id=self._interaction_guild_id(interaction), parent_chat_id=_parent_id or None,
         )
         _skills = self._resolve_channel_skills(thread_id, _parent_id or None)
@@ -5328,7 +5333,8 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
 
     @staticmethod
     def _thread_created(thread: Any, name: str) -> Dict[str, Any]:
-        return {"success": True, "thread_id": str(thread.id), "thread_name": getattr(thread, "name", None) or name}
+        return {"success": True, "thread_id": str(thread.id), "thread_name": getattr(thread, "name", None) or name,
+                "thread": thread}
 
     # ------------------------------------------------------------------
     # Auto-thread helpers
@@ -5434,6 +5440,12 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             return False
         try:
             await edit(name=cleaned, reason="Hermes semantic session title")
+            if only_if_current_name is not None:
+                renames = self._semantic_thread_renames
+                renames.pop(str(thread_id_int), None)
+                renames[str(thread_id_int)] = (current_name, cleaned, False)
+                while len(renames) > _SEMANTIC_THREAD_RENAMES_MAX:
+                    renames.pop(next(iter(renames)))
             logger.info(
                 "[%s] Renamed Discord thread %s from %r to %r",
                 self.name, thread_id, current_name, cleaned,
@@ -5777,6 +5789,22 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
     def _format_thread_chat_name(self, thread: Any) -> str:
         """Build a readable chat name for thread-like Discord channels, including forum context when available."""
         thread_name = getattr(thread, "name", None) or str(getattr(thread, "id", "thread"))
+        # chat_name keys the pinned session-context prompt, and Hermes's own title rename lands
+        # between a new thread's first and second turns: keep the name the turns were pinned under.
+        # A rename by anyone else no longer matches what Hermes set, so it still re-renders.
+        thread_key = str(getattr(thread, "id", ""))
+        renamed = self._semantic_thread_renames.get(thread_key)
+        if renamed:
+            replaced, set_name, set_seen = renamed
+            if thread_name == set_name:
+                if not set_seen:
+                    self._semantic_thread_renames[thread_key] = (replaced, set_name, True)
+                thread_name = replaced
+            elif set_seen or thread_name != replaced:
+                # Someone else renamed it (the old name before Hermes's title is first seen is only
+                # cache lag). Equal text is not provenance: if they later restore Hermes's title,
+                # that is their choice of name and must show as itself.
+                self._semantic_thread_renames.pop(thread_key, None)
         parent = getattr(thread, "parent", None)
         guild = getattr(thread, "guild", None) or getattr(parent, "guild", None)
         guild_name = getattr(guild, "name", None)
@@ -5788,6 +5816,13 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         if parent_name:
             return f"{parent_name} / {thread_name}"
         return thread_name
+
+    def _guild_channel_labels(self, channel: Any) -> tuple[str, Optional[str]]:
+        """``(chat_name, chat_topic)`` for a guild channel or thread, as a message posted there gets them."""
+        if isinstance(channel, discord.Thread):
+            return self._format_thread_chat_name(channel), self._get_effective_topic(channel, is_thread=True)
+        name, guild = getattr(channel, "name", str(channel.id)), getattr(channel, "guild", None)
+        return (f"{guild.name} / #{name}" if guild else name), self._get_effective_topic(channel)
 
     # ------------------------------------------------------------------
     # Attachment download helpers
