@@ -4,8 +4,7 @@ on:
   push:
     branches: [codex/pr132758-import]
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: pr132758-history-import
@@ -13,6 +12,8 @@ concurrency:
 
 jobs:
   import:
+    permissions:
+      contents: write
     if: github.repository == 'andrexibiza/hermes-agent' && github.actor == 'andrexibiza'
     runs-on: ubuntu-latest
     timeout-minutes: 5
