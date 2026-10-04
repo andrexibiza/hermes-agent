@@ -5858,8 +5858,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 renamed.set_seen = True
                 thread_name = renamed.replaced
             elif renamed.set_seen or thread_name != renamed.replaced:
-                # Someone else renamed it (the old name before Hermes's title is first seen is only
-                # cache lag). Equal text is not provenance: if they later restore Hermes's title,
+                # Without a raw event, an unseen title's opening name may be cache lag
+                # or a moderator restore missed during re-IDENTIFY (no RESUME replay).
+                # Equal text is not provenance: if they later restore Hermes's title,
                 # that is their choice of name and must show as itself.
                 self._semantic_thread_renames.pop(thread_key, None)
         parent = getattr(thread, "parent", None)

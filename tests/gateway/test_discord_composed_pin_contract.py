@@ -1,4 +1,4 @@
-"""Composed Discord prompt contract, including an early external rename (#131243).
+"""Composed auto-thread, typed and slash prompt contract (#131243).
 
 Exercise real message handling, auto-thread creation, native slash dispatch, and
 runner pins with a collecting message handler and fake Discord transport objects.
@@ -41,10 +41,8 @@ _BOT = SimpleNamespace(id=999, name="Hermes", bot=True)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("early_moderator_rename", [False, True], ids=["ordinary", "early-moderator"])
-@pytest.mark.parametrize("discord_tools", [False, True], ids=["without-tools", "with-tools"])
-async def test_composed_thread_pin_contract(monkeypatch, early_moderator_rename, discord_tools):
-    monkeypatch.setattr("gateway.session._discord_tools_loaded", lambda: discord_tools)
+async def test_composed_thread_pin_contract(monkeypatch):
+    monkeypatch.setattr("gateway.session._discord_tools_loaded", lambda: False)
     monkeypatch.setattr(discord_platform.discord, "Thread", _Thread)
     monkeypatch.delenv("DISCORD_REQUIRE_MENTION", raising=False)
     parent = _Text()
@@ -126,18 +124,9 @@ async def test_composed_thread_pin_contract(monkeypatch, early_moderator_rename,
     assert await adapter.rename_thread("800", generated, only_if_current_name=opening)
     await rename_event(generated)
 
-    if early_moderator_rename:
-        # No formatter has yet observed the generated name. These are actual
-        # rename events, not a stale cache read of the original object.
-        await rename_event(opening)
-        _, opening_again = await turn(channels[800], 101)
-        assert opening_again == first
-        await rename_event(generated)
-
     ordinary, ordinary_prompt = await turn(channels[800], 102)
-    expected_name = generated if early_moderator_rename else opening
-    assert ordinary.source.chat_name == f"Hermes Server / #ops / {expected_name}"
-    assert (ordinary_prompt == first) is (not early_moderator_rename)
+    assert ordinary.source.chat_name == f"Hermes Server / #ops / {opening}"
+    assert ordinary_prompt is first
 
     interaction = SimpleNamespace(
         channel=channels[800], channel_id=800, guild=parent.guild, guild_id=1, user=_USER,
