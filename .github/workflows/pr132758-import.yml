@@ -1,0 +1,51 @@
+name: Import verified PR 132758 linear history
+
+on:
+  push:
+    branches: [codex/pr132758-import]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr132758-history-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: github.repository == 'andrexibiza/hermes-agent' && github.actor == 'andrexibiza'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Verify and import the prepared commit objects
+        shell: bash
+        env:
+          PR_BASE: 1298c8e74baa73e1a2b90124228d017261ac6bc4
+          PR_EXPECTED_HEAD: 2bc73582300b0ff2b2282f2be1468881298e0db3
+          PREPARED_HEAD: 372cfa06341aa057af4a6cd8a4ceab0840517d81
+          PREPARED_TREE: d659da8a5ed3b9c4940cc213fdb858945897d114
+          BUNDLE_SHA256: 8a5e3b19874ed2ccc5b6edb6d3114234264e810ce463090e2f63efe424a4f3a6
+        run: |
+          set -euo pipefail
+          target_ref=refs/heads/fix/discord-rename-provenance-131614
+          target_head=$(git ls-remote --refs origin "$target_ref" | cut -f1)
+          test "$target_head" = "$PR_EXPECTED_HEAD"
+
+          printf '%s  %s\n' "$BUNDLE_SHA256" .github/pr132758-linear.bundle | sha256sum --check
+          git fetch --no-tags --depth=1 origin "$PR_BASE:refs/remotes/origin/pr132758-base"
+          git bundle verify .github/pr132758-linear.bundle
+          git fetch .github/pr132758-linear.bundle refs/heads/pr132758-linear:refs/heads/pr132758-prepared
+
+          test "$(git rev-parse refs/heads/pr132758-prepared)" = "$PREPARED_HEAD"
+          test "$(git rev-parse "$PREPARED_HEAD^{tree}")" = "$PREPARED_TREE"
+          test "$(git rev-list --count "$PR_BASE..$PREPARED_HEAD")" = 9
+          test -z "$(git rev-list --merges "$PR_BASE..$PREPARED_HEAD")"
+
+          # Import only. The authenticated connector updates the existing PR
+          # after readback, so its normal synchronization event runs upstream CI.
+          git push origin "$PREPARED_HEAD:refs/heads/codex/pr132758-linear-objects"
