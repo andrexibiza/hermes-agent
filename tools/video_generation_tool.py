@@ -102,12 +102,16 @@ def check_video_generation_requirements() -> bool:
     return any(_provider_call(p, "is_available", False) for p in registry_mod.list_providers())
 
 
-def _resolve_active_provider():
-    """Active provider or None; a miss forces a discovery refresh (sessions older than the plugin install)."""
+def _resolve_active_provider(*, retry: bool = False):
+    """Resolve after initial discovery; retry a miss only when generating a video.
+
+    Schema inventory must not reload every plugin when selection is absent or ambiguous.
+    Generation can refresh discovery for sessions older than a newly installed plugin.
+    """
     try:
         registry_mod, ensure_discovered = _discovered_registry()
         provider = registry_mod.get_active_provider()
-        if provider is None:
+        if provider is None and retry:
             ensure_discovered(force=True)
             provider = registry_mod.get_active_provider()
         return provider
@@ -184,7 +188,7 @@ def _handle_video_generate(args: dict[str, Any], **_kw: Any) -> str:
             "video_generate only supports text-to-video, image-to-video, and "
             "reference-to-video; use a provider-specific tool for video edit/extend")
     configured = _read_configured_video_provider()
-    provider = _resolve_active_provider()
+    provider = _resolve_active_provider(retry=True)
     if provider is None:
         return _missing_provider_error(configured)
 
